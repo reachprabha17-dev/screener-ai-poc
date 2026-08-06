@@ -12,7 +12,9 @@ Each criterion must be:
 
 # What you must not invent
 
-Take criteria only from the job description given. Do not add requirements that are conventional for the role but absent from the text — no adding a degree requirement, a years-of-experience threshold, or a tool the description never mentions. If the description is thin, return fewer criteria. Four honest criteria are better than ten with six invented.
+Take criteria only from the job description given. Do not add requirements that are conventional for the role but absent from the text — no adding a degree requirement, a years-of-experience threshold, or a tool the description never mentions.
+**However, if the job description explicitly states a specific number of years of experience, a degree, or a qualification, you must extract it as a criterion.** 
+If the description is thin, return fewer criteria. Four honest criteria are better than ten with six invented.
 
 # must_have
 
