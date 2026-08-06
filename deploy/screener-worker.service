@@ -1,0 +1,61 @@
+[Unit]
+Description=Screener worker — screens one resume at a time (spec §16.6)
+# The worker's first call is to Ollama; starting before it is up produces a
+# batch of LLM_ERROR flags that look like model problems.
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+# A dedicated unprivileged account. This is the tier-2 sandbox boundary from
+# §8.4: the parser subprocess inherits this uid, so what it can reach when a
+# malicious PDF takes it over is exactly what this account can reach.
+User=screener
+Group=screener
+WorkingDirectory=/opt/screener
+
+# Slot reuse is the largest remaining source of run-to-run variation (§10.8).
+# Raising this invalidates the reproducibility claim and every stored comparison
+# across the boundary — it is a deliberate, documented, re-measured decision.
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/screener/.env
+
+ExecStart=/opt/screener/.venv/bin/python /opt/screener/worker.py
+
+# SIGTERM asks the loop to finish the resume in hand and exit. The timeout has to
+# clear one full screen (~5 s inference + parse) with room to spare, or systemd
+# SIGKILLs mid-job and the work is redone after startup reclaim.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+Restart=on-failure
+RestartSec=10
+
+# --- hardening ---------------------------------------------------------------
+# The worker parses hostile files. These limit what a compromise reaches; they
+# are not a substitute for the per-parse sandbox in §8.4, they are the layer
+# under it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Candidate data, the database, quarantine and traces. Nothing else is writable.
+ReadWritePaths=/opt/screener/data
+
+# NOTE: the parser needs no network under any deployment (§8.4), but the worker
+# does — it talks to Ollama on loopback. Restricting to local families is the
+# most that can be done here; blocking the parser specifically requires the
+# container or dedicated-uid tier.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

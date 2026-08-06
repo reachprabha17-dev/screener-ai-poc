@@ -1,0 +1,58 @@
+[Unit]
+Description=Screener reviewer UI — HTTP client only (spec §2, decision #11)
+After=network.target screener-api.service
+Wants=screener-api.service
+
+[Service]
+Type=simple
+User=screener
+Group=screener
+# Streamlit resolves `.streamlit/config.toml` relative to the **working
+# directory**, so a UI launched from anywhere else silently loses that config —
+# including `gatherUsageStats = false`. Every setting that matters is therefore
+# also set as an environment variable below, which is CWD-independent. The
+# WorkingDirectory is belt and braces.
+WorkingDirectory=/opt/screener
+
+# Telemetry off. Streamlit phones home by default, and this is a process a
+# recruiter uses to review candidates on a host whose first locked decision is
+# that nothing leaves the box (§1, §3.1).
+Environment=STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+# Headless also suppresses the interactive first-run email prompt, which
+# otherwise blocks startup forever under a service manager.
+Environment=STREAMLIT_SERVER_HEADLESS=true
+Environment=STREAMLIT_SERVER_ADDRESS=127.0.0.1
+Environment=STREAMLIT_SERVER_PORT=8501
+# A traceback on screen is useless to a recruiter and indistinguishable from a
+# bug in the screening itself.
+Environment=STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=none
+# Where the control plane lives. The UI reaches data only over HTTP.
+Environment=SCREENER_API_URL=http://127.0.0.1:8000
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/screener/.venv/bin/streamlit run /opt/screener/ui/screener_app.py
+
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+# --- hardening ---------------------------------------------------------------
+# This process holds no candidate data of its own and needs no write access to
+# `data/` at all — it is an HTTP client. That is the point of decision #11.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

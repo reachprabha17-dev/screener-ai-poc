@@ -1,0 +1,76 @@
+[project]
+name = "screener"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "ollama",
+  "xberg",
+  "pydantic",
+  "pydantic-settings",
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
+  "typer",
+  "python-magic",        # MIME by magic bytes (spec §8.2)
+  "defusedxml",          # XXE-safe XML (spec §8.3)
+  "structlog",           # spec §17
+  "yoyo-migrations",     # spec §12.1
+]
+
+[project.optional-dependencies]
+# No database driver here, deliberately. Decision #11 (Streamlit must not reach
+# the DB) is enforced by the dependency graph rather than by convention.
+ui = ["streamlit", "pandas", "httpx"]
+dev = ["pytest", "pytest-cov", "hypothesis", "ruff", "mypy", "httpx"]
+
+[project.scripts]
+screener = "screener.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["screener", "config"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# S = flake8-bandit: catches the subprocess/tempfile mistakes the sandbox in §8
+# depends on not making.
+select = ["E", "F", "I", "B", "S", "UP", "ANN", "PTH"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 exists to catch mutable defaults evaluated once at import. FastAPI's
+# dependency injection is that pattern on purpose — `Depends(...)` returns a
+# marker the framework resolves per request, and it is the documented idiom.
+# Listing them keeps B008 active everywhere it means something.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "ANN"]        # asserts and untyped fixtures are fine in tests
+
+[tool.mypy]
+strict = true
+files = ["screener", "config", "worker.py"]
+
+[tool.pytest.ini_options]
+# `live` is deselected by default so the four build gates run on a machine with
+# no GPU and no model pulled. The tests it covers are real gates, not optional:
+# run `pytest -m live` on the deployment host.
+addopts = "--cov=screener --cov-fail-under=85 -m 'not live'"
+testpaths = ["tests"]
+markers = [
+  "live: requires a running Ollama with the configured model (spec §20 step 7)",
+]
+
+[tool.coverage.report]
+# Protocol bodies and `...` stubs are declarations, not code. Counting them
+# would push the real threshold down to hide untested logic elsewhere.
+exclude_also = [
+  "^\\s*\\.\\.\\.$",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "class \\w+\\(Protocol\\):",
+]

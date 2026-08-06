@@ -1,0 +1,18 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Candidate data and results never enter version control.
+data/
+*.db
+.env
+
+# Test and tooling artifacts
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.hypothesis/
