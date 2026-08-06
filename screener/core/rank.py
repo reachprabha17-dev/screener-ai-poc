@@ -1,4 +1,4 @@
-"""Partitioned ranking and banding (spec §10.6). Pure — no I/O.
+"""Partitioned ranking and banding (spec 10.6). Pure — no I/O.
 
 Two decisions worth stating outright:
 

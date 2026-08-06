@@ -1,10 +1,10 @@
-"""Reviewer interface (spec §18 of the build order, §10.6, §18.2).
+"""Reviewer interface (spec 18 of the build order, 10.6, 18.2).
 
 **An HTTP client and nothing else.** No database driver, no `screener.storage`,
 no `screener.pipeline`. Streamlit re-executes this whole script on every
 interaction, which is exactly why screening cannot live here: a long-lived thread
 in this process produces zombie threads, leaked connections, and work lost on
-reconnect (§2).
+reconnect (2).
 
 Three presentation decisions carry real weight, and each exists to prevent a
 specific way that human oversight quietly stops working.
@@ -13,18 +13,18 @@ specific way that human oversight quietly stops working.
 criteria cannot support a rendered precision of `7.8`. The decimal implies
 resolution that does not exist and invites over-reliance on a number the system
 cannot actually justify to that precision. The float is exported for audit and
-shown in the detail view where its provenance is visible alongside it (§10.6).
+shown in the detail view where its provenance is visible alongside it (10.6).
 
 **`needs_review` is its own tab, never the tail of a ranking.** At 1,000
 applicants a reviewer reads the top of Band A and stops. An unscoreable candidate
 parked at the bottom of one long list is invisible in practice — which is the
-adverse outcome escalation was redesigned to prevent (§10.5b).
+adverse outcome escalation was redesigned to prevent (10.5b).
 
 **The escalation rate is on screen the whole time.** Oversight collapses into
 rubber-stamping the moment the queue exceeds what a person will actually read,
 and that failure is silent — the control still *looks* like it is working. The
 number is shown against its budget so it is noticed while a run is in progress
-rather than discovered afterwards (§18.2).
+rather than discovered afterwards (18.2).
 """
 
 import os
@@ -118,7 +118,7 @@ def sidebar() -> None:
     st.session_state.setdefault("run_id", "")
 
     st.sidebar.text_input("API", key="api_url")
-    # Reviewer identity. Stubbed auth (§15.2) — but it reaches the audit log, so
+    # Reviewer identity. Stubbed auth (15.2) — but it reaches the audit log, so
     # the two-person flow (one approves, another signs off) is demonstrable.
     st.sidebar.text_input("Reviewing as", key="actor")
     # One run selector for the whole app. Two tabs each rendering their own
@@ -308,7 +308,7 @@ def live_status(run_id: str) -> None:
     """Polling, not WebSockets.
 
     A job that updates every few seconds over more than an hour does not justify
-    a persistent connection (§22.2). The fragment re-runs on its own so the rest
+    a persistent connection (22.2). The fragment re-runs on its own so the rest
     of the page is not rebuilt underneath the reviewer.
     """
     status = call(get_client().run_status, run_id)
@@ -339,7 +339,7 @@ def escalation_meter(rate: float) -> None:
 
     Human oversight collapses into rubber-stamping the moment the review queue
     exceeds what a person will actually read, and that failure is silent — the
-    control still looks like it is working (§18.2).
+    control still looks like it is working (18.2).
     """
     st.metric(
         "Needing review",
@@ -423,7 +423,7 @@ def partition(candidates: list[dict[str, Any]], run_id: str, *, unranked: bool =
             {
                 "Candidate": c["filename"],
                 # Band, not score. The decimal implies a precision three verdict
-                # levels cannot support (§10.6).
+                # levels cannot support (10.6).
                 "Band": c["band"] or "—",
                 "Flags": ", ".join(c["flags"]) or "",
             }

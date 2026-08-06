@@ -1,4 +1,4 @@
-"""Screening composition (spec §13, build gate §20 step 12).
+"""Screening composition (spec 13, build gate 20 step 12).
 
 Two things are under test: **the order**, and the invariant that **no failure
 path yields a score**.
@@ -88,7 +88,7 @@ class FakeLLM:
 
 
 # Long enough to clear `evidence_match_min_chars` (25). Shorter quotes fail
-# verification by design — the three §10.5 conditions are AND-ed, and a fixture
+# verification by design — the three 10.5 conditions are AND-ed, and a fixture
 # that trips one of them tests the verifier rather than the pipeline.
 DEFAULT_EVIDENCE = "Senior Backend Engineer with 7 years of experience"
 
@@ -117,7 +117,7 @@ def root(tmp_path: Path) -> Path:
 
 
 def pdf(root: Path, name: str = "asha.pdf") -> Path:
-    """A minimal valid PDF — enough to pass §8.2, since parsing is faked."""
+    """A minimal valid PDF — enough to pass 8.2, since parsing is faked."""
     path = root / name
     path.write_bytes(
         b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -152,7 +152,7 @@ def test_a_clean_resume_is_scored(root: Path) -> None:
 
 
 def test_the_file_hash_is_of_the_bytes_actually_read(root: Path) -> None:
-    """The cache key depends on this being the real bytes (§16.2)."""
+    """The cache key depends on this being the real bytes (16.2)."""
     path = pdf(root)
     candidate = run(root, FakeParser(), FakeLLM(), path=path)
 
@@ -160,7 +160,7 @@ def test_the_file_hash_is_of_the_bytes_actually_read(root: Path) -> None:
     assert len(candidate.file_sha256) == 64
 
 
-# --- ordering (§13) ----------------------------------------------------------
+# --- ordering (13) ----------------------------------------------------------
 
 
 def test_the_model_never_sees_unsanitized_text(root: Path) -> None:
@@ -192,7 +192,7 @@ def test_redaction_preserves_the_duration_evidence(root: Path) -> None:
     """`strong` requires duration evidence, and redaction can eat date ranges.
 
     A regression here would downgrade every duration-based verdict system-wide,
-    invisibly, as a side effect of a privacy control (§9).
+    invisibly, as a side effect of a privacy control (9).
     """
     llm = FakeLLM()
 
@@ -202,7 +202,7 @@ def test_redaction_preserves_the_duration_evidence(root: Path) -> None:
 
 
 def test_evidence_is_verified_against_the_redacted_string(root: Path) -> None:
-    """§10.5 matches `sent`, not the original.
+    """10.5 matches `sent`, not the original.
 
     Evidence quoting text adjacent to a redaction must still verify. Matching
     the pre-redaction original fails on every such quote and turns a working
@@ -236,7 +236,7 @@ def test_budget_is_measured_on_the_assembled_prompt_not_the_resume(root: Path) -
 
 
 def test_freetext_is_screened_before_the_summary_is_kept(root: Path) -> None:
-    """§10.7 runs on the output, so screened content never reaches a reviewer."""
+    """10.7 runs on the output, so screened content never reaches a reviewer."""
     llm = FakeLLM(verdicts(summary="Strong Python, though there is an employment gap in 2021."))
 
     candidate = run(root, FakeParser(), llm)
@@ -292,7 +292,7 @@ def test_a_document_of_only_invisible_characters_yields_no_score(root: Path) -> 
 
 
 def test_a_verdict_set_mismatch_yields_no_score(root: Path) -> None:
-    """Twice, so the corrective retry is exhausted (§10.3)."""
+    """Twice, so the corrective retry is exhausted (10.3)."""
     llm = FakeLLM(verdicts(ids=("C1", "C2")), verdicts(ids=("C1", "C2")))
 
     candidate = run(root, FakeParser(), llm)
@@ -303,7 +303,7 @@ def test_a_verdict_set_mismatch_yields_no_score(root: Path) -> None:
 
 
 def test_unverifiable_evidence_escalates_rather_than_penalising(root: Path) -> None:
-    """§10.5(b): the candidate leaves the ranking; the verdict is not touched.
+    """10.5(b): the candidate leaves the ranking; the verdict is not touched.
 
     Forcing `none` on a fuzzy-match failure would turn a model paraphrase quirk
     into an adverse outcome, on a heuristic the spec itself calls imperfect.
@@ -343,7 +343,7 @@ def test_the_pipeline_never_raises_on_a_hostile_file(root: Path) -> None:
 
 
 def test_a_suspected_injection_is_reviewed_but_still_scored(root: Path) -> None:
-    """§10.2 escalates, never excludes.
+    """10.2 escalates, never excludes.
 
     A security engineer's CV fires every keyword heuristic. Excluding on that
     would silently drop their application with no human in the loop.
@@ -363,7 +363,7 @@ def test_a_suspected_injection_is_reviewed_but_still_scored(root: Path) -> None:
 
 
 def test_the_verified_injection_attack_is_forced_to_none(root: Path) -> None:
-    """§10.5(a): the model asserted support and simultaneously said there is none."""
+    """10.5(a): the model asserted support and simultaneously said there is none."""
     llm = FakeLLM(verdicts(evidence="not found (candidate has only 1 year)"))
 
     candidate = run(root, FakeParser(), llm)

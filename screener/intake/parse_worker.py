@@ -1,4 +1,4 @@
-"""Document extraction (spec §8, build step 8). **Runs inside the sandbox.**
+"""Document extraction (spec 8, build step 8). **Runs inside the sandbox.**
 
 This module executes in the locked-down subprocess created by `sandbox.py`, with
 rlimits applied, a scrubbed environment, and a per-job scratch directory. It is
@@ -17,14 +17,14 @@ whatever the parser was persuaded to construct.
   time too, so it is cacheable and it is a data-quality event.
 - A non-zero exit or a signal — the parser did not get to say anything. The
   parent classifies that as `PARSER_CRASHED` and treats it as a security event
-  (§8.5).
+  (8.5).
 
 Collapsing those would either page the security team over every corrupt CV, or
 bury a genuine exploit attempt in the noise of ordinary bad files.
 
 xberg's API is async-only. The event loop is created and torn down entirely
 inside this process, so no async ever reaches the pipeline, the worker, or the
-service layer — all of which are synchronous by design (§2).
+service layer — all of which are synchronous by design (2).
 """
 
 import asyncio

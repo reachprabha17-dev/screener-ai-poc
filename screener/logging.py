@@ -1,4 +1,4 @@
-"""Structured logging and the trace store (spec §17).
+"""Structured logging and the trace store (spec 17).
 
 **Two streams, and they are not interchangeable.**
 
@@ -20,12 +20,12 @@ reconstructed from one grep.
 Each judge call writes the exact system and user strings sent to the model, which
 means full resume text on disk outside the database. That is what makes offline
 evaluation and prompt regression testing possible without re-running a GPU batch
-(§18) — and it is also why, if `trace_dir` sat outside the erasure path, it would
+(18) — and it is also why, if `trace_dir` sat outside the erasure path, it would
 silently defeat `purge_candidate` **while appearing implemented**. Worse than not
 having traces at all, because it would be reported as working.
 
 So every trace is indexed in the `traces` table by `file_sha256`, deleted by
-purge (§12.6), written `0600` inside a `0700` directory, and pruned on a shorter
+purge (12.6), written `0600` inside a `0700` directory, and pruned on a shorter
 retention than the audit log.
 """
 
@@ -46,7 +46,7 @@ from config.settings import settings
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
-# Shorter than the audit log by design (§17). The audit trail is the record of
+# Shorter than the audit log by design (17). The audit trail is the record of
 # decisions and must outlive the raw text those decisions were made from.
 DEFAULT_TRACE_RETENTION_DAYS = 30
 
@@ -112,7 +112,7 @@ class TraceWriter:
 
     Returns the path so the caller can index it in the `traces` table. **The
     write and the index must both happen**, or purge cannot find the file — which
-    is the failure §17 calls out as worse than having no traces.
+    is the failure 17 calls out as worse than having no traces.
     """
 
     def __init__(self, trace_dir: Path | None = None) -> None:

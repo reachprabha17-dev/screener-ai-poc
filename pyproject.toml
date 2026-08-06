@@ -11,10 +11,10 @@ dependencies = [
   "uvicorn[standard]",
   "python-multipart",
   "typer",
-  "python-magic",        # MIME by magic bytes (spec §8.2)
-  "defusedxml",          # XXE-safe XML (spec §8.3)
-  "structlog",           # spec §17
-  "yoyo-migrations",     # spec §12.1
+  "python-magic",        # MIME by magic bytes (spec 8.2)
+  "defusedxml",          # XXE-safe XML (spec 8.3)
+  "structlog",           # spec 17
+  "yoyo-migrations",     # spec 12.1
 ]
 
 [project.optional-dependencies]
@@ -37,7 +37,7 @@ packages = ["screener", "config"]
 line-length = 100
 
 [tool.ruff.lint]
-# S = flake8-bandit: catches the subprocess/tempfile mistakes the sandbox in §8
+# S = flake8-bandit: catches the subprocess/tempfile mistakes the sandbox in 8
 # depends on not making.
 select = ["E", "F", "I", "B", "S", "UP", "ANN", "PTH"]
 
@@ -62,7 +62,7 @@ files = ["screener", "config", "worker.py"]
 addopts = "--cov=screener --cov-fail-under=85 -m 'not live'"
 testpaths = ["tests"]
 markers = [
-  "live: requires a running Ollama with the configured model (spec §20 step 7)",
+  "live: requires a running Ollama with the configured model (spec 20 step 7)",
 ]
 
 [tool.coverage.report]

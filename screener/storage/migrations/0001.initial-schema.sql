@@ -1,4 +1,4 @@
--- Initial schema (spec §12.4).
+-- Initial schema (spec 12.4).
 --
 -- Three things in here are load-bearing and easy to mistake for boilerplate:
 --
@@ -9,14 +9,14 @@
 --   * idx_cache is a PARTIAL index (WHERE cacheable = 1). Transient failures are
 --     stored for audit and shown to reviewers, but are structurally invisible to
 --     cache lookup — enforced by the index rather than by a filter in Python
---     that a future query could forget (§12.5).
+--     that a future query could forget (12.5).
 --
 --   * The deferred-compliance columns on candidates (source, consent_ref,
 --     retention_expires_at, objection_status) are nullable and unused today.
 --     They land now because backfilling context you no longer have is
---     impossible, and adding the column later is the cheap part (§21).
+--     impossible, and adding the column later is the cheap part (21).
 --
--- All timestamps are TEXT holding UTC ISO-8601 with offset (§25). SQLite has no
+-- All timestamps are TEXT holding UTC ISO-8601 with offset (25). SQLite has no
 -- datetime type; storing epoch integers would make the database unreadable
 -- without the application, and this one is candidate data an auditor may need to
 -- read directly.
@@ -25,7 +25,7 @@ CREATE TABLE users (
   id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
   roles_json TEXT NOT NULL DEFAULT '["admin"]',
-  auth_ref TEXT,                       -- LDAP DN or argon2 hash, later (§21)
+  auth_ref TEXT,                       -- LDAP DN or argon2 hash, later (21)
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
@@ -83,7 +83,7 @@ CREATE TABLE jobs (
   id INTEGER PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id),
   file_path TEXT NOT NULL,
-  file_sha256 TEXT,                    -- computed at claim time, not scan time (§16.2)
+  file_sha256 TEXT,                    -- computed at claim time, not scan time (16.2)
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','claimed','done','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
@@ -103,7 +103,7 @@ CREATE TABLE candidates (
   run_id TEXT NOT NULL REFERENCES runs(id),
   filename TEXT NOT NULL,              -- NOTE: usually contains the person's name
   file_sha256 TEXT NOT NULL,
-  score REAL,                          -- NULL, never 0.0, when not scoreable (§5)
+  score REAL,                          -- NULL, never 0.0, when not scoreable (5)
   band TEXT,
   must_haves_met INTEGER,
   scoreable INTEGER NOT NULL DEFAULT 1,
@@ -113,7 +113,7 @@ CREATE TABLE candidates (
   notable_strengths_json TEXT,
   red_flags_json TEXT,
   flags_json TEXT,
-  -- deferred-compliance columns: nullable now, un-backfillable later (§21)
+  -- deferred-compliance columns: nullable now, un-backfillable later (21)
   source TEXT,
   consent_ref TEXT,
   retention_expires_at TEXT,
@@ -138,7 +138,7 @@ CREATE TABLE verdicts (
   model_verdict TEXT NOT NULL,         -- what the model said, retained for audit
   evidence TEXT,
   verified INTEGER NOT NULL,
-  match_ratio REAL,                    -- persisted so thresholds tune against data (§18)
+  match_ratio REAL,                    -- persisted so thresholds tune against data (18)
   longest_span INTEGER
 );
 CREATE INDEX idx_verdicts_candidate ON verdicts(candidate_id);
@@ -155,7 +155,7 @@ CREATE TABLE overrides (
 );
 
 -- Contains full resume text. This is a second store of candidate data and sits
--- inside the erasure path — see §17 and purge_candidate (§12.6).
+-- inside the erasure path — see 17 and purge_candidate (12.6).
 CREATE TABLE traces (
   id INTEGER PRIMARY KEY,
   run_id TEXT NOT NULL,

@@ -1,4 +1,4 @@
-"""End-to-end screening (spec §13, build gate §20 step 12).
+"""End-to-end screening (spec 13, build gate 20 step 12).
 
 The first point in the build where a **real file** goes through the **real
 sandbox** to the **real model** and comes back as a scored candidate. Everything
@@ -80,7 +80,7 @@ def test_a_docx_becomes_a_scored_candidate(deps: Deps, root: Path) -> None:
 def test_verdicts_reflect_the_document(deps: Deps, root: Path) -> None:
     """Not just well-formed — right.
 
-    Rust appears only as training-course exposure, which §9.2's anchors define
+    Rust appears only as training-course exposure, which 9.2's anchors define
     as `none`. A pipeline that scored it `strong` would be well-formed and wrong.
     """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
@@ -94,7 +94,7 @@ def test_verdicts_reflect_the_document(deps: Deps, root: Path) -> None:
 
 
 def test_evidence_verifies_against_real_parser_output(deps: Deps, root: Path) -> None:
-    """The integration §10.5 depends on and no unit test can prove.
+    """The integration 10.5 depends on and no unit test can prove.
 
     xberg emits layout markup — OCR output arrives as markdown tables. Evidence
     is matched against that exact string, so a quote spanning a cell boundary
@@ -118,7 +118,7 @@ def test_a_scanned_resume_screens_through_ocr(deps: Deps, root: Path) -> None:
     """A scanned CV must reach a score, not an EXTRACTION_FAILED.
 
     Without OCR the whole corpus of scanned applications would come back empty
-    and the conclusion drawn would be about model quality (§3.3).
+    and the conclusion drawn would be about model quality (3.3).
     """
     path = scanned_pdf(root / "scan.pdf", text="Senior Backend Engineer, 7 years, Python and Go")
 
@@ -129,7 +129,7 @@ def test_a_scanned_resume_screens_through_ocr(deps: Deps, root: Path) -> None:
 
 
 def test_a_corrupt_file_yields_no_score_and_does_not_stop_the_batch(deps: Deps, root: Path) -> None:
-    """The failure isolation the worker relies on (§16.1)."""
+    """The failure isolation the worker relies on (16.1)."""
     good = real_docx(root / "good.docx", paragraphs=(RESUME_TEXT,))
     corrupt = root / "corrupt.pdf"
     corrupt.write_bytes(b"%PDF-1.4\n" + bytes(range(256)) * 20)
@@ -167,7 +167,7 @@ def test_the_trace_captures_what_was_actually_sent(deps: Deps, root: Path) -> No
     # Names are deliberately not redacted (see `redact_pii`): identifying one in
     # free text needs NER, and `Candidate.filename` carries it regardless. So the
     # trace holds the resume in full — which is exactly why it sits inside the
-    # erasure path (§17).
+    # erasure path (17).
     assert "Asha Nair" in captured[0].user
     assert "CRITERIA:" in captured[0].user
     assert captured[0].prompt_tokens > 0

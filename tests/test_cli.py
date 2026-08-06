@@ -1,4 +1,4 @@
-"""Command line interface (spec §14, build gate §20 step 16).
+"""Command line interface (spec 14, build gate 20 step 16).
 
 The gate is one sentence: **run a batch with the API stopped**. That is the last
 test in this file, and it drives the whole flow — migrate, seed, position,
@@ -180,7 +180,7 @@ def test_the_cli_talks_to_the_service_not_the_api() -> None:
 
 
 def test_the_cli_does_not_reach_past_the_service_into_storage() -> None:
-    """§12.2: the transaction boundary is the service layer.
+    """12.2: the transaction boundary is the service layer.
 
     Two exceptions are deliberate and named — `migrate` and `seed-user` run
     *before* a service can exist, because the API and worker both refuse to
@@ -272,7 +272,7 @@ def test_every_mutating_command_records_its_actor(runner: CliRunner, workspace: 
 
 
 def test_an_unapproved_rubric_blocks_a_run(runner: CliRunner, workspace: Path) -> None:
-    """The human gate holds on this path as well (§9.1)."""
+    """The human gate holds on this path as well (9.1)."""
     jd = workspace / "jd.txt"
     jd.write_text(JD)
     invoke(runner, "migrate")
@@ -322,7 +322,7 @@ def test_a_missing_jd_file_is_a_clear_error(runner: CliRunner, workspace: Path) 
 
 
 def test_a_whole_batch_runs_with_no_api_and_no_daemon(runner: CliRunner, workspace: Path) -> None:
-    """The §20 step 16 gate, end to end.
+    """The 20 step 16 gate, end to end.
 
     Nothing is listening on a port. No worker daemon exists. This is the path
     that gets a shortlist out of a box where everything else has failed — and it
@@ -418,7 +418,7 @@ def test_work_can_be_limited(runner: CliRunner, workspace: Path) -> None:
 
 
 def test_the_escalation_rate_is_printed_with_results(runner: CliRunner, workspace: Path) -> None:
-    """Printed on every result, not buried in a report (§18.2)."""
+    """Printed on every result, not buried in a report (18.2)."""
     jd = workspace / "jd.txt"
     jd.write_text(JD)
     invoke(runner, "migrate")

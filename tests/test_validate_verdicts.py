@@ -1,4 +1,4 @@
-"""Verdict set integrity (spec §10.3, build gate §20 step 4).
+"""Verdict set integrity (spec 10.3, build gate 20 step 4).
 
 Gate: missing, extra and duplicate ids are all caught. The inflation cases —
 duplicates and invented ids — are the ones with no downstream check, because

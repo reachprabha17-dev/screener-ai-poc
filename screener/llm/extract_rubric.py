@@ -1,11 +1,11 @@
-"""Job description → draft rubric (spec §9.1). The front of the cycle.
+"""Job description → draft rubric (spec 9.1). The front of the cycle.
 
 This is where a requisition becomes something the screener can measure against,
 and it is the **only LLM call outside the worker** — one synchronous ~5 s request
-made by `service.py` while a human waits, not a batch (§14).
+made by `service.py` while a human waits, not a batch (14).
 
 **Everything here is a draft.** The output is edited and explicitly approved by a
-reviewer before any candidate is judged against it (§23), and the approval is
+reviewer before any candidate is judged against it (23), and the approval is
 recorded. That review step is what makes an LLM acceptable at this position at
 all: a hallucinated requirement in a rubric would otherwise silently reject every
 applicant who lacks something the job never asked for, and unlike a bad verdict
@@ -15,7 +15,7 @@ individual result.
 **Ids are assigned here, in Python.** The model proposes text, weights, and
 must-have flags; `C1..Cn` are stamped on afterwards. If the model named the ids,
 then the ids in the rubric and the ids it is later asked to return would come
-from the same unreliable source, and §10.3's set-equality check would be
+from the same unreliable source, and 10.3's set-equality check would be
 validating the model against itself.
 """
 

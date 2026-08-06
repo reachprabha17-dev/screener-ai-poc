@@ -1,9 +1,9 @@
-"""Requisitions and rubric drafting (spec §15.1).
+"""Requisitions and rubric drafting (spec 15.1).
 
 Handlers are `def`, not `async def`. `sqlite3` is synchronous, so FastAPI runs
 these in its threadpool, which is correct. `async def` with a blocking database
 call inside blocks the event loop — the most common FastAPI mistake, producing
-something slower than the sync version while looking more sophisticated (§15.3).
+something slower than the sync version while looking more sophisticated (15.3).
 """
 
 from fastapi import APIRouter, Depends
@@ -46,7 +46,7 @@ def extract_rubric(
     actor: Actor = Depends(get_actor),
     service: ScreenerService = Depends(get_service),
 ) -> RubricResponse:
-    """Synchronous, ~5 s. One request while a human waits — not a batch (§14).
+    """Synchronous, ~5 s. One request while a human waits — not a batch (14).
 
     The result is a **draft**. It cannot be used for a run until approved.
     """

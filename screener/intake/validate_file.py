@@ -1,10 +1,10 @@
-"""Pre-parse file validation (spec §8.2). I/O: reads the header and, for zips, the
+"""Pre-parse file validation (spec 8.2). I/O: reads the header and, for zips, the
 central directory. Nothing else outside the sandbox touches raw file bytes.
 
 Resumes are untrusted **files** before they are untrusted text. PDF and DOCX are
 among the most heavily exploited container formats in existence, and a malicious
 one compromises the host at *parse* time — before any prompt-level control runs,
-with whatever privileges the worker holds. Every control in §10 is downstream of
+with whatever privileges the worker holds. Every control in 10 is downstream of
 this one.
 
 **Rejection is not a skip.** A rejected file moves to quarantine with an audit
@@ -15,7 +15,7 @@ from a requisition and nobody finds out.
 
 **What this cannot do.** These are structural checks against known bad shapes,
 not a verdict on whether a file is safe. A novel parser exploit in a
-well-formed PDF passes every check here. The sandbox (§8.4) is what makes that
+well-formed PDF passes every check here. The sandbox (8.4) is what makes that
 survivable; this layer exists to make it rare and to keep the cheap attacks
 cheap to stop.
 """
@@ -229,7 +229,7 @@ def _check_pdf_pages(path: Path) -> FileCheck | None:
 
 
 def validate_file(path: Path, *, root: Path) -> FileCheck:
-    """Run every §8.2 check in order, stopping at the first failure.
+    """Run every 8.2 check in order, stopping at the first failure.
 
     Order matters: containment before any read, size before any parse of
     structure, type before the type-specific checks. Each stage narrows what the

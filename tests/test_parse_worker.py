@@ -1,4 +1,4 @@
-"""Sandboxed document extraction (spec §8, build gate §20 step 8).
+"""Sandboxed document extraction (spec 8, build gate 20 step 8).
 
 Marked `live` because it runs the real parser in a real subprocess: it needs
 xberg's native stack and, for the scanned fixture, its OCR models. That is the
@@ -45,7 +45,7 @@ def test_scanned_pdf_is_read_by_ocr(parser: SandboxedParser, tmp_path: Path) -> 
 
     Without it a corpus of scanned CVs extracts as empty, and the conclusion
     drawn is about model quality rather than about documents that were never
-    read (§3.3).
+    read (3.3).
     """
     result = parser.parse(scanned_pdf(tmp_path / "scan.pdf"))
 
@@ -59,7 +59,7 @@ def test_scanned_pdf_is_read_by_ocr(parser: SandboxedParser, tmp_path: Path) -> 
 def test_extracted_text_carries_layout_markup(parser: SandboxedParser, tmp_path: Path) -> None:
     """xberg is layout-aware: it emits markdown, including table pipes.
 
-    Pinned because it reaches §10.5. Evidence is matched against this exact
+    Pinned because it reaches 10.5. Evidence is matched against this exact
     string, so a quote spanning a cell boundary arrives with `|` and `---` in
     the middle of it. `normalize_tokens` strips punctuation before aligning,
     which is what keeps that from breaking honest evidence — a regression there
@@ -90,7 +90,7 @@ def test_multi_page_scan_reports_its_page_count(parser: SandboxedParser, tmp_pat
 def test_corrupt_file_is_a_data_quality_event_not_a_security_one(
     parser: SandboxedParser, tmp_path: Path
 ) -> None:
-    """The distinction §8.5's table does not draw explicitly.
+    """The distinction 8.5's table does not draw explicitly.
 
     The parser read the file, understood it was broken, and reported it. That is
     a deterministic property of the document — cacheable, and no reason to page
@@ -179,7 +179,7 @@ def test_text_arrives_needing_sanitization_not_pre_sanitized(
 ) -> None:
     """Ordering check: the parser returns raw extracted text.
 
-    `sanitize()` runs next in the pipeline (§13), against this exact string. If
+    `sanitize()` runs next in the pipeline (13), against this exact string. If
     the parser were to sanitize, `chars_stripped` would always be zero and the
     `SANITIZED_TEXT` signal would silently stop working.
     """

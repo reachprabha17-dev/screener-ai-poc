@@ -1,4 +1,4 @@
-"""Screening execution (spec §13). One resume in, one ``Candidate`` out.
+"""Screening execution (spec 13). One resume in, one ``Candidate`` out.
 
 This is the only place the eleven stages are composed, and **the order is the
 specification**. Each constraint below exists because getting it wrong produces a
@@ -7,7 +7,7 @@ plausible-looking wrong answer rather than an error:
 - `sanitize` runs before *everything*. Injection detection, redaction, budgeting
   and evidence matching all operate on text that has had invisible characters and
   bidi overrides removed — those tricks exist precisely to slip past checks like
-  these, and they also silently break evidence matching (§8.6).
+  these, and they also silently break evidence matching (8.6).
 - The budget check runs against the **assembled prompt**, not the resume. The
   system prompt, rubric and schema are the unmeasured slack that overflows.
 - `verify_evidence` matches against `sent` — the exact sanitized, post-redaction
@@ -23,7 +23,7 @@ candidate, because the ranking cannot tell them apart afterwards.
 **This module does no I/O of its own beyond reading the file to hash it, and
 touches no database.** It receives its collaborators through `Deps`, which is
 what lets the whole pipeline be exercised against fakes without a GPU or a
-sandbox (§4 layering: pipeline → core, intake, clients, models — never storage).
+sandbox (4 layering: pipeline → core, intake, clients, models — never storage).
 """
 
 import hashlib
@@ -51,7 +51,7 @@ _HASH_CHUNK = 1024 * 1024
 
 @dataclass(frozen=True)
 class TraceRecord:
-    """One judge call, for offline evaluation and prompt regression testing (§17).
+    """One judge call, for offline evaluation and prompt regression testing (17).
 
     **Contains full resume text.** Whatever consumes this is a second store of
     candidate data and must sit inside the erasure path, or `purge_candidate`
@@ -103,7 +103,7 @@ def file_sha256(path: Path) -> str:
 
     Computed at screening time rather than at folder-scan time, so a file
     replaced between the snapshot and processing is identified as what was
-    judged, not as what was queued (§16.2). The cache key depends on this being
+    judged, not as what was queued (16.2). The cache key depends on this being
     the real bytes.
     """
     digest = hashlib.sha256()
@@ -131,7 +131,7 @@ def _unscoreable(
     escalated candidate is one a human now has to decide about, and they cannot
     do that from a flag alone — they need the verdicts, the quotes, and the
     `match_ratio` that explains why verification failed. Dropping them would make
-    the review queue unactionable, which is the §18.2 failure where oversight
+    the review queue unactionable, which is the 18.2 failure where oversight
     collapses into rubber-stamping.
     """
     return Candidate(
@@ -166,7 +166,7 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
     """
     acc = _Accumulator()
 
-    # --- §8.2 file validation, before anything opens the file properly -------
+    # --- 8.2 file validation, before anything opens the file properly -------
     check = validate_file(path, root=root)
     if not check.ok:
         acc.add(*check.flags, review=True)
@@ -180,13 +180,13 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
 
     sha = file_sha256(path)
 
-    # --- §8.4 sandboxed parse ------------------------------------------------
+    # --- 8.4 sandboxed parse ------------------------------------------------
     parse = deps.parser.parse(path)
     if not parse.ok or parse.parsed is None:
         acc.add(*parse.flags, review=True)
         return _unscoreable(run_id=run_id, path=path, sha=sha, acc=acc, summary=parse.error[:600])
 
-    # --- §8.6 unicode sanitization, before every other text stage ------------
+    # --- 8.6 unicode sanitization, before every other text stage ------------
     text, stripped = sanitize(parse.parsed.text)
     if stripped:
         acc.add(Flag.SANITIZED_TEXT)
@@ -196,16 +196,16 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
         acc.add(Flag.EXTRACTION_FAILED, review=True)
         return _unscoreable(run_id=run_id, path=path, sha=sha, acc=acc)
 
-    # --- §10.2 injection detection: escalates, never excludes ---------------
+    # --- 10.2 injection detection: escalates, never excludes ---------------
     if settings.injection_detection:
         injection = detect_injection(text)
         if injection.detected:
             acc.add(Flag.SUSPECTED_INJECTION, review=True)
 
-    # --- §10.x redaction. `sent` is what the model sees and what §10.5 matches
+    # --- 10.x redaction. `sent` is what the model sees and what 10.5 matches
     sent = redact_pii(text)[0] if settings.redact_pii else text
 
-    # --- §10.1 budget, against the assembled prompt --------------------------
+    # --- 10.1 budget, against the assembled prompt --------------------------
     system = load_prompt(PROMPT_NAME)
     user = build_user_message(sent, rubric)
     budget = check_budget(deps.llm.count_prompt_tokens(system, user))
@@ -221,7 +221,7 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
             summary=f"prompt {budget.prompt_tokens} tokens exceeds limit {budget.limit}",
         )
 
-    # --- §11 + §10.3 judge, with one corrective retry on a verdict-set mismatch
+    # --- 11 + 10.3 judge, with one corrective retry on a verdict-set mismatch
     judged = judge_resume(deps.llm, sent, rubric)
     if judged.output is None or not judged.check.ok:
         acc.add(*judged.flags, review=True)
@@ -241,12 +241,12 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
             )
         )
 
-    # --- §10.7 free-text screening, before anything is shown or scored -------
+    # --- 10.7 free-text screening, before anything is shown or scored -------
     screened = screen_freetext(judged.output)
     if screened.removed:
         acc.add(*screened.flags)
 
-    # --- §10.5 evidence verification, against `sent` -------------------------
+    # --- 10.5 evidence verification, against `sent` -------------------------
     verified = verify_evidence(screened.output, sent, rubric)
     acc.add(*verified.flags, review=verified.review_required)
 
@@ -265,7 +265,7 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
             criteria=verified.criteria,
         )
 
-    # --- §10.4 arithmetic ----------------------------------------------------
+    # --- 10.4 arithmetic ----------------------------------------------------
     scored = compute_score(verified.criteria, rubric)
     acc.add(*scored.flags, review=scored.review_required)
 
@@ -295,7 +295,7 @@ def screen_batch(
     run_id: str,
     root: Path,
 ) -> list[Candidate]:
-    """Screen a list of files serially. The break-glass path for `cli.py` (§16).
+    """Screen a list of files serially. The break-glass path for `cli.py` (16).
 
     Serial, not concurrent: `OLLAMA_NUM_PARALLEL=1` means parallel calls would
     queue at Ollama anyway, and concurrency here would only add a way to lose

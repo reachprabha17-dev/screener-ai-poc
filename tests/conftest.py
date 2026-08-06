@@ -4,7 +4,7 @@ from screener.models import Candidate, Criterion, Rubric, ScoredCriterion, Verdi
 
 # Criterion text has to be *real*, not a placeholder.
 #
-# It previously read `f"criterion {i}"`, which broke the moment §10.5(c) started
+# It previously read `f"criterion {i}"`, which broke the moment 10.5(c) started
 # checking that evidence is about the criterion it was offered for: a quote about
 # payment systems genuinely is not about "criterion C1", so the check fired on
 # every fixture. The check was right and the fixture was fiction.

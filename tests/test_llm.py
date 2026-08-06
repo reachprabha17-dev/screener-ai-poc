@@ -1,4 +1,4 @@
-"""Prompt assembly, id minting, and the corrective retry (spec §9, build gate §20 step 9).
+"""Prompt assembly, id minting, and the corrective retry (spec 9, build gate 20 step 9).
 
 Driven against a fake client. What is under test here is the *shape* of the
 request and the control flow around it — both fully determined by our code. The
@@ -86,16 +86,16 @@ def test_prompt_hash_is_stable_and_content_sensitive() -> None:
 
 
 def test_judge_prompt_carries_its_non_negotiable_clauses() -> None:
-    """§9.2 lists these as non-negotiable, so their absence is a test failure.
+    """9.2 lists these as non-negotiable, so their absence is a test failure.
 
     Not a style check: each clause maps to a downstream control that assumes it
     was said.
     """
     text = load_prompt("judge_resume").casefold()
 
-    assert "not found" in text  # §10.5(a)'s consistency gate depends on this exact string
-    assert "instruction_like_text" in text  # §10.2
-    assert "300 characters" in text  # §5's evidence cap
+    assert "not found" in text  # 10.5(a)'s consistency gate depends on this exact string
+    assert "instruction_like_text" in text  # 10.2
+    assert "300 characters" in text  # 5's evidence cap
     for forbidden in ("gender", "age", "ethnicity", "culture fit", "employment gaps"):
         assert forbidden in text
 
@@ -180,7 +180,7 @@ def test_the_retry_names_the_missing_ids() -> None:
 def test_two_mismatches_escalate_and_never_return_a_subset() -> None:
     """A best-effort partial set would shrink the denominator and inflate the score.
 
-    §10.3's whole point: the failure has to reach a human rather than be scored
+    10.3's whole point: the failure has to reach a human rather than be scored
     around.
     """
     client = FakeLLM(verdicts("C1"), verdicts("C1", "C2"))
@@ -215,7 +215,7 @@ def test_schema_violations_raise_rather_than_score() -> None:
 
 
 def test_ids_are_minted_in_python_not_by_the_model() -> None:
-    """If the model named them, §10.3 would be validating it against itself."""
+    """If the model named them, 10.3 would be validating it against itself."""
     extracted = ExtractedRubric(
         criteria=[
             ExtractedCriterion(text="5+ years backend", must_have=True, weight=5),

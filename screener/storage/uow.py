@@ -1,11 +1,11 @@
-"""Transaction boundary (spec §12.2). Satisfies ``ports.UnitOfWork``.
+"""Transaction boundary (spec 12.2). Satisfies ``ports.UnitOfWork``.
 
 **Stores receive a transaction; they never open one.** That single rule is what
 keeps a multi-table operation atomic. Without it, `record_override` writes the
 override, then writes the audit row, and a crash between the two leaves an
 override with no audit trail — a record of a decision affecting a candidate, with
 no record of who made it. The same applies to sign-off and to purge, which spans
-four tables plus the filesystem (§12.6).
+four tables plus the filesystem (12.6).
 
 **Never held open across an LLM call.** A judge call is ~5 s; a transaction
 around it holds SQLite's write lock for that entire time and blocks the API's

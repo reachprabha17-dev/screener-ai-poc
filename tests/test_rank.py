@@ -1,4 +1,4 @@
-"""Partitioned ranking and banding (spec §10.6, §18.3)."""
+"""Partitioned ranking and banding (spec 10.6, 18.3)."""
 
 from conftest import candidate
 from hypothesis import given

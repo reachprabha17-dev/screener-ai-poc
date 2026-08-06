@@ -1,4 +1,4 @@
-"""Trace index (spec §17, §12.6).
+"""Trace index (spec 17, 12.6).
 
 **Traces contain full resume text.** That makes `trace_dir` a second store of
 candidate data, and the reason this table exists at all: the files must be

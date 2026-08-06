@@ -1,4 +1,4 @@
-"""Token budget (spec §10.1, build gate §20 step 4).
+"""Token budget (spec 10.1, build gate 20 step 4).
 
 The gate is "overflow → unscoreable". The tests that matter here are the ones
 asserting what does *not* happen: nothing is truncated, and nothing over budget
@@ -48,7 +48,7 @@ def test_overflow_is_unscoreable_and_escalates() -> None:
     """The gate. Over budget produces no score, ever.
 
     Truncating and judging would reproduce at our own boundary the silent
-    overflow §10.1 exists to prevent.
+    overflow 10.1 exists to prevent.
     """
     check = check_budget(context_limit() + 1)
 

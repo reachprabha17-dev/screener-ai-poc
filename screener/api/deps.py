@@ -1,4 +1,4 @@
-"""Request dependencies and domain→response mapping (spec §15.2, §15.4).
+"""Request dependencies and domain→response mapping (spec 15.2, 15.4).
 
 **Auth is stubbed but seamed.** `get_actor` is one function, and every mutating
 route already takes `actor: Actor = Depends(get_actor)`. Real LDAP or argon2
@@ -10,7 +10,7 @@ authentication itself is a day's work.
 admin, which is why the API binds to loopback and why `auth_mode` must be moved
 off `stub` before an external listener exists.
 
-The mappers are here rather than on the models because they enforce §15.4's
+The mappers are here rather than on the models because they enforce 15.4's
 outward boundary in one place: `model_verdict` is dropped when a `ScoredCriterion`
 becomes a `CriterionResponse`, and there is no other path from a domain object to
 an HTTP body.
@@ -69,7 +69,7 @@ def _shared_service() -> ScreenerService:
 
     The LLM client caches the model digest and is safe to share; database
     connections are *not* shared — `get_connection()` creates one per thread,
-    which is why FastAPI's threadpool works at all (§12.3).
+    which is why FastAPI's threadpool works at all (12.3).
     """
     return ScreenerService(llm=OllamaClient())
 
@@ -122,7 +122,7 @@ def to_run_status(status_: RunStatus) -> RunStatusResponse:
 
 
 def to_candidate(candidate: Candidate) -> CandidateResponse:
-    """The §15.4 boundary. `model_verdict` is dropped here and nowhere else."""
+    """The 15.4 boundary. `model_verdict` is dropped here and nowhere else."""
     return CandidateResponse(
         filename=candidate.filename,
         file_sha256=candidate.file_sha256,

@@ -1,4 +1,4 @@
-"""Input redaction (spec §9, build gate §20 step 6).
+"""Input redaction (spec 9, build gate 20 step 6).
 
 The named gate is "date-range preserved through redaction", and it is the test
 that matters most here. A redactor that eats four-digit years to catch a birth
@@ -13,7 +13,7 @@ from screener.core.redact_pii import EMAIL_TOKEN, PHONE_TOKEN, REDACTED_TOKEN, r
 
 
 def test_employment_date_ranges_survive_redaction() -> None:
-    """The required fixture from §9.
+    """The required fixture from 9.
 
     `strong` requires evidence of depth, scope, or duration. Duration lives in
     exactly these strings.

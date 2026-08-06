@@ -1,4 +1,4 @@
-"""Typed configuration, read from the environment and `.env` (spec §7).
+"""Typed configuration, read from the environment and `.env` (spec 7).
 
 Several values here are load-bearing rather than cosmetic:
 
@@ -13,11 +13,11 @@ failure surfaces as a schema error whose real cause is invisible.
 change the weights underneath decisions already stored, breaking reproducibility
 and the audit record.
 
-``evidence_*`` — the three conditions in §10.5 are combined with AND. Any one of
+``evidence_*`` — the three conditions in 10.5 are combined with AND. Any one of
 them alone admits fabricated evidence.
 
 ``OLLAMA_NUM_PARALLEL=1`` belongs in the service environment, not here: slot
-reuse is the largest remaining source of run-to-run variation (§10.8).
+reuse is the largest remaining source of run-to-run variation (10.8).
 """
 
 from pathlib import Path
@@ -55,18 +55,18 @@ class Settings(BaseSettings):
     # entirely by `thinking`, empty `content`, and the call surfaced as
     # SCHEMA_INVALID; at 4096 tokens it still had not finished after 82 s.
     #
-    # This also breaks §10.1's arithmetic, which reserves `num_predict` for
+    # This also breaks 10.1's arithmetic, which reserves `num_predict` for
     # *output* — a thinking model spends that reservation on reasoning nobody
     # scores. Disabling it is what makes such a model usable here at all.
     disable_thinking: bool = True
 
-    # --- Budget (§10.1) ---
+    # --- Budget (10.1) ---
     max_resume_tokens: int = 4200
     max_criteria: int = 12
     exact_token_count: bool = True
     token_estimate_safety_margin: float = 1.35
 
-    # --- File intake (§8) ---
+    # --- File intake (8) ---
     max_file_bytes: int = 5 * 1024 * 1024
     max_pages: int = 50
     max_decompressed_bytes: int = 50 * 1024 * 1024
@@ -86,10 +86,10 @@ class Settings(BaseSettings):
     # --- Safety / fairness ---
     redact_pii: bool = True
     injection_detection: bool = True
-    evidence_match_ratio: float = 0.60  # §10.5 — AND
-    # §10.5 — AND. **Recalibrated from 25 at build step 19, against measured data.**
+    evidence_match_ratio: float = 0.60  # 10.5 — AND
+    # 10.5 — AND. **Recalibrated from 25 at build step 19, against measured data.**
     #
-    # 25 was inherited from the rejected `or 25 chars` clause (§22.1), where it
+    # 25 was inherited from the rejected `or 25 chars` clause (22.1), where it
     # was a *sufficient* condition — "verified if at least 25 chars matched".
     # Reusing it as a *necessary* condition was never measured.
     #
@@ -110,9 +110,9 @@ class Settings(BaseSettings):
     # `evidence_min_block_tokens = 3` requiring a contiguous run and
     # `evidence_match_ratio = 0.60` requiring most of the quote to align.
     evidence_match_min_chars: int = 16
-    evidence_min_block_tokens: int = 3  # §10.5 — AND. Do not set to 1.
+    evidence_min_block_tokens: int = 3  # 10.5 — AND. Do not set to 1.
     freetext_screen: bool = True
-    escalation_budget: float = 0.03  # §18.2 — warn above this
+    escalation_budget: float = 0.03  # 18.2 — warn above this
 
     # --- Ranking ---
     band_thresholds: tuple[float, float, float] = (7.5, 5.5, 3.5)
@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["stub", "ldap", "local"] = "stub"
     dev_actor_id: str = "poc-operator"
 
-    # --- Worker (§16) ---
+    # --- Worker (16) ---
     worker_id: str = "worker-1"
     worker_poll_interval_s: int = 2
     heartbeat_interval_s: int = 15
@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     fast_lane_max_files: int = 150
     # Hours a run may wait before it is promoted into the fast lane. Without
     # aging, a steady trickle of small runs starves a 1,000-CV posting forever
-    # (§16.3).
+    # (16.3).
     run_aging_hours: float = 2.0
     # Measured end-to-end judge time at build step 9 (5.39 s), not the spec's
     # original 4.7 s estimate. Drives the ETA, so it should be re-measured

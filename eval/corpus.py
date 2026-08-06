@@ -1,8 +1,8 @@
-"""The labelled set and its provenance (spec §18.1).
+"""The labelled set and its provenance (spec 18.1).
 
 **An accuracy number inherits its labeller's judgement entirely.** Reporting one
 without saying who produced the labels and how is not a measurement — it is a
-number with the disagreement hidden inside it. §18.1 sets the floor: two
+number with the disagreement hidden inside it. 18.1 sets the floor: two
 independent labellers, inter-rater agreement reported *alongside* accuracy,
 disagreements adjudicated and the disagreement retained.
 
@@ -13,7 +13,7 @@ and produce a confident percentage nobody can defend.
 
 Agreement is Cohen's κ, computed here rather than pulled from scikit-learn: it is
 six lines over three verdict values, and vendoring a framework onto an
-air-gapped box for that is the trade §22.2 already rejected for tokenizers.
+air-gapped box for that is the trade 22.2 already rejected for tokenizers.
 """
 
 import json
@@ -66,7 +66,7 @@ class Provenance:
 
     @property
     def is_independent(self) -> bool:
-        """§18.1's floor: at least two people who did not see each other's work."""
+        """18.1's floor: at least two people who did not see each other's work."""
         return len(self.labellers) >= 2
 
 
@@ -93,7 +93,7 @@ def load(path: Path | None = None) -> Corpus:
     if not target.is_file():
         raise CorpusError(
             f"No labelled set at {target}. Accuracy cannot be reported without one — "
-            "see §18.1 for what it must contain."
+            "see 18.1 for what it must contain."
         )
 
     lines = [ln for ln in target.read_text(encoding="utf-8").splitlines() if ln.strip()]
@@ -105,7 +105,7 @@ def load(path: Path | None = None) -> Corpus:
         raise CorpusError(
             f"{target} does not begin with a provenance header. An accuracy figure "
             "inherits its labeller's judgement entirely, so the labelling must be "
-            "declared before any case (§18.1)."
+            "declared before any case (18.1)."
         )
 
     provenance = Provenance(
@@ -187,7 +187,7 @@ def cohens_kappa(a: list[str], b: list[str]) -> float:
 def agreement_report(corpus: Corpus) -> dict[str, Any]:
     """Pairwise κ across every labeller pair, plus where they disagreed.
 
-    Disagreements are retained rather than averaged away (§18.1): a criterion two
+    Disagreements are retained rather than averaged away (18.1): a criterion two
     experienced people read differently is a criterion the model cannot be
     expected to read consistently either.
     """

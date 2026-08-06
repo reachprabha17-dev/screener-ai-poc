@@ -1,4 +1,4 @@
-"""Token budget (spec §10.1). Pure — no I/O, no model.
+"""Token budget (spec 10.1). Pure — no I/O, no model.
 
 Ollama truncates at ``num_ctx`` **silently**. Overflow is not an error: the model
 judges a partial resume and returns a well-formed, entirely plausible verdict set
@@ -16,7 +16,7 @@ Counting itself lives in the LLM client, because the exact count comes from the
 weights doing the judging (``prompt_eval_count``). This module owns only the
 arithmetic and the decision, which is what keeps it testable without a GPU.
 
-Component estimates behind ``max_resume_tokens`` (§10.1):
+Component estimates behind ``max_resume_tokens`` (10.1):
 
 ===========================  ========
 System prompt                 ~600

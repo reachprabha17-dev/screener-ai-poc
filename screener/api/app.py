@@ -1,19 +1,19 @@
-"""FastAPI application factory (spec §15).
+"""FastAPI application factory (spec 15).
 
 The control plane. It creates positions, drafts and approves rubrics, snapshots
 folders into jobs, and reports progress. **It never screens** — that is the
 worker, in another process, so that a 78-minute batch cannot make this
-unresponsive (§2).
+unresponsive (2).
 
 **Handlers are `def`, not `async def`.** `sqlite3` is synchronous, so FastAPI
 runs them in its threadpool, which is correct and is why `connection.py` creates
 one connection per thread. Declaring `async def` and then making blocking calls
 inside would block the event loop and produce something slower than the sync
-version while looking more sophisticated (§15.3).
+version while looking more sophisticated (15.3).
 
 **Migrations are a startup gate.** The app refuses to construct against a stale
 schema rather than serving requests that write rows half-matching the schema the
-code expects (§12.1).
+code expects (12.1).
 """
 
 from collections.abc import Awaitable, Callable
@@ -31,7 +31,7 @@ def _install_error_handlers(app: FastAPI) -> None:
     """Service rules become status codes in one place.
 
     Without this, every route grows a `try/except` and the four-line handler
-    §15.4 asks for becomes fifteen. The mapping is deliberate: a rule violation
+    15.4 asks for becomes fifteen. The mapping is deliberate: a rule violation
     is the caller's problem (4xx), never a 500 that pages somebody.
     """
 

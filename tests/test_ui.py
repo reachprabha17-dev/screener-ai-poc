@@ -1,9 +1,9 @@
-"""Reviewer interface (build gate §20 step 18).
+"""Reviewer interface (build gate 20 step 18).
 
 The gate names four properties: **polls status**, **survives worker restart**,
 **worker survives UI restart**, and **no DB driver importable**.
 
-The last one needs care. §3.1 claims decision #11 is "enforced by the dependency
+The last one needs care. 3.1 claims decision #11 is "enforced by the dependency
 graph, not by discipline" — that is not quite true, because `sqlite3` is in the
 Python standard library and cannot be uninstalled. Omitting a driver from the
 `ui` extra removes the temptation and the connection string; what actually
@@ -150,7 +150,7 @@ def test_the_ui_holds_no_worker_state() -> None:
     All run state lives in the database behind the API. Streamlit re-executes
     its whole script on every interaction, so anything held here would be lost
     on the next click anyway — which is precisely why screening cannot live in
-    this process (§2).
+    this process (2).
     """
     source = (UI_DIR / "screener_app.py").read_text(encoding="utf-8")
 
@@ -227,7 +227,7 @@ def test_rubric_extraction_gets_a_longer_timeout() -> None:
 
 
 def test_the_app_shows_bands_and_keeps_the_score_for_export() -> None:
-    """Three verdict levels cannot support a rendered precision of `7.8` (§10.6).
+    """Three verdict levels cannot support a rendered precision of `7.8` (10.6).
 
     The float is exported for audit; the reviewer sees a band.
     """
@@ -242,7 +242,7 @@ def test_needs_review_is_its_own_tab() -> None:
     """Never the tail of a ranking.
 
     At 1,000 applicants a reviewer reads the top of Band A and stops; anything
-    at the bottom of one long list is invisible in practice (§10.5b).
+    at the bottom of one long list is invisible in practice (10.5b).
     """
     source = (UI_DIR / "screener_app.py").read_text(encoding="utf-8")
 
@@ -251,7 +251,7 @@ def test_needs_review_is_its_own_tab() -> None:
 
 
 def test_the_escalation_rate_is_shown_against_its_budget() -> None:
-    """Surfaced live, not discovered afterwards (§18.2)."""
+    """Surfaced live, not discovered afterwards (18.2)."""
     from ui.screener_app import ESCALATION_BUDGET
 
     assert ESCALATION_BUDGET == 0.03
@@ -261,7 +261,7 @@ def test_weak_signals_are_labelled_as_weak() -> None:
     """`POSSIBLE_DUPLICATE` catches byte-identical files only.
 
     The same CV re-exported from Word has a different hash, so the UI says so
-    rather than implying coverage the check does not have (§12.6).
+    rather than implying coverage the check does not have (12.6).
     """
     from ui.screener_app import FLAG_HELP
 
@@ -271,7 +271,7 @@ def test_weak_signals_are_labelled_as_weak() -> None:
 
 
 def test_evidence_is_not_presented_as_fraud_detection() -> None:
-    """It confirms the model quoted the resume faithfully. Nothing more (§1)."""
+    """It confirms the model quoted the resume faithfully. Nothing more (1)."""
     source = (UI_DIR / "screener_app.py").read_text(encoding="utf-8")
 
     assert "not fraud detection" in source

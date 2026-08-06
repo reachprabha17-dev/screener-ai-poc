@@ -1,4 +1,4 @@
-"""Rubric versions and approval (spec §12.4).
+"""Rubric versions and approval (spec 12.4).
 
 Rubrics are **versioned, never edited in place**. `UNIQUE(position_id, version)`
 enforces it. A run records the `rubric_id` it used and candidates carry the
@@ -7,7 +7,7 @@ make those stored decisions unexplainable — the reviewer would see verdicts
 against criteria that no longer exist.
 
 `approved_by` / `approved_at` are the human gate in front of an LLM-generated
-rubric (§9.1). A rubric is not usable for a run until they are set.
+rubric (9.1). A rubric is not usable for a run until they are set.
 """
 
 import json

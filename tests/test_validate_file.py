@@ -1,4 +1,4 @@
-"""Pre-parse file validation (spec §8.2, build gate §20 step 5).
+"""Pre-parse file validation (spec 8.2, build gate 20 step 5).
 
 **This is a security gate.** The spec is explicit: do not point this pipeline at
 real candidate files until these fixtures pass. Every test here is an attack that

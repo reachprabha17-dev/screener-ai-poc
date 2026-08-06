@@ -1,4 +1,4 @@
-"""Input redaction (spec §9, §13). Pure — no I/O, no model.
+"""Input redaction (spec 9, 13). Pure — no I/O, no model.
 
 Removes direct identifiers and the protected-attribute fields that international
 CV conventions still put at the top of the page — date of birth, age,
@@ -7,7 +7,7 @@ model cannot weigh what it never sees, which is a stronger guarantee than
 instructing it not to.
 
 **The constraint that shapes everything here: employment date ranges must
-survive.** The `strong` verdict anchor in §9.2 requires evidence of depth,
+survive.** The `strong` verdict anchor in 9.2 requires evidence of depth,
 scope, or *duration*. A redactor that eats four-digit years to catch a birth year
 would quietly convert every duration-based `strong` into a `partial` — a
 system-wide downgrade applied to every candidate, produced by a privacy control,
@@ -16,10 +16,10 @@ invisible in the output. So date handling is **label-anchored**: `DOB: 1985` goe
 
 **What is not redacted, stated plainly.** Names are not. Identifying a person's
 name in free text needs NER, which is a model, which this module is not — and
-`Candidate.filename` carries the name regardless (§5). URLs are not: a GitHub
+`Candidate.filename` carries the name regardless (5). URLs are not: a GitHub
 profile is often the evidence a technical criterion rests on. Redaction here
 reduces what the model weighs; it is not anonymization, and the audit trail,
-traces, and quarantine all still hold the full text (§17).
+traces, and quarantine all still hold the full text (17).
 """
 
 import re
@@ -89,7 +89,7 @@ class RedactionReport:
 def redact_pii(text: str) -> tuple[str, RedactionReport]:
     """Return the string that will be sent to the model, plus what was removed.
 
-    The returned string is what §10.5 must later match evidence against.
+    The returned string is what 10.5 must later match evidence against.
     Verifying a quote against the pre-redaction original fails on every quote
     sitting near a redaction, so callers must carry this value forward rather
     than re-deriving it.

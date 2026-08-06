@@ -1,11 +1,11 @@
-"""Parser sandbox (spec §8.4). Runs the parser in a separate short-lived process.
+"""Parser sandbox (spec 8.4). Runs the parser in a separate short-lived process.
 
 A process, not a thread. The parent holds no parser state, so a segfault in a
 PDF library kills a child we already expect to lose and the worker carries on to
 the next resume. In a thread the same crash takes the worker, the claimed job,
 and the run with it.
 
-This module implements the third of the three options in §8.4 — rlimits,
+This module implements the third of the three options in 8.4 — rlimits,
 scrubbed environment, per-job tmpdir — which the spec labels the *minimum
 acceptable* one. `run_sandboxed` is the seam: a container
 (`--network none --read-only --cap-drop ALL --pids-limit`) or a dedicated
@@ -64,7 +64,7 @@ PARSE_WORKER_MODULE = "screener.intake.parse_worker"
 # So the limit is computed relative to current usage. That preserves what the
 # control was for — bounding how much the parser can multiply — while remaining
 # survivable on a shared account. Genuine pid containment is `--pids-limit` at
-# tier 1 or a dedicated uid at tier 2 (§8.4).
+# tier 1 or a dedicated uid at tier 2 (8.4).
 MAX_NEW_PROCESSES = 96
 MAX_OPEN_FILES = 128
 
@@ -117,7 +117,7 @@ class SandboxResult:
 
     @property
     def flags(self) -> list[Flag]:
-        """Both are transient (§12.5) and must never be cached.
+        """Both are transient (12.5) and must never be cached.
 
         A timeout cached as a permanent verdict sidelines a real candidate
         forever on the strength of one slow parse.
@@ -191,7 +191,7 @@ def _limiter(cpu_seconds: int, nproc: int | None) -> Callable[[], None]:
     waiting for the first threaded caller.
 
     ``preexec_fn`` is not async-signal-safe in a multi-threaded parent either.
-    The worker (§16.1) is single-threaded by design — one resume at a time, no
+    The worker (16.1) is single-threaded by design — one resume at a time, no
     thread pool — and the API never parses. Do not call this from a threadpool
     handler.
     """
@@ -368,10 +368,10 @@ class SandboxedParser:
 
     The subprocess is an implementation detail of this class. `pipeline.py` asks
     for text and gets text or a flag; it never learns that a process was forked,
-    which is what lets the container and dedicated-uid tiers of §8.4 drop in
+    which is what lets the container and dedicated-uid tiers of 8.4 drop in
     without touching a single caller.
 
-    Maps the §8.5 failure table, with one refinement the table does not draw:
+    Maps the 8.5 failure table, with one refinement the table does not draw:
     a *clean* parser error — the parser read the file, found it malformed, and
     said so — is `EXTRACTION_FAILED`, not `PARSER_CRASHED`. It is a deterministic
     property of the document, so it is cacheable, and it is a data-quality event

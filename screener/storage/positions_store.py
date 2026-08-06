@@ -1,4 +1,4 @@
-"""Requisitions and their users (spec §12.4).
+"""Requisitions and their users (spec 12.4).
 
 `positions.reference` is the folder name under `data/resumes/` and is UNIQUE.
 That constraint is what stops two requisitions pointing at the same folder and
@@ -19,7 +19,7 @@ def seed_user(
 
     Every table with an actor column has a foreign key to `users`, so this row
     has to exist before anything else can be written. Auth is stubbed today
-    (§15.2), but the *referential* plumbing is real from day one — that is the
+    (15.2), but the *referential* plumbing is real from day one — that is the
     part that is expensive to retrofit.
     """
     tx.execute(
@@ -66,7 +66,7 @@ def list_open(tx: Tx) -> list[Position]:
 
 
 def close(tx: Tx, position_id: str) -> None:
-    """No `actor` parameter: stores do not audit, the service layer does (§12.2).
+    """No `actor` parameter: stores do not audit, the service layer does (12.2).
 
     Threading an actor here that is only used by the caller's audit row would
     suggest this function records it, and someone would eventually rely on that.

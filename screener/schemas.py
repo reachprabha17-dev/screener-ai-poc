@@ -1,4 +1,4 @@
-"""API request and response shapes (spec §15.4).
+"""API request and response shapes (spec 15.4).
 
 **Domain models for requests; explicit response models for reads.** That
 asymmetry is deliberate. Requests are already validated by the domain contract,
@@ -6,7 +6,7 @@ so a parallel type hierarchy would be duplication. Responses need to control wha
 leaves the building.
 
 The field that matters is `ScoredCriterion.model_verdict` — what the model said
-*before* §10.5 forced it down. That is audit data. A reviewer's screen showing
+*before* 10.5 forced it down. That is audit data. A reviewer's screen showing
 both "none" and "the model originally said strong" invites exactly the
 second-guessing the consistency gate exists to remove, and in an adverse-action
 conversation it is a number nobody can defend. It is persisted, it is queryable
@@ -74,7 +74,7 @@ class CriterionResponse(BaseModel):
     verified: bool
     # Surfaced so a reviewer can see *how well* the quote matched, not just
     # whether it passed. The thresholds are tunable and the numbers are what
-    # §18.2 says to tune them against.
+    # 18.2 says to tune them against.
     match_ratio: float
     longest_span: int
     weight: int
@@ -103,7 +103,7 @@ class RankedResponse(BaseModel):
     """Three partitions, never one list.
 
     `needs_review` is its own collection so a UI cannot render it as the tail of
-    a ranking, where at 1,000 applicants nobody would ever reach it (§10.6).
+    a ranking, where at 1,000 applicants nobody would ever reach it (10.6).
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -1,4 +1,4 @@
-"""Accuracy against the labelled set (spec §18.1).
+"""Accuracy against the labelled set (spec 18.1).
 
 **Reports agreement before accuracy, every time.** An accuracy figure inherits
 its labeller's judgement entirely, so quoting one without the inter-rater number
@@ -110,7 +110,7 @@ def report(corpus: Corpus, result: Result, model: str) -> int:
     print(f"corpus       {len(corpus)} cases, {corpus.judgements} judgements")
     print(f"labellers    {', '.join(agreement['labellers'])}")
 
-    # Agreement first, deliberately (§18.1).
+    # Agreement first, deliberately (18.1).
     if agreement["independent"]:
         for pair, kappa in agreement["pairwise_kappa"].items():
             print(f"  kappa      {pair}: {kappa}")
@@ -120,7 +120,7 @@ def report(corpus: Corpus, result: Result, model: str) -> int:
         print(
             "  kappa      NOT AVAILABLE — fewer than two independent labellers.\n"
             "             Accuracy below is a regression signal, not evidence about\n"
-            "             real applications (§18.1)."
+            "             real applications (18.1)."
         )
     if corpus.provenance.caveats:
         print(f"\n  caveats    {corpus.provenance.caveats[:300]}")

@@ -1,4 +1,4 @@
-"""Liveness and readiness (spec §15.1, §17).
+"""Liveness and readiness (spec 15.1, 17).
 
 Two endpoints because they answer different questions. `/health` says the process
 is up and can serve. `/ready` says it can do useful work: the model is reachable,

@@ -1,4 +1,4 @@
-"""Ollama adapter (spec §11). Satisfies ``ports.LLMClient``.
+"""Ollama adapter (spec 11). Satisfies ``ports.LLMClient``.
 
 Structured output is a **grammar constraint**, not a request: `format=<json schema>`
 compiles the schema into a llama.cpp grammar, so the decoder cannot emit a token
@@ -11,7 +11,7 @@ this client guarantees is structural.
 
 **No failure path here ever produces a score.** Every one raises, and the caller
 turns it into `scoreable=False` plus a flag. All four of those flags are
-transient (§12.5): an Ollama timeout cached as a permanent verdict would sideline
+transient (12.5): an Ollama timeout cached as a permanent verdict would sideline
 a real candidate forever on a network blip.
 
 Token counting notes are in `count_tokens` — the spec's `num_predict=0` recipe
@@ -51,7 +51,7 @@ class SchemaInvalidError(RuntimeError):
 class BudgetBugError(RuntimeError):
     """The prompt was larger than the context allows *after* the pre-check passed.
 
-    Not a property of the input — the budget check (§10.1) was supposed to make
+    Not a property of the input — the budget check (10.1) was supposed to make
     this impossible. Logged at ``error``: a wrong budget silently truncates every
     resume that follows.
     """
@@ -70,7 +70,7 @@ class OllamaClient:
     """One model, one host, one set of decoding options.
 
     The options are fixed at construction rather than passed per call. They are
-    part of the cache key and the reproducibility claim (§10.8), so a caller that
+    part of the cache key and the reproducibility claim (10.8), so a caller that
     could vary `temperature` per request could silently invalidate every stored
     comparison.
     """
@@ -139,7 +139,7 @@ class OllamaClient:
     def count_tokens(self, text: str) -> int:
         """Exact prompt tokens, from the weights that will do the judging.
 
-        **Correction to §10.1, measured on Ollama 0.32.4.** The spec's recipe
+        **Correction to 10.1, measured on Ollama 0.32.4.** The spec's recipe
         passes ``num_predict=0`` and reads ``prompt_eval_count``. On this version
         ``num_predict=0`` is not honoured: the request generates to completion
         (573 tokens, 7.4 s observed) and returns the right count for entirely the
@@ -148,7 +148,7 @@ class OllamaClient:
 
         No tokenizer is vendored. A HuggingFace vocabulary a major version behind
         the deployed model is exactly the mismatch this control exists to catch,
-        and `prompt_eval_count` is exact by construction (§22.2).
+        and `prompt_eval_count` is exact by construction (22.2).
         """
         if not settings.exact_token_count:
             return self.estimate_tokens(text)
@@ -178,7 +178,7 @@ class OllamaClient:
         return estimate_tokens(text)
 
     def count_prompt_tokens(self, system: str, user: str) -> int:
-        """Exact size of the assembled chat prompt, for the §10.1 pre-flight check.
+        """Exact size of the assembled chat prompt, for the 10.1 pre-flight check.
 
         Counts the **real two-message shape**, not the concatenated strings plus a
         template constant. That shortcut was tried and measured wrong: the
@@ -188,7 +188,7 @@ class OllamaClient:
 
         Small, and in the direction that matters. Under-counting is what lets a
         prompt pass the budget check and then overflow `num_ctx` silently, which
-        is the single outcome §10.1 exists to prevent. Counting the actual shape
+        is the single outcome 10.1 exists to prevent. Counting the actual shape
         costs the same one prompt-eval and cannot drift.
         """
         response = self._client.chat(
@@ -217,7 +217,7 @@ class OllamaClient:
         by `thinking`, `content` empty — indistinguishable from a malformed
         response, and reported as `SCHEMA_INVALID`.
 
-        It also invalidates §10.1's budget, which reserves `num_predict` for
+        It also invalidates 10.1's budget, which reserves `num_predict` for
         output. Reasoning is not output; nothing downstream scores it.
 
         Passed only when enabled, so models without the capability are not sent
@@ -239,7 +239,7 @@ class OllamaClient:
         return self.chat_structured(system, user, schema).content
 
     def chat_structured(self, system: str, user: str, schema: dict[str, Any]) -> ChatResult:
-        """One grammar-constrained completion, with the §11 retry policy.
+        """One grammar-constrained completion, with the 11 retry policy.
 
         Timeouts and connection errors retry with backoff to `max_retries`; a
         malformed body retries exactly once, because a second failure against a
@@ -272,7 +272,7 @@ class OllamaClient:
             prompt_tokens = int(payload.get("prompt_eval_count") or 0)
             output_tokens = int(payload.get("eval_count") or 0)
 
-            # §10.1: reconcile against the pre-check. Raised rather than logged
+            # 10.1: reconcile against the pre-check. Raised rather than logged
             # because a candidate judged on a truncated prompt must not be
             # scored — the model returns a confident verdict either way.
             limit = settings.num_ctx - settings.num_predict

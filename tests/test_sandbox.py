@@ -1,4 +1,4 @@
-"""Parser sandbox (spec §8.4/§8.5, build gate §20 step 5).
+"""Parser sandbox (spec 8.4/8.5, build gate 20 step 5).
 
 The gate is "rlimit kill → PARSER_TIMEOUT not a hang". More broadly: every way a
 parser can die must return a typed result to a worker that is still running.
@@ -7,7 +7,7 @@ it, so the child here is hostile by construction (`sandbox_child.py`).
 
 Also asserted: both failure flags are transient. Caching a timeout as a permanent
 verdict would sideline a real candidate forever on the strength of one slow
-parse — the trap §12.5 exists to close.
+parse — the trap 12.5 exists to close.
 """
 
 import os
@@ -148,7 +148,7 @@ def test_json_that_is_not_an_object_is_rejected() -> None:
 
 @pytest.mark.parametrize("mode", ["spin", "crash", "garbage"])
 def test_every_failure_flag_is_transient(mode: str) -> None:
-    """None of these may be cached (§12.5).
+    """None of these may be cached (12.5).
 
     A network blip or one slow parse must never come back on resume looking like
     a permanent verdict on a candidate.

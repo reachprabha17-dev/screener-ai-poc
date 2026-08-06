@@ -1,4 +1,4 @@
-"""Connection management and migration state (spec §12.1, §12.3).
+"""Connection management and migration state (spec 12.1, 12.3).
 
 **Every connection is created in the thread that uses it.** `sqlite3` sets
 `check_same_thread=True`, so a connection made on one thread raises the moment
@@ -10,7 +10,7 @@ development and fails under the second concurrent request.
 makes that safe — one writer, many readers, readers never blocked — but only if
 transactions stay short. `busy_timeout` covers the brief windows where the
 writer lock is held; it is not a substitute for keeping the LLM call outside the
-transaction (§12.2).
+transaction (12.2).
 
 **Migrations are a startup gate, not a warning.** A schema/code mismatch on a
 database holding candidate decisions is a data-integrity incident: the process
@@ -32,7 +32,7 @@ _local = threading.local()
 
 
 class PendingMigrationsError(RuntimeError):
-    """The database schema is behind the code. Fatal at startup (§12.1)."""
+    """The database schema is behind the code. Fatal at startup (12.1)."""
 
 
 def _configure(connection: sqlite3.Connection) -> None:
@@ -135,7 +135,7 @@ def apply_migrations(path: Path | None = None) -> list[str]:
 
 
 def require_current_schema(path: Path | None = None) -> None:
-    """Startup gate for the API and the worker (§12.1).
+    """Startup gate for the API and the worker (12.1).
 
     Raises rather than warns, and does not auto-migrate. Applying a schema change
     as a side effect of starting a process means the migration runs at an

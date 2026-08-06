@@ -1,14 +1,14 @@
-"""HTTP control plane (spec §15, build gate §20 step 15).
+"""HTTP control plane (spec 15, build gate 20 step 15).
 
 The gate names three things: **routes ≤4 lines**, **sync handlers**, and
 **`TestClient` covers every mutating path**.
 
-The third is the real one, and the last section enumerates the routes from §15.1
+The third is the real one, and the last section enumerates the routes from 15.1
 so a new endpoint added without a test fails here rather than shipping untested.
 
 Two properties get more attention than the rest, because both fail silently:
-`model_verdict` must never leave the building (§15.4), and no route may screen a
-candidate (§15.3) — a batch inside a request would work perfectly on three files
+`model_verdict` must never leave the building (15.4), and no route may screen a
+candidate (15.3) — a batch inside a request would work perfectly on three files
 and fall over on a thousand.
 """
 
@@ -79,7 +79,7 @@ def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
 
     A single shared connection would fail the moment FastAPI dispatched a sync
     handler onto its threadpool — `sqlite3` sets `check_same_thread=True` and a
-    connection cannot cross threads (§12.3). Pinning one in the fixture would
+    connection cannot cross threads (12.3). Pinning one in the fixture would
     test a topology the deployment never runs.
     """
     yield unit_of_work
@@ -212,7 +212,7 @@ def test_malformed_input_is_rejected_by_the_schema(client: TestClient) -> None:
     )
 
 
-# --- gate: model_verdict never leaves the building (§15.4) -------------------
+# --- gate: model_verdict never leaves the building (15.4) -------------------
 
 
 def test_the_candidate_response_omits_model_verdict(
@@ -221,7 +221,7 @@ def test_the_candidate_response_omits_model_verdict(
     """Audit data, not reviewer data.
 
     A screen showing both "none" and "the model originally said strong" invites
-    the second-guessing §10.5(a) exists to remove, and it is a number nobody can
+    the second-guessing 10.5(a) exists to remove, and it is a number nobody can
     defend in an adverse-action conversation.
     """
     run_id, candidate_id = _seed_scored_candidate(client, service, uow_factory)
@@ -443,7 +443,7 @@ def test_every_mutating_route_is_declared_here(app: FastAPI) -> None:
 
 
 def test_every_mutating_route_requires_an_actor() -> None:
-    """§15.2: `actor` is threaded from day one, on every mutation.
+    """15.2: `actor` is threaded from day one, on every mutation.
 
     Retrofitting the plumbing is the expensive part, not the authentication.
     """
@@ -456,7 +456,7 @@ def test_every_mutating_route_requires_an_actor() -> None:
             assert "actor" in params, f"{methods} {route.path}"  # type: ignore[attr-defined]
 
 
-# --- gate: sync handlers, thin handlers (§15.3, §15.4) ----------------------
+# --- gate: sync handlers, thin handlers (15.3, 15.4) ----------------------
 
 
 def test_no_handler_is_async() -> None:
@@ -489,7 +489,7 @@ def test_handlers_stay_thin() -> None:
 
 
 def test_no_route_module_can_screen_a_candidate() -> None:
-    """§15.3: screening never runs in a request lifecycle.
+    """15.3: screening never runs in a request lifecycle.
 
     It would work perfectly on three files and fall over on a thousand, losing
     orphan reclaim and resumption on the way.

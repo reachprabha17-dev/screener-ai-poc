@@ -1,8 +1,8 @@
-"""Screening daemon (spec §16).
+"""Screening daemon (spec 16).
 
 A separate process from the API and the UI, because a 1,000-CV batch runs for
 over an hour. It cannot live in a request or a Streamlit session, it must survive
-a UI restart, and the API must stay responsive while it runs (§2).
+a UI restart, and the API must stay responsive while it runs (2).
 
 **One resume at a time. No thread pool.** `OLLAMA_NUM_PARALLEL=1` means parallel
 calls would queue at Ollama anyway, so concurrency here would buy nothing and
@@ -10,7 +10,7 @@ cost the transaction pattern its simplicity — claim (tx) → screen (no tx) �
 (tx), with the write lock never held across a ~5 s inference call.
 
 **The loop owns no SQL.** Every database touch goes through `service.py`, which
-owns the transaction boundary (§12.2). A daemon holding its own transactions
+owns the transaction boundary (12.2). A daemon holding its own transactions
 would be a second place where a saved result and its closed job could drift
 apart, and that divergence either loses a candidate or screens them twice.
 
@@ -18,7 +18,7 @@ apart, and that divergence either loses a candidate or screens them twice.
 `claimed` by *this* worker id is from a previous life — this process has claimed
 nothing yet, so there is no ambiguity and no clock arithmetic. That matters on an
 air-gapped box with no NTP, where a lease-expiry scheme would either reclaim live
-work or strand dead work on a clock step (§16.5).
+work or strand dead work on a clock step (16.5).
 
 The loop lives **inside the package** rather than in the root `worker.py`.
 The wheel packages `screener/` and `config/` only, so a root-level module is
@@ -27,7 +27,7 @@ for its break-glass `work` command. Duplicating the loop there would give the
 emergency path different semantics from the daemon, which is precisely when
 you least want a surprise.
 
-`worker.py` at the repository root remains the daemon entry point (§4, §16.6).
+`worker.py` at the repository root remains the daemon entry point (4, 16.6).
 """
 
 import signal
@@ -83,7 +83,7 @@ class Worker:
         """Refuse to run against a stale schema, then reclaim my own orphans.
 
         Migrations are a gate, not a warning: a schema/code mismatch on a
-        database of candidate decisions is an integrity incident (§12.1).
+        database of candidate decisions is an integrity incident (12.1).
         """
         require_current_schema()
         return self.service.reclaim_orphaned(self.worker_id)
@@ -106,7 +106,7 @@ class Worker:
         """
         if not self._has_disk_headroom():
             # Traces grow fast, and a full disk mid-batch is only recoverable if
-            # the worker stopped before filling it (§17).
+            # the worker stopped before filling it (17).
             self._sleep_interruptibly(self.poll_interval_s)
             return False
 
@@ -202,7 +202,7 @@ class Worker:
 
         Transient failures never surface here: the partial index excludes them,
         so a network blip is re-attempted rather than served back as a permanent
-        verdict (§12.5).
+        verdict (12.5).
         """
         hit = self.service.cached_candidate(key)
         if hit is None:

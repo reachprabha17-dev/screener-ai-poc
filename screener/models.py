@@ -1,4 +1,4 @@
-"""Domain contracts (spec §5). Every value crossing a layer boundary is one of these.
+"""Domain contracts (spec 5). Every value crossing a layer boundary is one of these.
 
 This module imports nothing else from the package — it is the contract the API,
 service, pipeline, core and storage layers all agree on, which is what lets any
@@ -9,7 +9,7 @@ Three shapes here carry decisions worth stating outright:
 ``JudgeOutput`` is the schema handed to the model and has no field for sentiment,
 personality, or demographics. Schema omission alone is not sufficient, though —
 ``summary`` and ``notable_strengths`` are unconstrained strings and are where
-that content actually lands, so they are screened separately (§10.7).
+that content actually lands, so they are screened separately (10.7).
 
 ``RedFlag`` is a closed enum. Free-text red flags are a fairness hazard: models
 reliably emit "employment gap" and "frequent job changes", which are proxies for
@@ -45,7 +45,7 @@ class Flag(StrEnum):
     The split matters: deterministic flags describe a stable property of the
     input and may be cached, while transient flags describe an infrastructure
     hiccup. Caching a transient flag would serve a network blip back on resume
-    as a permanent verdict (§12.5).
+    as a permanent verdict (12.5).
     """
 
     # deterministic — cacheable
@@ -88,7 +88,7 @@ class RedFlag(StrEnum):
 class Actor(BaseModel):
     """Threaded through every mutating call.
 
-    Stubbed today (§15.2), real later. The plumbing is the expensive thing to
+    Stubbed today (15.2), real later. The plumbing is the expensive thing to
     retrofit, not the authentication.
     """
 
@@ -148,7 +148,7 @@ class Rubric(BaseModel):
 
     @property
     def content_hash(self) -> str:
-        """Identity of what this rubric *asks*, for the cache key (§6).
+        """Identity of what this rubric *asks*, for the cache key (6).
 
         Covers id, text, weight and must_have — everything that changes either
         the prompt or the arithmetic. Excludes the rubric's own id, version, and
@@ -175,7 +175,7 @@ class ParsedResume(BaseModel):
     text: str
     page_count: int
     ocr_used: bool
-    chars_stripped: int = 0  # §8.6
+    chars_stripped: int = 0  # 8.6
     warnings: list[str] = Field(default_factory=list)
     parser_version: str
 
@@ -216,7 +216,7 @@ class CriterionVerdict(BaseModel):
 
     id: str
     verdict: Verdict
-    # The cap matters: §10.5's coverage ratio is meaningless against unbounded
+    # The cap matters: 10.5's coverage ratio is meaningless against unbounded
     # evidence, because a long enough quote matches something in any resume.
     evidence: str = Field(max_length=300)
 
@@ -226,7 +226,7 @@ class ExtractedCriterion(BaseModel):
 
     Ids are assigned by Python (``C1..Cn``) after extraction. Letting the model
     name them means the ids in the rubric and the ids it is asked to return at
-    judging time come from the same unreliable source, and §10.3's set-equality
+    judging time come from the same unreliable source, and 10.3's set-equality
     check would be validating the model against itself.
     """
 
@@ -238,7 +238,7 @@ class ExtractedCriterion(BaseModel):
 
 
 class ExtractedRubric(BaseModel):
-    """Draft rubric from a job description. Always reviewed before use (§9.1)."""
+    """Draft rubric from a job description. Always reviewed before use (9.1)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -265,7 +265,7 @@ class ScoredCriterion(BaseModel):
     model_verdict: Verdict  # what the model said, retained for audit
     evidence: str
     verified: bool
-    match_ratio: float  # persisted so thresholds are tuned against data (§18)
+    match_ratio: float  # persisted so thresholds are tuned against data (18)
     longest_span: int
     weight: int
     must_have: bool
@@ -322,11 +322,11 @@ class Run(BaseModel):
 
 
 class RunStatus(BaseModel):
-    """Live progress for `/runs/{id}/status` (§15.1).
+    """Live progress for `/runs/{id}/status` (15.1).
 
     `escalation_rate` is surfaced here rather than computed at the end, because
     a reviewer discovering a 200-item review queue only after the run finishes
-    is the §18.2 failure — by then the batch has already cost 78 minutes.
+    is the 18.2 failure — by then the batch has already cost 78 minutes.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -348,7 +348,7 @@ class RunStatus(BaseModel):
 
 
 class HealthReport(BaseModel):
-    """What `/health` and `/ready` report (§15.1, §17).
+    """What `/health` and `/ready` report (15.1, 17).
 
     Deliberately granular. "Unhealthy" alone tells an operator nothing at 2am,
     and the failure modes here have completely different responses: a stale model
@@ -375,5 +375,5 @@ class RankedResult(BaseModel):
     missing_must_have: list[Candidate] = Field(default_factory=list)
     needs_review: list[Candidate] = Field(default_factory=list)
     # Surfaced, not buried: human oversight collapses into rubber-stamping once
-    # the review queue exceeds what a person will actually read (§18.2).
+    # the review queue exceeds what a person will actually read (18.2).
     escalation_rate: float = 0.0

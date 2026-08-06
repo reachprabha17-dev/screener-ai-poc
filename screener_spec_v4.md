@@ -5,11 +5,11 @@ that followed.
 
 **Status markers:**
 - **[verified]** — tested on this machine during planning.
-- **[assert]** — claimed, not yet demonstrated. Gates a specific build step (§20). Nothing marked
+- **[assert]** — claimed, not yet demonstrated. Gates a specific build step (20). Nothing marked
   `[assert]` may be treated as load-bearing until resolved.
 
 **Scope note.** This is a PoC built so that production is an *additive* step, never a rewrite.
-Formal compliance work is deferred (§21) — but the schema columns, the actor plumbing, and the
+Formal compliance work is deferred (21) — but the schema columns, the actor plumbing, and the
 process boundaries that would be painful to retrofit are all present from day one.
 
 ---
@@ -20,7 +20,7 @@ process boundaries that would be painful to retrofit are all present from day on
 |---|---|---|
 | 1 | Fully on-prem. No external API calls, no candidate data leaves the box | Locked |
 | 2 | Inference via **Ollama** at `localhost:11434` | **[verified]** v0.32.4 running |
-| 3 | Default model **`granite4.1:8b`**; `gemma4:12b` selectable for a quality pass | **[verified]** both pulled; **measured head-to-head — see §11.1** |
+| 3 | Default model **`granite4.1:8b`**; `gemma4:12b` selectable for a quality pass | **[verified]** both pulled; **measured head-to-head — see 11.1** |
 | 4 | Structured output via Ollama `format=<json schema>` (llama.cpp grammar constraint) | **[verified]** 4.7 s/resume, schema-valid |
 | 5 | Schemas generated from Pydantic v2 via `model_json_schema()` — `$defs`/`$ref` supported | **[verified]** round-tripped |
 | 6 | `temperature=0`, `seed`, `top_k=1`, explicit `num_ctx`/`num_predict`, `OLLAMA_NUM_PARALLEL=1` | Locked |
@@ -32,7 +32,7 @@ process boundaries that would be painful to retrofit are all present from day on
 | 12 | Auth is **stubbed but seamed**: `actor` threaded through every mutating call from day one | Locked |
 | 13 | Document extraction via **xberg** (PDF + DOCX + auto-OCR, layout-aware) | Proven in `onprem-rag` |
 | 14 | **Parsing runs sandboxed in a subprocess**: rlimits, no network, scoped tmpdir | Locked |
-| 15 | Resumes are untrusted at two layers: as *files* (§8) and as *text* (§10.5) | **[verified]** injection succeeded without defenses |
+| 15 | Resumes are untrusted at two layers: as *files* (8) and as *text* (10.5) | **[verified]** injection succeeded without defenses |
 | 16 | **All text is Unicode-sanitized** (NFKC, Cf/Co, bidi controls) before any processing | Locked |
 | 17 | Persistence: **SQLite**, WAL, versioned migrations, single transaction boundary in the service layer | Locked |
 | 18 | Model pinned by **digest**; dependencies by **hash lockfile**; `app_version` from git | Locked |
@@ -49,18 +49,18 @@ process boundaries that would be painful to retrofit are all present from day on
 
 **Prompt injection succeeded** against a bare prompt-hardened call. A resume containing
 `IGNORE ALL PREVIOUS INSTRUCTIONS...` flipped all three criteria to `strong` on a 1-year HTML/CSS
-candidate. The evidence field still read `"not found (...)"` — the hook §10.5(a) uses.
+candidate. The evidence field still read `"not found (...)"` — the hook 10.5(a) uses.
 
 > **Scope.** That gate defeats *the observed attack*, one sample where the model left evidence
 > honest. An injection that also says "set evidence to a phrase from the skills section" defeats it.
-> It is one cheap layer. Resistance comes from §10.5(a) + the `SUSPECTED_INJECTION` heuristic +
+> It is one cheap layer. Resistance comes from 10.5(a) + the `SUSPECTED_INJECTION` heuristic +
 > mandatory human review + the absence of any auto-reject path.
 
 **Evidence verification is anti-hallucination, not anti-injection.** Evidence is quoted from
 attacker-controlled text. It confirms the model quoted the resume faithfully; it cannot tell a true
 claim from a lying resume. Never present it as fraud detection.
 
-**Verified-but-irrelevant evidence.** *(measured; §10.5(c) added in response)* The model returned
+**Verified-but-irrelevant evidence.** *(measured; 10.5(c) added in response)* The model returned
 `strong` for a criterion reading **"Rust in production"** on a resume containing no Rust, evidencing
 it with *"Led the migration of a payments monolith to microservices in Go"*. The quote is genuine and
 verbatim, so it aligned at `match_ratio = 1.00`; the consistency gate saw substantive text; the
@@ -71,14 +71,14 @@ document", never "is this text about this criterion".
 **Verdicts are not phrase-invariant.** *(measured)* The same person described five equivalent ways
 produced **three different verdict tuples**, with both must-have criteria flipping between `strong`
 and `partial`. Writing `2019–2026` rather than `7 years` was enough to downgrade a must-have — and
-§10.4 escalates a `partial` must-have to a human, so *CV formatting* decided who entered the review
+10.4 escalates a `partial` must-have to a human, so *CV formatting* decided who entered the review
 queue. Date-range convention tracks region, template and CV-writing habit rather than capability,
 making this an adverse-impact risk and an escalation-budget driver at once. Addressed by the "Judge
-the facts, not the writing" anchors in §9.2; **residual**: verdicts on criteria a resume does *not*
-address remain unstable, and §10.5(c) is what stops them scoring.
+the facts, not the writing" anchors in 9.2; **residual**: verdicts on criteria a resume does *not*
+address remain unstable, and 10.5(c) is what stops them scoring.
 
 **Ollama silently truncates at `num_ctx`.** Observed default **4096**. Overflow is not an error —
-the model judges a partial resume. `num_ctx` explicit, budget checked before every call (§10.1).
+the model judges a partial resume. `num_ctx` explicit, budget checked before every call (10.1).
 
 > **Reproduced at build step 17, with numbers.** The same 23 kB CV, decisive experience at the end:
 >
@@ -91,7 +91,7 @@ the model judges a partial resume. `num_ctx` explicit, budget checked before eve
 > model then returned *more* confident verdicts on the fragment it saw, and silently dropped a
 > criterion — a candidate judged on a quarter of their CV, with the output looking entirely normal.
 > This is why the budget is a **correctness** control and not a cost control; there are no token
-> charges on-prem and it would still be mandatory (§10.1).
+> charges on-prem and it would still be mandatory (10.1).
 
 **Evidence quotes are not verbatim.** `7 years backend engineer` came back as `7 years backend
 experience`; real quotes came wrapped in commentary. Strict substring matching would reject valid
@@ -103,16 +103,16 @@ every letter. `autojunk=False` mandatory; matching on word tokens.
 
 **A single longest match under-counts fragmented quotes.** A 35-token quote with one word inserted
 mid-span scores on its longer half only (ratio ≈ 0.34) → false escalation on honest evidence.
-§10.5 sums *filtered* blocks. The filter is not optional.
+10.5 sums *filtered* blocks. The filter is not optional.
 
 **Invisible and homoglyph text is an active vector.** Zero-width characters, bidi overrides
 (U+202E), and Cyrillic homoglyphs make a PDF display one thing to a reviewer and deliver another to
-the extractor. It also silently breaks evidence matching. §8.6 handles this before anything else
+the extractor. It also silently breaks evidence matching. 8.6 handles this before anything else
 runs.
 
 **The parser is an attack surface before the model is.** PDFs and DOCX carry decompression bombs,
 XXE payloads, and malformed structures targeting the parsing library. Compromise here precedes
-every prompt-level control. §8 exists for this.
+every prompt-level control. 8 exists for this.
 
 ---
 
@@ -181,10 +181,10 @@ dependencies = [
   "pydantic", "pydantic-settings",
   "fastapi", "uvicorn[standard]", "python-multipart",
   "typer",
-  "python-magic",        # MIME by magic bytes (§8.2)
-  "defusedxml",          # XXE-safe XML (§8.3)
-  "structlog",           # §17
-  "yoyo-migrations",     # §12.1
+  "python-magic",        # MIME by magic bytes (8.2)
+  "defusedxml",          # XXE-safe XML (8.3)
+  "structlog",           # 17
+  "yoyo-migrations",     # 12.1
 ]
 
 [project.optional-dependencies]
@@ -245,8 +245,8 @@ ruff format --check . && ruff check . && mypy && pytest
 ```
 
 Not style. An untyped boundary between `service.py` and `storage/` is exactly where a `Candidate`
-degrades into a loose dict and the §5 contract silently stops holding. `ruff`'s bandit rules catch
-the `subprocess`/`tempfile` mistakes §8 depends on not making.
+degrades into a loose dict and the 5 contract silently stops holding. `ruff`'s bandit rules catch
+the `subprocess`/`tempfile` mistakes 8 depends on not making.
 
 ### 3.3 System dependencies
 
@@ -280,46 +280,46 @@ Screener/
 ├── config/settings.py
 ├── screener/
 │   ├── _version.txt                 # git describe, build-generated
-│   ├── models.py                    # domain contracts (§5)
-│   ├── schemas.py                   # API request/response models (§15.4)
-│   ├── ports.py                     # Protocols (§6)
-│   ├── service.py                   # transactional command/query surface (§14)
-│   ├── pipeline.py                  # screen_one() + screen_batch() (§16.4)
+│   ├── models.py                    # domain contracts (5)
+│   ├── schemas.py                   # API request/response models (15.4)
+│   ├── ports.py                     # Protocols (6)
+│   ├── service.py                   # transactional command/query surface (14)
+│   ├── pipeline.py                  # screen_one() + screen_batch() (16.4)
 │   ├── cli.py                       # typer; break-glass entry point
-│   ├── logging.py                   # structlog (§17)
+│   ├── logging.py                   # structlog (17)
 │   ├── api/
 │   │   ├── app.py                   # FastAPI app factory
 │   │   ├── deps.py                  # get_actor, get_service
 │   │   └── routes/{positions,rubrics,runs,candidates,admin,health}.py
 │   ├── clients/ollama_client.py
 │   ├── intake/
-│   │   ├── validate_file.py         # size, MIME, zip structure (§8.2)
-│   │   ├── sanitize_text.py         # PURE — Unicode (§8.6)
-│   │   ├── sandbox.py               # subprocess + rlimits (§8.4)
+│   │   ├── validate_file.py         # size, MIME, zip structure (8.2)
+│   │   ├── sanitize_text.py         # PURE — Unicode (8.6)
+│   │   ├── sandbox.py               # subprocess + rlimits (8.4)
 │   │   └── parse_worker.py          # runs INSIDE the sandbox
 │   ├── core/                        # PURE FUNCTIONS ONLY — no I/O, no classes
-│   │   ├── budget.py                # §10.1
+│   │   ├── budget.py                # 10.1
 │   │   ├── detect_injection.py
 │   │   ├── redact_pii.py
-│   │   ├── validate_verdicts.py     # §10.3
-│   │   ├── screen_freetext.py       # §10.7
-│   │   ├── verify_evidence.py       # §10.5
-│   │   ├── compute_score.py         # §10.4
-│   │   └── rank.py                  # §10.6
+│   │   ├── validate_verdicts.py     # 10.3
+│   │   ├── screen_freetext.py       # 10.7
+│   │   ├── verify_evidence.py       # 10.5
+│   │   ├── compute_score.py         # 10.4
+│   │   └── rank.py                  # 10.6
 │   ├── llm/{extract_rubric,judge_resume}.py
 │   ├── prompts/{extract_rubric,judge_resume}.md
 │   └── storage/
-│       ├── uow.py                   # unit of work / transaction (§12.2)
+│       ├── uow.py                   # unit of work / transaction (12.2)
 │       ├── connection.py            # thread-local connections
 │       ├── {results,rubrics,positions,jobs,audit,traces}_store.py
 │       └── migrations/
-├── worker.py                        # daemon entry point (§16) — a shim; see below
+├── worker.py                        # daemon entry point (16) — a shim; see below
 ├── ui/screener_app.py               # Streamlit — HTTP client only
 ├── eval/{run_eval,accuracy,escalation}.py + labelled_set.jsonl
 ├── tests/
 ├── deploy/screener-{api,worker}.service
 └── data/                            # gitignored
-    ├── resumes/<position_ref>/      # the scanned folders (§16.2)
+    ├── resumes/<position_ref>/      # the scanned folders (16.2)
     ├── quarantine/ traces/ logs/
     └── screener.db
 ```
@@ -346,7 +346,7 @@ models.py, ports.py → nothing internal
 > `python worker.py` are unchanged.
 
 > **Corrected at build step 13.** The rule previously read
-> `service.py → storage/*, models.py (NOT pipeline.py, NOT core/)`, which §14's own surface cannot
+> `service.py → storage/*, models.py (NOT pipeline.py, NOT core/)`, which 14's own surface cannot
 > satisfy: `list_candidates` returns a `RankedResult` (that is `core/rank.py`) and `extract_rubric`
 > is an LLM call (that is `clients/` and `llm/`). The *intent* — **the service layer must never
 > screen a candidate** — is carried entirely by `NOT pipeline.py`, which is unchanged and is what
@@ -373,19 +373,19 @@ Band = Literal["A", "B", "C", "D"]
 
 
 class Flag(StrEnum):
-    # deterministic — cacheable (§12.5)
+    # deterministic — cacheable (12.5)
     INPUT_REJECTED = "INPUT_REJECTED"
     EXTRACTION_FAILED = "EXTRACTION_FAILED"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     SUSPECTED_INJECTION = "SUSPECTED_INJECTION"
-    SANITIZED_TEXT = "SANITIZED_TEXT"  # invisible/bidi chars stripped (§8.6)
+    SANITIZED_TEXT = "SANITIZED_TEXT"  # invisible/bidi chars stripped (8.6)
     EVIDENCE_UNVERIFIED = "EVIDENCE_UNVERIFIED"
     EVIDENCE_CONTRADICTS = "EVIDENCE_CONTRADICTS"
     VERDICT_SET_MISMATCH = "VERDICT_SET_MISMATCH"
     FREETEXT_SCREENED = "FREETEXT_SCREENED"
     MISSING_MUST_HAVE = "MISSING_MUST_HAVE"
     POSSIBLE_DUPLICATE = "POSSIBLE_DUPLICATE"
-    # transient — NEVER cached (§12.5)
+    # transient — NEVER cached (12.5)
     LLM_ERROR = "LLM_ERROR"
     SCHEMA_INVALID = "SCHEMA_INVALID"
     PARSER_TIMEOUT = "PARSER_TIMEOUT"
@@ -409,7 +409,7 @@ class RedFlag(StrEnum):
 
 
 class Actor(BaseModel):
-    """Threaded through every mutating call. Stubbed today (§15.2), real later —
+    """Threaded through every mutating call. Stubbed today (15.2), real later —
     the plumbing is what's expensive to retrofit, not the auth."""
 
     model_config = ConfigDict(frozen=True)
@@ -455,7 +455,7 @@ class ParsedResume(BaseModel):
     text: str
     page_count: int
     ocr_used: bool
-    chars_stripped: int = 0  # §8.6
+    chars_stripped: int = 0  # 8.6
     warnings: list[str] = Field(default_factory=list)
     parser_version: str
 
@@ -466,12 +466,12 @@ class CriterionVerdict(BaseModel):
     id: str
     verdict: Verdict
     evidence: str = Field(max_length=300)
-    # Cap matters: §10.5's coverage ratio is meaningless against unbounded evidence.
+    # Cap matters: 10.5's coverage ratio is meaningless against unbounded evidence.
 
 
 class JudgeOutput(BaseModel):
     """Schema sent to Ollama. No field for sentiment, personality, or demographics.
-    Schema omission alone is NOT sufficient — see §10.7."""
+    Schema omission alone is NOT sufficient — see 10.7."""
 
     model_config = ConfigDict(extra="forbid")
     criteria: list[CriterionVerdict]
@@ -488,7 +488,7 @@ class ScoredCriterion(BaseModel):
     model_verdict: Verdict  # what the model said, retained for audit
     evidence: str
     verified: bool
-    match_ratio: float  # persisted for threshold tuning (§18)
+    match_ratio: float  # persisted for threshold tuning (18)
     longest_span: int
     weight: int
     must_have: bool
@@ -520,7 +520,7 @@ class RankedResult(BaseModel):
     meets_must_haves: list[Candidate]
     missing_must_have: list[Candidate]
     needs_review: list[Candidate]
-    escalation_rate: float  # §18.2 — surfaced, not buried
+    escalation_rate: float  # 18.2 — surfaced, not buried
 ```
 
 Every cross-layer value is one of these models — never a loose dict, enforced by `mypy --strict`.
@@ -540,7 +540,7 @@ class CacheKey(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     file_sha256: str
-    position_id: str  # scoped per position — see §12.5
+    position_id: str  # scoped per position — see 12.5
     rubric_hash: str
     model_digest: str
     prompt_hash: str
@@ -558,7 +558,7 @@ class LLMClient(Protocol):
 
 
 class ResumeParser(Protocol):
-    def parse(self, path: Path) -> ParsedResume: ...  # sandboxed, §8
+    def parse(self, path: Path) -> ParsedResume: ...  # sandboxed, 8
 
 
 class UnitOfWork(Protocol):
@@ -585,7 +585,7 @@ class JobQueue(Protocol):
 
 Swapping Ollama → vLLM or xberg → another parser means one new file satisfying a Protocol plus a
 config value. **That is the portability mechanism** for inference and parsing, and it is why no ORM
-is added for the same purpose (§22.2).
+is added for the same purpose (22.2).
 
 > **Corrected at build step 18.** This previously included "or SQLite → Postgres". **It does not
 > hold for storage, and the difference is worth being precise about**, because a migration planned
@@ -603,7 +603,7 @@ is added for the same purpose (§22.2).
 > modules with matching signatures — and `mypy --strict` would not catch a signature that drifted
 > from its Protocol, because no annotation connects them.
 >
-> **Left unwired deliberately.** Postgres is deferred (§21), there is one implementation of each
+> **Left unwired deliberately.** Postgres is deferred (21), there is one implementation of each
 > store, and threading a `Stores` container through the service would add indirection today to buy
 > flexibility nobody has asked for — the same YAGNI argument that rejected the ORM. What is *not*
 > acceptable is a Protocol documented as a guarantee it does not provide, so **step 20 asserts
@@ -629,13 +629,13 @@ class Settings(BaseSettings):
     request_timeout_s: int = 180
     max_retries: int = 2
 
-    # Budget (§10.1)
+    # Budget (10.1)
     max_resume_tokens: int = 4200
     max_criteria: int = 12
     exact_token_count: bool = True
     token_estimate_safety_margin: float = 1.35
 
-    # File intake (§8)
+    # File intake (8)
     max_file_bytes: int = 5 * 1024 * 1024
     max_pages: int = 50
     max_decompressed_bytes: int = 50 * 1024 * 1024
@@ -647,11 +647,11 @@ class Settings(BaseSettings):
     # Safety / fairness
     redact_pii: bool = True
     injection_detection: bool = True
-    evidence_match_ratio: float = 0.60  # §10.5 — AND
-    evidence_match_min_chars: int = 25  # §10.5 — AND
-    evidence_min_block_tokens: int = 3  # §10.5 — AND. Do not set to 1.
+    evidence_match_ratio: float = 0.60  # 10.5 — AND
+    evidence_match_min_chars: int = 25  # 10.5 — AND
+    evidence_min_block_tokens: int = 3  # 10.5 — AND. Do not set to 1.
     freetext_screen: bool = True
-    escalation_budget: float = 0.03  # §18.2 — warn above this
+    escalation_budget: float = 0.03  # 18.2 — warn above this
 
     # Ranking
     band_thresholds: tuple[float, float, float] = (7.5, 5.5, 3.5)
@@ -662,12 +662,12 @@ class Settings(BaseSettings):
     auth_mode: Literal["stub", "ldap", "local"] = "stub"
     dev_actor_id: str = "poc-operator"
 
-    # Worker (§16)
+    # Worker (16)
     worker_id: str = "worker-1"
     worker_poll_interval_s: int = 2
     heartbeat_interval_s: int = 15
     job_max_attempts: int = 3
-    fast_lane_max_files: int = 150  # §16.3
+    fast_lane_max_files: int = 150  # 16.3
 
     # Storage / observability
     db_path: str = "data/screener.db"
@@ -681,7 +681,7 @@ class Settings(BaseSettings):
 ```
 
 Set `OLLAMA_NUM_PARALLEL=1` in the service environment, not here — slot reuse is the largest
-remaining source of run-to-run variation (§10.8).
+remaining source of run-to-run variation (10.8).
 
 ---
 
@@ -698,7 +698,7 @@ folder scan → size → MIME sniff → structural validation →
 SANDBOXED PARSE → Unicode sanitize → detect_injection → redact → budget → judge
 ```
 
-Nothing outside the sandbox touches raw file bytes beyond the header read in §8.2.
+Nothing outside the sandbox touches raw file bytes beyond the header read in 8.2.
 
 ### 8.2 Pre-parse validation (`intake/validate_file.py`)
 
@@ -794,7 +794,7 @@ expect, and is reported as a security finding even when the likely cause is a co
 ### 8.6 Unicode sanitization (`intake/sanitize_text.py`, pure)
 
 Applied to extracted text **before** injection detection, redaction, budgeting, or evidence
-matching — and the same sanitized string is what §10.5 later matches against.
+matching — and the same sanitized string is what 10.5 later matches against.
 
 ```python
 BIDI = {
@@ -831,7 +831,7 @@ human look — legitimate documents rarely carry many invisible characters.
 **Why this is load-bearing.** Zero-width characters and bidi overrides let a PDF display one thing
 to a reviewer and deliver another to the extractor — a reviewer performing human oversight is
 looking at text that is not what the model judged. NFKC also collapses homoglyphs that would
-otherwise make honest evidence unmatchable in §10.5. This was in v1, dropped in v2/v3, and is
+otherwise make honest evidence unmatchable in 10.5. This was in v1, dropped in v2/v3, and is
 restored here.
 
 ---
@@ -852,7 +852,7 @@ JD. Criterion ids assigned by Python (`C1..Cn`), not by the model.
 Output schema: `JudgeOutput`. Non-negotiable clauses:
 
 - Return **exactly one verdict object per rubric criterion**, using the ids given, no more, no
-  fewer. (Enforced by §10.3 — the grammar cannot express this.)
+  fewer. (Enforced by 10.3 — the grammar cannot express this.)
 - Judge **only** from the resume text. Never infer a skill that is not written.
 - Quote the **exact supporting phrase**, **under 300 characters, contiguous, no commentary
   around it**. If unsupported: verdict `none`, evidence exactly `not found`.
@@ -889,7 +889,7 @@ Checked **before** every judge call, against the exact string that will be sent.
 | **Remaining for resume** | **~4200** |
 
 **Over budget → `BUDGET_EXCEEDED`, `scoreable=False`, `review_required=True`. Never truncated and
-judged** — that reintroduces at our own boundary the silent truncation §1 documents at Ollama's.
+judged** — that reintroduces at our own boundary the silent truncation 1 documents at Ollama's.
 
 **Exact counting is the default:**
 
@@ -966,9 +966,9 @@ score = round(raw × 10, 1)
 > **Measured at build step 12.** Setting `review_required` on an unmet must-have drove the
 > end-to-end escalation rate to **100%** against the 3% budget. On any real corpus most applicants
 > fail at least one hard requirement, so escalating them all puts the whole run in the review queue —
-> §18.2's failure exactly. The partition *is* the outcome: escalation is for what the system could
+> 18.2's failure exactly. The partition *is* the outcome: escalation is for what the system could
 > not resolve, not for candidates it resolved against. Removing it took the same corpus to 71%
-> (see §18.2 for what remains).
+> (see 18.2 for what remains).
 
 `compute_score` returns a number and a boolean. **It does not cap, penalise, or rank.**
 
@@ -991,7 +991,7 @@ and evidence is empty, `"not found"`, or non-substantive after normalization, th
 contradicted itself. Force `verdict = "none"`, add `EVIDENCE_CONTRADICTS`, `review_required=True`.
 
 > Safe to automate because it is unambiguous: the model asserted support and simultaneously stated
-> there is none. See the scope warning in §1 before treating it as the injection defense.
+> there is none. See the scope warning in 1 before treating it as the injection defense.
 
 **(b) Quote verification — filtered block alignment, escalates rather than penalises.**
 
@@ -1018,7 +1018,7 @@ longest_span = max((b.size for b in blocks), default=0)
 >
 > Note `get_matching_blocks()` returns blocks monotonically increasing in **both** sequences, so
 > this remains an *alignment*, not a bag of words. That ordering property distinguishes a quotation
-> from a word cloud, and is why token-set overlap and Jaccard similarity are rejected (§22.2).
+> from a word cloud, and is why token-set overlap and Jaccard similarity are rejected (22.2).
 
 4. **Verified when `match_ratio ≥ 0.60` AND `longest_span ≥ MIN_BLOCK` AND `matched_chars ≥ 25`.**
 5. Otherwise `verified=False`, `EVIDENCE_UNVERIFIED`, **`scoreable=False`, `review_required=True`.
@@ -1038,7 +1038,7 @@ stemming so `engineering` matches `engineer`. On failure: `verified=False`, `EVI
 reason as (b).
 
 This exists because (a) and (b) together let a **real, verbatim, correctly-copied quote about
-something else entirely** through with `match_ratio = 1.00` (see §1). It is deliberately crude — one
+something else entirely** through with `match_ratio = 1.00` (see 1). It is deliberately crude — one
 shared content word — because it is looking for evidence that is *about a different subject*, not
 grading how well a quote supports a claim, which is the judgement the model is there to make.
 
@@ -1061,13 +1061,13 @@ grading how well a quote supports a claim, which is the judgement the model is t
 > microservices"*. Anything stronger here needs semantic similarity, which is a second model and a
 > second thing to evaluate.
 
-`match_ratio` and `longest_span` are persisted so thresholds are tuned against data (§18).
+`match_ratio` and `longest_span` are persisted so thresholds are tuned against data (18).
 
 > **Prompt edits interact — re-measure both gates after any change.** Observed three times now.
 > Asking for longer quotes (to clear the char floor) induced *stitching* and broke the ratio gate;
 > adding "brevity is not weakness" (to stop penalising terse CVs) was applied by the model to its own
 > quotes and reverted them to 4-token fragments below the char floor. Each fix to one gate broke the
-> other. Any change to §9.2 must be measured against **quote length, alignment ratio, and paraphrase
+> other. Any change to 9.2 must be measured against **quote length, alignment ratio, and paraphrase
 > invariance together**.
 
 ### 10.6 Ranking and banding (`core/rank.py`, pure)
@@ -1095,7 +1095,7 @@ A ≥ 7.5   B ≥ 5.5   C ≥ 3.5   D < 3.5
 **`needs_review` is surfaced independently of the ranking**, with its own count and its own screen.
 At 1,000 applicants a reviewer only ever looks at the top of Band A — if unscoreable candidates
 live at the bottom of one long list, they become invisible in practice, which is precisely the
-adverse outcome §10.5(b) was redesigned to prevent.
+adverse outcome 10.5(b) was redesigned to prevent.
 
 ### 10.7 Free-text control (`core/screen_freetext.py`, pure)
 
@@ -1168,11 +1168,11 @@ if settings.model_digest_pin and info.digest != settings.model_digest_pin:
 ```
 
 **Throughput.** 4.7 s/resume single-stream ⇒ ~766/hour. A 1,000-CV run ≈ 78 min. This does not
-improve with concurrency under `OLLAMA_NUM_PARALLEL=1`. Surface the ETA in the UI (§16.3).
+improve with concurrency under `OLLAMA_NUM_PARALLEL=1`. Surface the ETA in the UI (16.3).
 
 > **Re-measured at build step 9** against an 8-criterion rubric and a full one-page resume:
 > **5.39 s/judge** (min 5.24, max 5.41), ⇒ ~668/hour, **1,000 CVs ≈ 25 min longer than the 78 min
-> above**. The budget pre-check (§10.1) adds a second prompt-eval per resume on top of that, and
+> above**. The budget pre-check (10.1) adds a second prompt-eval per resume on top of that, and
 > parsing adds ~0.8 s/page when OCR runs. Quote the ETA from measured end-to-end time once the
 > pipeline exists (step 12), not from the inference figure alone.
 
@@ -1180,7 +1180,7 @@ improve with concurrency under `OLLAMA_NUM_PARALLEL=1`. Surface the ETA in the U
 
 ### 11.1 Does a bigger model help? — measured
 
-Same prompt, same rubric, same resumes. `granite4.1:8b` against `gemma4:12b`, the model §1 names
+Same prompt, same rubric, same resumes. `granite4.1:8b` against `gemma4:12b`, the model 1 names
 for a quality pass.
 
 | | `granite4.1:8b` | `gemma4:12b` |
@@ -1190,7 +1190,7 @@ for a quality pass.
 | Repeatability (5 runs) | 5/5 | 5/5 |
 | **Paraphrase invariance** (5 equivalent CVs) | **1 distinct tuple** | 2 distinct tuples |
 | Hallucination on absent criteria | 0/10 | 0/10 |
-| Evidence failing the §10.5(c) relevance check | 1 | **0** |
+| Evidence failing the 10.5(c) relevance check | 1 | **0** |
 
 **The bigger model did not fix what was broken, and was worse at the thing that matters most.** It
 is marginally better at targeting evidence and slightly more accurate on one criterion the smaller
@@ -1198,19 +1198,19 @@ model missed; it is **less phrase-invariant**, which is the fairness property, a
 1,000-CV run from ~82 minutes into ~145.
 
 **The failures found on this system were ours, not the model's.** The verified-but-irrelevant
-hallucination (§1) and the phrase-sensitivity both disappeared after the §9.2 prompt work — and they
+hallucination (1) and the phrase-sensitivity both disappeared after the 9.2 prompt work — and they
 disappeared for *both* models. Nothing was fixed by adding parameters.
 
-> **A reasoning model needs different plumbing, and breaks §10.1.** `gemma4:12b` emits chain of
+> **A reasoning model needs different plumbing, and breaks 10.1.** `gemma4:12b` emits chain of
 > thought into the *generation budget* before producing any JSON: at `num_predict=1536` it consumed
 > all of it on `thinking` and returned empty `content` — indistinguishable from malformed output and
-> reported as `SCHEMA_INVALID`; at 4096 it still had not finished after 82 s. §10.1 reserves
+> reported as `SCHEMA_INVALID`; at 4096 it still had not finished after 82 s. 10.1 reserves
 > `num_predict` for **output**, and reasoning is not output. `disable_thinking` (default on) sends
 > `think=False`, which is what makes such a model usable here at all.
 
 **Caveat on all of the above**: one resume, one rubric, five paraphrases. It is enough to say a
 bigger model is not the fix for the failures found so far. It is not an accuracy evaluation — that
-needs the labelled set and inter-rater agreement of §18.1.
+needs the labelled set and inter-rater agreement of 18.1.
 
 ---
 
@@ -1312,7 +1312,7 @@ CREATE TABLE candidates (
   scoreable INTEGER NOT NULL DEFAULT 1, review_required INTEGER NOT NULL DEFAULT 0,
   cacheable INTEGER NOT NULL DEFAULT 1,
   summary TEXT, notable_strengths_json TEXT, red_flags_json TEXT, flags_json TEXT,
-  -- deferred-compliance columns: nullable now, un-backfillable later (§21)
+  -- deferred-compliance columns: nullable now, un-backfillable later (21)
   source TEXT, consent_ref TEXT, retention_expires_at TEXT, objection_status TEXT,
   -- cache columns denormalized from runs
   position_id TEXT NOT NULL, rubric_hash TEXT NOT NULL, model_digest TEXT NOT NULL,
@@ -1332,7 +1332,7 @@ CREATE TABLE overrides (
   new_decision TEXT NOT NULL CHECK (new_decision IN ('advance','reject','hold')),
   reason TEXT NOT NULL, created_at TEXT NOT NULL);
 
-CREATE TABLE traces (                   -- contains resume text; see §17
+CREATE TABLE traces (                   -- contains resume text; see 17
   id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, file_sha256 TEXT NOT NULL,
   trace_path TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX idx_traces_sha ON traces(file_sha256);
@@ -1381,7 +1381,7 @@ coverage it lacks.
 `candidates.summary`/`notable_strengths_json`/`filename`, **trace files** (`traces.trace_path`, rows
 removed), and the source file. Score, band and flags are retained as non-identifying statistics; a
 non-identifying audit stub records the purge. **Step three is the one that is easy to forget and the
-one that would make the whole control ineffective** (§17). Test asserts no file under `trace_dir`
+one that would make the whole control ineffective** (17). Test asserts no file under `trace_dir`
 contains the name.
 
 ---
@@ -1390,17 +1390,17 @@ contains the name.
 
 ```python
 def screen_one(path: Path, rubric: Rubric, deps: Deps) -> Candidate:
-    validate_file(path)                          # §8.2 → INPUT_REJECTED
-    parsed = deps.parser.parse(path)             # §8.4 sandboxed
-    text, stripped = sanitize(parsed.text)       # §8.6 → SANITIZED_TEXT
-    inj = detect_injection(text)                 # §10.2 → review, never exclude
+    validate_file(path)                          # 8.2 → INPUT_REJECTED
+    parsed = deps.parser.parse(path)             # 8.4 sandboxed
+    text, stripped = sanitize(parsed.text)       # 8.6 → SANITIZED_TEXT
+    inj = detect_injection(text)                 # 10.2 → review, never exclude
     sent = redact_pii(text) if settings.redact_pii else text
-    if count_tokens(sent) > budget: → BUDGET_EXCEEDED, unscoreable   # §10.1
-    out = judge(sent, rubric)                    # §11
-    validate_verdicts(out, rubric)               # §10.3
-    out = screen_freetext(out)                   # §10.7
-    scored = verify_evidence(out, sent)          # §10.5 — matches `sent`, not `text`
-    return compute_score(scored, rubric)         # §10.4
+    if count_tokens(sent) > budget: → BUDGET_EXCEEDED, unscoreable   # 10.1
+    out = judge(sent, rubric)                    # 11
+    validate_verdicts(out, rubric)               # 10.3
+    out = screen_freetext(out)                   # 10.7
+    scored = verify_evidence(out, sent)          # 10.5 — matches `sent`, not `text`
+    return compute_score(scored, rubric)         # 10.4
 ```
 
 `verify_evidence` matches against `sent` — the exact sanitized, post-redaction string given to the
@@ -1511,7 +1511,7 @@ rule must be exercisable without an HTTP client.
 
 ```python
 def main() -> None:
-    reclaim_orphaned(worker_id)  # §16.5 — I crashed last time
+    reclaim_orphaned(worker_id)  # 16.5 — I crashed last time
     while not stopping:
         job = claim_next(worker_id)
         if job is None:
@@ -1543,7 +1543,7 @@ Each position has a folder: `data/resumes/<position_ref>/`.
   Nothing is ever silently added mid-run.
 - `file_sha256` is computed at claim time, not scan time, so a file replaced between snapshot and
   processing is hashed as what was actually read.
-- Symlinks are not followed. Paths resolving outside the folder are rejected (§8.2).
+- Symlinks are not followed. Paths resolving outside the folder are rejected (8.2).
 
 ### 16.3 Scheduling
 
@@ -1616,14 +1616,14 @@ batch.
 > **Traces contain full resume text.** That makes `trace_dir` a second store of candidate data. If
 > it sits outside the erasure path it silently defeats `purge_candidate` while appearing
 > implemented — worse than not having it. Therefore: indexed in the `traces` table by
-> `file_sha256`, deleted by purge (§12.6), same `0700` permissions as `data/`, and retention shorter
+> `file_sha256`, deleted by purge (12.6), same `0700` permissions as `data/`, and retention shorter
 > than the audit log.
 
 **Disk.** Traces at 1,000 CVs/run across six positions grow fast. `/ready` fails below
 `min_free_disk_gb`, and the worker refuses to claim new jobs below it. A full disk mid-batch is
 recoverable but only if somebody is watching.
 
-No external tracing service or telemetry endpoint (§22.2).
+No external tracing service or telemetry endpoint (22.2).
 
 ---
 
@@ -1631,7 +1631,7 @@ No external tracing service or telemetry endpoint (§22.2).
 
 ### 18.1 Reproducibility and accuracy
 
-`eval/run_eval.py` drives the §10.8 measurement. `eval/accuracy.py` reports against
+`eval/run_eval.py` drives the 10.8 measurement. `eval/accuracy.py` reports against
 `labelled_set.jsonl` — and must also declare *who labelled it and how*, because the metric inherits
 the labeller's judgement entirely. Minimum: two independent labellers, inter-rater agreement
 reported alongside accuracy, disagreements adjudicated and retained.
@@ -1662,7 +1662,7 @@ fixtures that *should* escalate), so treat the rate as a driver breakdown, not a
 
 | Driver | Count | Assessment |
 |---|---|---|
-| Unmet must-have | 3 | **Fixed** — no longer escalates (§10.4) |
+| Unmet must-have | 3 | **Fixed** — no longer escalates (10.4) |
 | `partial` on a must-have | 2 | Spec-mandated. Frequency on a real corpus is unmeasured and may be the dominant cost |
 | `SUSPECTED_INJECTION` | 2 | Correct; should be rare in production |
 | `EVIDENCE_UNVERIFIED` | 2 | **See below** |
@@ -1677,7 +1677,7 @@ length:
 Honest quotes measured across one run: 18, 20, 30, 39, 76, 84 chars. A floor of 25 rejects two of six.
 
 **The value's provenance is the problem.** 25 was inherited from the rejected `or 25 chars` clause
-(§22.1), where it was a *sufficient* condition — "verified if at least 25 chars matched". Reusing it
+(22.1), where it was a *sufficient* condition — "verified if at least 25 chars matched". Reusing it
 as a *necessary* condition is a different question that has never been measured. The stopword-confetti
 attack it nominally guards is already blocked by `evidence_min_block_tokens = 3` requiring a
 contiguous run, plus `ratio >= 0.60`.
@@ -1713,15 +1713,15 @@ After the recalibration, on the 11-case seed corpus:
 
 **The dominant driver is now `partial` on a must-have, and it traces to a measured model bias.**
 `eval/accuracy` shows the model resolving to `partial` when uncertain: `strong → partial` **9 times**
-across 44 judgements, against 4 over-credits total. §10.4 escalates a `partial` must-have, so the
+across 44 judgements, against 4 over-credits total. 10.4 escalates a `partial` must-have, so the
 bias converts directly into review-queue volume.
 
 Two ways out, and **neither should be taken on this corpus**:
 
 1. *Recalibrate the model toward `strong`* — but the labels saying those are `strong` come from one
-   labeller, and the disagreements cluster on exactly the `strong`/`partial` boundary where §18.1
+   labeller, and the disagreements cluster on exactly the `strong`/`partial` boundary where 18.1
    predicts a single labeller is unreliable.
-2. *Stop escalating `partial` must-haves* — a policy change to §10.4 that removes a human check.
+2. *Stop escalating `partial` must-haves* — a policy change to 10.4 that removes a human check.
 
 Both need the two-labeller corpus. **Do not tune the model against contestable labels**; that is how
 a calibration bias becomes a documented specification.
@@ -1740,7 +1740,7 @@ resolved that instance without touching any threshold.
 > `"Built REST APIs in Python and Django at Initech from 2016-2019."` — accurate, but assembled from
 > two parts of the document with connectives (`at`, `from`) that appear nowhere in it. Quote length
 > went up and `match_ratio` fell to 0.55–0.58, moving the failure from the char floor to the ratio
-> gate. Contiguity is what distinguishes a quotation from a word cloud (§22.2), so the instruction
+> gate. Contiguity is what distinguishes a quotation from a word cloud (22.2), so the instruction
 > now demands **one unbroken span, no joining, no reordering** *and* a complete clause. Measured
 > after: every supported criterion at `ratio = 1.00`, quotes 30–84 chars — both constraints satisfied
 > at once. A prompt edit aimed at one of these gates must be re-measured against the other.
@@ -1766,7 +1766,7 @@ gated on it. It grows whenever something new gets through.
 
 ```bash
 cd /opt/screener
-uv sync --frozen --extra ui --extra dev          # or the air-gapped path, §3.4
+uv sync --frozen --extra ui --extra dev          # or the air-gapped path, 3.4
 cp .env.example .env
 git describe --tags --always --dirty > screener/_version.txt
 
@@ -1799,25 +1799,25 @@ shell access. **That list is the real access-control boundary.**
 | Step | Deliverable | Gate |
 |---|---|---|
 | 1 | `pyproject.toml`, `uv.lock`, `settings.py`, `models.py`, `ports.py` | all four build gates clean; `--require-hashes` install works |
-| 2 | `core/compute_score.py`, `core/rank.py` + hypothesis tests | §10.4 worked example; invariants in §18.3; must-have failure never outranks a qualified candidate |
+| 2 | `core/compute_score.py`, `core/rank.py` + hypothesis tests | 10.4 worked example; invariants in 18.3; must-have failure never outranks a qualified candidate |
 | 3 | `core/verify_evidence.py` + tests | injection fixture → `none`; `autojunk=False` regression on 20 kB doc; **mid-quote-insertion fixture verifies**; **stopword-only fixture rejected**; 25-char-fragment rejected |
 | 4 | `intake/sanitize_text.py`, `core/budget.py`, `core/validate_verdicts.py` | bidi/zero-width/homoglyph fixtures stripped and flagged; missing/extra/duplicate ids; overflow → unscoreable |
-| 5 | `intake/validate_file.py`, `sandbox.py` | **zip bomb, zip slip, XXE, oversize, MIME-mismatch, page-bomb all rejected**; rlimit kill → `PARSER_TIMEOUT` not a hang; **`xberg` XML backend verified XXE-safe [assert→verified], §8.3** |
+| 5 | `intake/validate_file.py`, `sandbox.py` | **zip bomb, zip slip, XXE, oversize, MIME-mismatch, page-bomb all rejected**; rlimit kill → `PARSER_TIMEOUT` not a hang; **`xberg` XML backend verified XXE-safe [assert→verified], 8.3** |
 | 6 | `core/detect_injection.py`, `redact_pii.py`, `screen_freetext.py` | security-engineer CV → review, not exclusion; date-range preserved through redaction |
-| 7 | `clients/ollama_client.py` | health, digest, **`count_tokens` exact via `prompt_eval_count` [assert→verified], §10.1**, retry/timeout paths. Live checks are `pytest -m live` (deselected by default so the gates run without a GPU) |
-| 8 | `intake/parse_worker.py` + sandboxed `parse` | PDF/DOCX/scanned/corrupt fixtures; **OCR verified via xberg's bundled engine — no tesseract needed (§3.3)**; rlimits corrected (§8.4); layout markup reaches §10.5. Live suite: `pytest -m live` |
-| 9 | `llm/*` + prompts | schema round-trip; **exact-verdict-set compliance measured 30/30 = 100% pre-retry** (gate ≥95%); mean judge latency **5.39 s**; early §10.8 reading: **verdict stability 100%**, one distinct tuple across 30 identical runs (gate ≥98%) |
+| 7 | `clients/ollama_client.py` | health, digest, **`count_tokens` exact via `prompt_eval_count` [assert→verified], 10.1**, retry/timeout paths. Live checks are `pytest -m live` (deselected by default so the gates run without a GPU) |
+| 8 | `intake/parse_worker.py` + sandboxed `parse` | PDF/DOCX/scanned/corrupt fixtures; **OCR verified via xberg's bundled engine — no tesseract needed (3.3)**; rlimits corrected (8.4); layout markup reaches 10.5. Live suite: `pytest -m live` |
+| 9 | `llm/*` + prompts | schema round-trip; **exact-verdict-set compliance measured 30/30 = 100% pre-retry** (gate ≥95%); mean judge latency **5.39 s**; early 10.8 reading: **verdict stability 100%**, one distinct tuple across 30 identical runs (gate ≥98%) |
 | 10 | `storage/*` + migrations + `uow.py` | cache hit/miss across all 8 key fields; **transient flags not cached**; audit triggers reject UPDATE/DELETE; override+audit atomic |
 | 11 | `storage/jobs_store.py` | atomic claim (**verified under real 4-process contention**, single-statement `UPDATE … RETURNING`); **startup reclaim after a real `SIGKILL`**; attempt cap; run status transitions; fast lane + aging |
-| 12 | `pipeline.py` | `screen_one` order per §13; no failure path yields a score; **first true end-to-end run** (real file → sandbox → model → band). Surfaced two defects: `MISSING_MUST_HAVE` escalating every unqualified candidate (§10.4), and escalated candidates losing their verdicts before reaching a reviewer. Escalation-rate finding recorded in §18.2.1 — **open** |
-| 13 | `service.py` | actor threaded through; audit in-transaction; no pass-through methods. Surfaced a **separation-of-duties defect**: only `create_position` seeded a `users` row, so a second person could not approve, override, or sign off — referential integrity rejected them. `_ensure_actor` now runs in every mutating path. Layering rule for `service.py` corrected in §4 |
-| 14 | `worker.py` + systemd | resumes a batch killed at 50% (**real `SIGKILL` mid-batch, then restart**); no duplicate work; no lost jobs (`done + failed == total`); folder rescan. **First full product run**: JD → rubric → approve → snapshot → screen → rank, nothing mocked. Cache verified end to end — a re-run over an unchanged folder costs no inference. The worker owns **no SQL**: every write goes through `service.py` (§12.2) |
-| 15 | `api/*` | routes ≤4 lines; sync handlers (asserted, not assumed); `TestClient` covers every mutating path, enumerated as a tripwire so a new endpoint without a test fails immediately. `model_verdict` proven absent from every response (§15.4). No route module may import `pipeline`/`intake` — checked on the **import graph**, not source text. App is a **factory** (`uvicorn …:create_app --factory`); a module-level `app` ran the migration gate at import |
-| 16 | `cli.py` | break-glass: **demonstrated** — JD → rubric → approve → run → screen → ranked CSV in 7 s with the API, worker and UI all stopped. Goes through `service.py`, so the emergency path produces the same audit trail as the normal one. `migrate` and `seed-user` live here because the API and worker both refuse to start against a stale schema. Fixes the `screener` console script, which `pyproject` declared but no module backed. Worker loop moved to `screener/worker_loop.py` — see §4 |
+| 12 | `pipeline.py` | `screen_one` order per 13; no failure path yields a score; **first true end-to-end run** (real file → sandbox → model → band). Surfaced two defects: `MISSING_MUST_HAVE` escalating every unqualified candidate (10.4), and escalated candidates losing their verdicts before reaching a reviewer. Escalation-rate finding recorded in 18.2.1 — **open** |
+| 13 | `service.py` | actor threaded through; audit in-transaction; no pass-through methods. Surfaced a **separation-of-duties defect**: only `create_position` seeded a `users` row, so a second person could not approve, override, or sign off — referential integrity rejected them. `_ensure_actor` now runs in every mutating path. Layering rule for `service.py` corrected in 4 |
+| 14 | `worker.py` + systemd | resumes a batch killed at 50% (**real `SIGKILL` mid-batch, then restart**); no duplicate work; no lost jobs (`done + failed == total`); folder rescan. **First full product run**: JD → rubric → approve → snapshot → screen → rank, nothing mocked. Cache verified end to end — a re-run over an unchanged folder costs no inference. The worker owns **no SQL**: every write goes through `service.py` (12.2) |
+| 15 | `api/*` | routes ≤4 lines; sync handlers (asserted, not assumed); `TestClient` covers every mutating path, enumerated as a tripwire so a new endpoint without a test fails immediately. `model_verdict` proven absent from every response (15.4). No route module may import `pipeline`/`intake` — checked on the **import graph**, not source text. App is a **factory** (`uvicorn …:create_app --factory`); a module-level `app` ran the migration gate at import |
+| 16 | `cli.py` | break-glass: **demonstrated** — JD → rubric → approve → run → screen → ranked CSV in 7 s with the API, worker and UI all stopped. Goes through `service.py`, so the emergency path produces the same audit trail as the normal one. `migrate` and `seed-user` live here because the API and worker both refuse to start against a stale schema. Fixes the `screener` console script, which `pyproject` declared but no module backed. Worker loop moved to `screener/worker_loop.py` — see 4 |
 | 17 | `logging.py`, trace store | JSON events with run/job/worker context bound per job; **purge deletes traces — the test greps the whole `trace_dir` for the candidate's name, not the index**. One file per candidate per run (`0600` in a `0700` dir) so erasure deletes whole files rather than rewriting a shared log; `prune_traces` for retention shorter than the audit log. Worker writes **and** indexes, or logs `trace_unindexed` loudly — a file with no row is resume text outside the erasure path. A cache hit writes no trace |
-| 18 | `ui/screener_app.py` | polls status (`st.fragment(run_every=5s)`); **verified against the live stack** — API + worker + Streamlit as three processes, killed the API and the page degraded to a sentence while the worker kept screening. **Streamlit telemetry disabled** — see §3.3. "No DB driver importable" is enforced by the import check, not packaging: `sqlite3` is stdlib and cannot be uninstalled |
-| 19 | `eval/*` | **reproducibility 100%** (5 repeats × 11 cases, 0 band changes, identical scores — gate ≥98%); escalation measured and its drivers named (§18.2.2, §18.2.3); `evidence_match_min_chars` recalibrated 25 → 16 from data. Corpus loader **refuses to report accuracy without provenance**; Cohen's κ computed for inter-rater agreement. Seed set is single-labeller and says so — **§18.1 still unmet** |
-| 20 | `tests/test_layering.py` | full import graph enforced per §4, read from the **AST** so a docstring explaining a rule cannot fail it; function-level imports counted, so moving one inside a function does not evade it. **`ui/` imports no `sqlite3` / `screener.*`** (§3.1 — this, not packaging, is what enforces decision #11); **each store module structurally satisfies its `ports` Protocol** (§6); layer graph asserted acyclic. **One documented exception**: `api/app.py` may import `storage.connection` for the §12.1 startup gate — bootstrap, not request handling, and pinned so it cannot widen |
+| 18 | `ui/screener_app.py` | polls status (`st.fragment(run_every=5s)`); **verified against the live stack** — API + worker + Streamlit as three processes, killed the API and the page degraded to a sentence while the worker kept screening. **Streamlit telemetry disabled** — see 3.3. "No DB driver importable" is enforced by the import check, not packaging: `sqlite3` is stdlib and cannot be uninstalled |
+| 19 | `eval/*` | **reproducibility 100%** (5 repeats × 11 cases, 0 band changes, identical scores — gate ≥98%); escalation measured and its drivers named (18.2.2, 18.2.3); `evidence_match_min_chars` recalibrated 25 → 16 from data. Corpus loader **refuses to report accuracy without provenance**; Cohen's κ computed for inter-rater agreement. Seed set is single-labeller and says so — **18.1 still unmet** |
+| 20 | `tests/test_layering.py` | full import graph enforced per 4, read from the **AST** so a docstring explaining a rule cannot fail it; function-level imports counted, so moving one inside a function does not evade it. **`ui/` imports no `sqlite3` / `screener.*`** (3.1 — this, not packaging, is what enforces decision #11); **each store module structurally satisfies its `ports` Protocol** (6); layer graph asserted acyclic. **One documented exception**: `api/app.py` may import `storage.connection` for the 12.1 startup gate — bootstrap, not request handling, and pinned so it cannot widen |
 
 Steps 2–6 are pure Python, need no GPU, and land the highest-value tests first. **Step 5 is a
 security gate**: do not point this at real candidate files until those fixtures pass.
@@ -1872,11 +1872,11 @@ even unauthenticated. It is cheap now and it is what makes the data disposable.
 
 ### 22.2 Considered and rejected
 
-**SQLAlchemy / any ORM.** Portability is already bought by the Protocols in §6 — adding an
+**SQLAlchemy / any ORM.** Portability is already bought by the Protocols in 6 — adding an
 abstraction to achieve what an existing abstraction achieves is duplication. `sqlite3` parameterised
 queries are equally injection-safe, and there is no user-authored SQL anywhere. Pooling is
 meaningless for a single-file database. Against that, an ORM obscures the triggers, PRAGMAs and
-partial indexes in §12 that carry real weight.
+partial indexes in 12 that carry real weight.
 
 **HuggingFace `transformers.AutoTokenizer` for token counts.** The commonly-suggested vocabulary is
 a major version behind the deployed model — a tokenizer/model mismatch is the exact error this
@@ -1894,7 +1894,7 @@ are stopword noise. `MIN_BLOCK` retained and its removal guarded by a test.
 **Celery / Redis.** A second daemon and a network service to replace a table that works for one
 worker. Revisit only for multi-node. `JobQueue` is the seam.
 
-**Round-robin scheduling across runs.** Ranking is only meaningful over a complete run (§16.3).
+**Round-robin scheduling across runs.** Ranking is only meaningful over a complete run (16.3).
 
 **WebSockets for progress.** A 78-minute job updating every 5 s does not justify it.
 
@@ -1921,11 +1921,11 @@ data/resumes/<position_ref>/ ──► create_run: SNAPSHOT folder ──► job
                                               │  worker.py — one at a time     │
                                               └───────────────────┬───────────┘
                                                                   │ claim (tx)
-   validate file (size/MIME/zip/pages)  ◄── §8.2 ─────────────────┤
+   validate file (size/MIME/zip/pages)  ◄── 8.2 ─────────────────┤
         │ reject → quarantine + unscoreable                       │
-   SANDBOXED PARSE (subprocess, rlimits, no network)  ◄── §8.4    │
+   SANDBOXED PARSE (subprocess, rlimits, no network)  ◄── 8.4    │
         │ crash → security event                                  │
-   sanitize Unicode (NFKC, bidi, Cf/Co)  ◄── §8.6                 │
+   sanitize Unicode (NFKC, bidi, Cf/Co)  ◄── 8.6                 │
         │                                                         │
    detect_injection ──► review, never exclude                     │
         │                                                         │
@@ -1951,17 +1951,17 @@ Written at the end of the build (steps 1–20 complete: **448 tests + 37 live, 9
 gates green, both `[assert]` markers resolved). This section exists so the next person — or the same
 person in three months — can pick this up without the conversation that produced it.
 
-**Read §24.1 before pointing this at a real applicant.**
+**Read 24.1 before pointing this at a real applicant.**
 
 ### 24.1 Blocking — must be resolved before real candidate data
 
 | # | Item | Why it blocks | Where |
 |---|---|---|---|
-| 1 | **The labelled set has one labeller** | Accuracy inherits its labeller's judgement entirely. Every accuracy figure this system can currently produce is a regression signal, not evidence. §18.1 requires **two independent labellers on real CVs, Cohen's κ reported alongside accuracy, disagreements adjudicated and retained**. The harness refuses to pretend otherwise — it prints "kappa NOT AVAILABLE" and the corpus states `NOT A SUBSTITUTE`. | §18.1, `eval/labelled_set.jsonl` |
-| 2 | **The parser sandbox does not block network** | §8.4 tier 3 (rlimits + env allowlist) cannot — that needs a namespace or firewall rule. Until tier 1 (`--network none`) or tier 2 (dedicated uid + firewall) is deployed, a parser RCE is "compromise and exfiltrate" rather than "crash a subprocess we expected to crash". | §8.4 |
-| 3 | **Escalation is 75% against a 3% budget** | Above ~10% reviewers click through, and the control fails *silently while appearing to work*. Dominant driver is `partial` on a must-have, traced to a measured model bias toward `partial`. **Both routes to fixing it require item 1.** | §18.2.3 |
-| 4 | **No backup/DR, no purge replay journal** | `data/` holds every resume, the database, quarantine and traces in plaintext. Already flagged in §21 as "add before real candidate data". | §21 |
-| 5 | **`auth_mode=stub` trusts a header** | Anything that can reach the port is an admin. The API and UI bind to loopback for this reason; do not expose either before real auth lands. `get_actor` is the one function to change. | §15.2, §21 |
+| 1 | **The labelled set has one labeller** | Accuracy inherits its labeller's judgement entirely. Every accuracy figure this system can currently produce is a regression signal, not evidence. 18.1 requires **two independent labellers on real CVs, Cohen's κ reported alongside accuracy, disagreements adjudicated and retained**. The harness refuses to pretend otherwise — it prints "kappa NOT AVAILABLE" and the corpus states `NOT A SUBSTITUTE`. | 18.1, `eval/labelled_set.jsonl` |
+| 2 | **The parser sandbox does not block network** | 8.4 tier 3 (rlimits + env allowlist) cannot — that needs a namespace or firewall rule. Until tier 1 (`--network none`) or tier 2 (dedicated uid + firewall) is deployed, a parser RCE is "compromise and exfiltrate" rather than "crash a subprocess we expected to crash". | 8.4 |
+| 3 | **Escalation is 75% against a 3% budget** | Above ~10% reviewers click through, and the control fails *silently while appearing to work*. Dominant driver is `partial` on a must-have, traced to a measured model bias toward `partial`. **Both routes to fixing it require item 1.** | 18.2.3 |
+| 4 | **No backup/DR, no purge replay journal** | `data/` holds every resume, the database, quarantine and traces in plaintext. Already flagged in 21 as "add before real candidate data". | 21 |
+| 5 | **`auth_mode=stub` trusts a header** | Anything that can reach the port is an admin. The API and UI bind to loopback for this reason; do not expose either before real auth lands. `get_actor` is the one function to change. | 15.2, 21 |
 
 ### 24.2 Needs verification — measured only on synthetic or narrow data
 
@@ -1969,12 +1969,12 @@ Everything below **works**; none of it has been shown to work on the real thing.
 
 | Item | What was actually measured | What is missing |
 |---|---|---|
-| **Arabic (and non-Latin) OCR** | Nothing. xberg's bundled engine read Latin text with no tesseract installed. | §3.3's warning now applies to the bundled engine. A silent OCR failure is indistinguishable downstream from a weak candidate. **Verify against real Arabic CVs before screening any.** |
+| **Arabic (and non-Latin) OCR** | Nothing. xberg's bundled engine read Latin text with no tesseract installed. | 3.3's warning now applies to the bundled engine. A silent OCR failure is indistinguishable downstream from a weak candidate. **Verify against real Arabic CVs before screening any.** |
 | **Accuracy** | 68% agreement with one labeller on 11 synthetic single-role cases; 92% on 12 objective presence/absence cases. Zero severe (`strong`↔`none`) errors in both. | Real CVs: long, multi-role, career changes, second-language phrasing, 12-page academic formats. Synthetic sets are systematically easier. |
 | **Paraphrase invariance** | 5 phrasings of **one** resume, over criteria the resume addresses. | A real corpus. Verdicts on criteria a resume does *not* address are **known unstable** and no prompt wording fixed it. |
 | **Throughput / the 78-minute claim** | 5.4 s/judge on one resume; batches of ≤11. | A real 1,000-CV run. Budget pre-check adds a second prompt-eval per resume; OCR adds ~0.8 s/page. Quote the ETA from a measured end-to-end run. |
-| **VRAM contention** | Not tested. §19 notes `onprem-rag` holds ~9.8 GB of 12 GB. | They are mutually exclusive on this card. `/ready` checks `ollama ps`; confirm behaviour under real contention. |
-| **`gemma4:12b` vs `granite4.1:8b`** | Tied at 92% accuracy; gemma 1.8× slower and *less* phrase-invariant; needs `disable_thinking`. | Decide on real labelled data (§11.1). Consider gemma as a **second opinion on escalated candidates only** rather than for the whole batch. |
+| **VRAM contention** | Not tested. 19 notes `onprem-rag` holds ~9.8 GB of 12 GB. | They are mutually exclusive on this card. `/ready` checks `ollama ps`; confirm behaviour under real contention. |
+| **`gemma4:12b` vs `granite4.1:8b`** | Tied at 92% accuracy; gemma 1.8× slower and *less* phrase-invariant; needs `disable_thinking`. | Decide on real labelled data (11.1). Consider gemma as a **second opinion on escalated candidates only** rather than for the whole batch. |
 | **Multi-worker reclaim** | `reclaim_if_unchanged` (heartbeat-sequence) is implemented and unit-tested; only the single-worker startup reclaim has been exercised for real. | Run two workers before relying on it. |
 
 ### 24.3 Operational gotchas discovered during the build
@@ -1982,22 +1982,22 @@ Everything below **works**; none of it has been shown to work on the real thing.
 Each of these cost real debugging time. None is obvious from the code.
 
 - **Bump `screener/_version.txt` whenever scoring logic changes.** `app_version` is in the cache key
-  (§6). A logic change without a version change serves **stale judgments** — observed live at step 20.
-  It should come from `git describe --tags --always --dirty` at build (§3.2); it currently reads
+  (6). A logic change without a version change serves **stale judgments** — observed live at step 20.
+  It should come from `git describe --tags --always --dirty` at build (3.2); it currently reads
   `0.1.0-step20` because the repository has no tags yet.
 - **Streamlit resolves `.streamlit/config.toml` from the working directory.** Launched from anywhere
   else it silently loses that config — *including telemetry-off*. Every setting is duplicated as an
   environment variable in `deploy/screener-ui.service`; use the unit, not an ad-hoc command.
 - **Do not lower `parse_mem_limit_mb` (2048).** Under-provisioning does not fail cleanly: 512 MB
-  segfaults, 256 MB *hangs* until the parent's wall clock fires (§8.4).
+  segfaults, 256 MB *hangs* until the parent's wall clock fires (8.4).
 - **`OLLAMA_NUM_PARALLEL=1` is load-bearing**, not a tuning knob. Raising it invalidates the
-  reproducibility claim and every stored comparison across the boundary (§10.8).
+  reproducibility claim and every stored comparison across the boundary (10.8).
 - **Run `screener migrate` before starting anything.** The API and worker both refuse to start against
-  a pending schema, by design (§12.1).
+  a pending schema, by design (12.1).
 - **Port 8000 is taken by `onprem-rag` on the current host.** The API was run on 8010 for the live
   demo; `SCREENER_API_URL` configures the UI.
-- **Reasoning models break §10.1.** They spend `num_predict` on chain-of-thought before emitting JSON.
-  `disable_thinking` (default on) sends `think=False` (§11.1).
+- **Reasoning models break 10.1.** They spend `num_predict` on chain-of-thought before emitting JSON.
+  `disable_thinking` (default on) sends `think=False` (11.1).
 
 ### 24.4 Known limitations — accepted, not bugs
 
@@ -2005,23 +2005,23 @@ State these to anyone who asks what the system can do. Each is a deliberate trad
 is implemented.
 
 - **Evidence verification is not fraud detection.** It confirms the model quoted the resume
-  faithfully. It cannot tell a true claim from a lying resume (§1).
-- **§10.5(c) cannot bridge synonyms.** "production backend services" vs "payments monolith to
+  faithfully. It cannot tell a true claim from a lying resume (1).
+- **10.5(c) cannot bridge synonyms.** "production backend services" vs "payments monolith to
   microservices" share no word. It flags for review and no longer unranks. Anything stronger needs
   semantic similarity — a second model, and a second thing to evaluate.
 - **Verdicts on criteria a resume does not address are not phrase-stable**, and the model will
-  occasionally return `strong` with a real quote about something else. §10.5(c) is what catches it.
+  occasionally return `strong` with a real quote about something else. 10.5(c) is what catches it.
 - **`POSSIBLE_DUPLICATE` is exact-hash only.** The same CV re-exported from Word has a different hash.
-  Documented as weak in the UI rather than implying coverage it lacks (§12.6).
+  Documented as weak in the UI rather than implying coverage it lacks (12.6).
 - **Names are not redacted.** Identifying a name in free text needs NER, and `Candidate.filename`
-  carries it regardless. Redaction reduces what the model weighs; it is not anonymisation (§9).
+  carries it regardless. Redaction reduces what the model weighs; it is not anonymisation (9).
 - **The PDF page-bomb check is a best-effort pre-filter.** A 1.5+ page tree inside compressed object
   streams is uncountable without parsing. Real enforcement is the sandbox rlimits plus the post-parse
-  `page_count` (§8.2).
+  `page_count` (8.2).
 - **Storage Protocols are declarations, not a swap point.** `ResultsStore`/`JobQueue` are unreferenced;
   `service.py` imports the concrete stores. SQLite → Postgres is **not** a one-file change. The
-  inference and parser ports *are* real. Step 20 asserts each store still satisfies its Protocol (§6).
-- **`core/` imports `config.settings`**, a documented deviation from §4's "models.py only". Thresholds
+  inference and parser ports *are* real. Step 20 asserts each store still satisfies its Protocol (6).
+- **`core/` imports `config.settings`**, a documented deviation from 4's "models.py only". Thresholds
   are policy, not state; inlining them would scatter tuning constants.
 
 ### 24.5 Small outstanding tasks
@@ -2031,15 +2031,15 @@ is implemented.
 - **`eval/` has no `__main__` wiring in `pyproject`** — run as `python -m eval.accuracy`,
   `python -m eval.run_eval`, `python -m eval.escalation --sweep`.
 - **`prune_traces()` has no scheduler.** Retention is implemented but nothing calls it; wire it to a
-  timer or cron before traces accumulate (§17).
-- **No `/metrics` endpoint.** Deliberate (§22.2 rejects external telemetry), but the JSONL stream is
+  timer or cron before traces accumulate (17).
+- **No `/metrics` endpoint.** Deliberate (22.2 rejects external telemetry), but the JSONL stream is
   the only aggregation source — confirm whoever operates this can read it.
 
 ### 24.6 How to run it
 
 ```bash
 uv sync --frozen --extra ui --extra dev
-git describe --tags --always --dirty > screener/_version.txt   # do not skip (§24.3)
+git describe --tags --always --dirty > screener/_version.txt   # do not skip (24.3)
 cp .env.example .env                                            # set DB_PATH, RESUMES_DIR, ...
 
 screener migrate
@@ -2051,7 +2051,7 @@ uvicorn screener.api.app:create_app --factory --host 127.0.0.1 --port 8000   # A
 python worker.py                                                             # worker
 streamlit run ui/screener_app.py                                             # UI  :8501
 
-# Break-glass — no API, no daemon (§20 step 16)
+# Break-glass — no API, no daemon (20 step 16)
 screener position create --reference REQ-1 --title "..." --jd-file jd.txt
 screener rubric extract <position-id> && screener rubric approve <rubric-id>
 screener run create --position <pos> --rubric <rub> && screener run start <run>

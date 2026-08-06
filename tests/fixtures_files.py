@@ -1,4 +1,4 @@
-"""Builders for the malicious-file corpus (spec §8.2, build gate §20 step 5).
+"""Builders for the malicious-file corpus (spec 8.2, build gate 20 step 5).
 
 Generated rather than committed. A zip bomb and a traversal archive checked into
 a repository are a hazard to every tool that walks the tree — editors, indexers,

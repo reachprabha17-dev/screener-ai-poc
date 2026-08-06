@@ -1,4 +1,4 @@
-"""Protocols for everything that touches the outside world (spec §6).
+"""Protocols for everything that touches the outside world (spec 6).
 
 Infrastructure is named here and implemented in ``clients/``, ``intake/`` and
 ``storage/``. Callers depend on these Protocols, never on a concrete class, so
@@ -6,7 +6,7 @@ swapping Ollama for vLLM, xberg for another parser, or SQLite for Postgres means
 one new file satisfying a Protocol plus a config value.
 
 **This is the portability mechanism**, and it is why no ORM is added for the same
-purpose (§22.2) — adding an abstraction to achieve what an existing abstraction
+purpose (22.2) — adding an abstraction to achieve what an existing abstraction
 already achieves is duplication.
 
 Like ``models``, this module imports nothing else from the package.
@@ -69,7 +69,7 @@ class LLMClient(Protocol):
         ...
 
     def count_prompt_tokens(self, system: str, user: str) -> int:
-        """Exact size of the assembled two-message prompt, for the §10.1 pre-check.
+        """Exact size of the assembled two-message prompt, for the 10.1 pre-check.
 
         Separate from ``count_tokens`` because the chat template adds framing the
         raw strings do not carry, and under-counting is the direction that lets a
@@ -87,7 +87,7 @@ class LLMClient(Protocol):
 
 @runtime_checkable
 class ResumeParser(Protocol):
-    """Turns a resume file into text. Implementations run sandboxed (§8.4).
+    """Turns a resume file into text. Implementations run sandboxed (8.4).
 
     Returns a ``ParseResult`` rather than raising: a file that cannot be read is
     an expected outcome of a run, and the candidate still has to reach a human.
@@ -128,7 +128,7 @@ class ResultsStore(Protocol):
         """Return a prior judgment made under identical conditions.
 
         Non-cacheable rows (transient failures) are structurally invisible here
-        via a partial index, not filtered in Python (§12.5).
+        via a partial index, not filtered in Python (12.5).
         """
         ...
 
@@ -138,7 +138,7 @@ class ResultsStore(Protocol):
         """Erase candidate content across every store, including trace files.
 
         The trace files are the step that is easy to forget and the one that
-        would make the whole control ineffective (§12.6, §17).
+        would make the whole control ineffective (12.6, 17).
         """
         ...
 
@@ -159,6 +159,6 @@ class JobQueue(Protocol):
 
         Clock-free by construction: an air-gapped box has no NTP, and absolute
         lease expiry reclaims live work or strands dead work on a clock step
-        (§16.5).
+        (16.5).
         """
         ...

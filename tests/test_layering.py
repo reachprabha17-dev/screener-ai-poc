@@ -1,6 +1,6 @@
-"""Architecture, enforced (spec §4, build gate §20 step 20).
+"""Architecture, enforced (spec 4, build gate 20 step 20).
 
-Every rule below is written in §4 as prose. Prose decays: someone adds an import
+Every rule below is written in 4 as prose. Prose decays: someone adds an import
 under time pressure, it works, the tests pass, and six months later the UI holds
 a database connection and the service layer runs inference inside a request.
 This module is the difference between an architecture that is *described* and one
@@ -16,7 +16,7 @@ Three rules carry most of the weight:
 - **`service.py` must not import `pipeline.py`.** It enqueues; the worker
   executes. Collapse that and a 1,000-CV batch runs inside an HTTP request.
 - **`ui/` must not import `sqlite3` or `screener.*`.** This is the real
-  enforcement of decision #11 — §3.1's claim that the dependency graph does it is
+  enforcement of decision #11 — 3.1's claim that the dependency graph does it is
   wrong, because `sqlite3` ships with Python and cannot be uninstalled.
 - **`core/` must do no I/O.** It is why the scoring, ranking and evidence rules
   are testable without a GPU or a database.
@@ -88,7 +88,7 @@ def assert_forbidden(paths: dict[Path, set[str]], forbidden: tuple[str, ...]) ->
 
 
 def test_the_service_layer_never_imports_the_pipeline() -> None:
-    """§14's hard rule: it enqueues, the worker executes.
+    """14's hard rule: it enqueues, the worker executes.
 
     Screening inside a request lifecycle loses orphan reclaim and resumption and
     dies with the process — and it would work perfectly on three files before
@@ -105,7 +105,7 @@ def test_no_api_module_can_screen() -> None:
 
 
 def test_the_api_reaches_storage_only_through_the_service() -> None:
-    """Routes parse, authorize, delegate, serialize (§15.4).
+    """Routes parse, authorize, delegate, serialize (15.4).
 
     A route holding a transaction is a business rule the CLI and worker cannot
     reach.
@@ -121,7 +121,7 @@ def test_the_only_storage_import_in_the_api_is_the_startup_gate() -> None:
     `create_app` calls `require_current_schema()` before serving anything: the
     process must refuse to start against a stale schema, and a schema/code
     mismatch on candidate decisions is an integrity incident, not a warning
-    (§12.1). That is a **bootstrap** concern, the same category as
+    (12.1). That is a **bootstrap** concern, the same category as
     `cli.py migrate` — it necessarily precedes the service layer rather than
     routing around it.
 
@@ -143,7 +143,7 @@ def test_the_only_storage_import_in_the_api_is_the_startup_gate() -> None:
 def test_the_ui_imports_no_database_driver() -> None:
     """The real enforcement of decision #11.
 
-    §3.1 claims the dependency graph does this. It does not — `sqlite3` is in the
+    3.1 claims the dependency graph does this. It does not — `sqlite3` is in the
     standard library and cannot be uninstalled. Omitting a driver from the `ui`
     extra removes the temptation; **this test is what removes the possibility**.
     """
@@ -151,7 +151,7 @@ def test_the_ui_imports_no_database_driver() -> None:
 
 
 def test_the_ui_imports_nothing_from_the_screener_package() -> None:
-    """Stronger than §4 requires, and worth keeping.
+    """Stronger than 4 requires, and worth keeping.
 
     Sharing domain models would tie UI deploys to server deploys and reopen a
     transitive path to the storage layer.
@@ -188,7 +188,7 @@ def test_core_does_not_reach_into_infrastructure() -> None:
 
 
 def test_core_may_read_settings_but_nothing_else_stateful() -> None:
-    """A documented deviation from §4's "models.py only".
+    """A documented deviation from 4's "models.py only".
 
     `core/` imports `config.settings` for thresholds — `evidence_match_ratio`,
     `band_thresholds`, `max_resume_tokens`. Those are policy, not state, and
@@ -237,7 +237,7 @@ def test_the_pipeline_never_touches_storage() -> None:
 
 
 def test_the_worker_owns_no_sql() -> None:
-    """§12.2: the transaction boundary is the service layer.
+    """12.2: the transaction boundary is the service layer.
 
     A daemon holding its own transactions is a second place where a saved result
     and its closed job can drift apart.
@@ -274,15 +274,15 @@ STORE_PROTOCOLS = {
 def test_each_store_provides_what_its_protocol_declares(
     module_name: str, required: tuple[str, ...]
 ) -> None:
-    """§6's Protocols are declarations; this is what makes them checkable.
+    """6's Protocols are declarations; this is what makes them checkable.
 
     `ResultsStore` and `JobQueue` are **not** used as type annotations anywhere —
     `service.py` imports the concrete modules — so `mypy --strict` would not
-    notice a store drifting from its Protocol. §6 is explicit that storage
+    notice a store drifting from its Protocol. 6 is explicit that storage
     portability is therefore *not* the one-file swap the inference ports are.
 
     This test is the cheap half of the fix: it keeps the declaration honest
-    without adding indirection for a Postgres migration that is deferred (§21).
+    without adding indirection for a Postgres migration that is deferred (21).
     """
     module = importlib.import_module(module_name)
 
@@ -291,7 +291,7 @@ def test_each_store_provides_what_its_protocol_declares(
 
 
 def test_the_llm_and_parser_ports_are_really_used() -> None:
-    """These two *are* the portability mechanism (§6), unlike the store ports.
+    """These two *are* the portability mechanism (6), unlike the store ports.
 
     Swapping Ollama for vLLM is one new file precisely because callers are typed
     against the Protocol rather than the class.

@@ -1,4 +1,4 @@
-"""Free-text output screening (spec §10.7, build gate §20 step 6).
+"""Free-text output screening (spec 10.7, build gate 20 step 6).
 
 The premise under test: omitting a sentiment *field* from the schema does not
 stop the model putting sentiment into `summary`. These two unconstrained strings
@@ -18,7 +18,7 @@ def judged(summary: str = "", strengths: list[str] | None = None) -> JudgeOutput
 
 
 def test_career_gap_commentary_is_stripped() -> None:
-    """The specific fairness hazard §5 names.
+    """The specific fairness hazard 5 names.
 
     Models reliably emit this, and it is a proxy for parental leave and
     disability.
@@ -122,7 +122,7 @@ def test_only_the_offending_strengths_are_dropped() -> None:
 
 
 def test_removed_text_is_retained_for_the_audit_log() -> None:
-    """The raw value goes to `audit_log`, never to `candidates` (§17).
+    """The raw value goes to `audit_log`, never to `candidates` (17).
 
     It is the evidence for correcting the prompt; storing it on the candidate
     row would re-import the content this function exists to remove.

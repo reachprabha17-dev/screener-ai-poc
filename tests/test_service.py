@@ -1,4 +1,4 @@
-"""Transactional command/query surface (spec §14, build gate §20 step 13).
+"""Transactional command/query surface (spec 14, build gate 20 step 13).
 
 The gate names three properties: **actor threaded through**, **audit written in
 the same transaction as its effect**, and **no pass-through methods**.
@@ -128,7 +128,7 @@ def audit_actions(uow_factory: Callable[[], UnitOfWork]) -> list[str]:
 def test_every_mutating_call_records_its_actor(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
-    """Auth is stubbed today (§15.2); the *plumbing* is what is expensive to retrofit.
+    """Auth is stubbed today (15.2); the *plumbing* is what is expensive to retrofit.
 
     So the value has to arrive at the audit row now, not once real
     authentication exists.
@@ -267,7 +267,7 @@ def test_an_unknown_decision_is_refused(service: ScreenerService, uow_factory) -
 def test_a_run_cannot_be_created_against_an_unapproved_rubric(
     service: ScreenerService,
 ) -> None:
-    """The whole reason an LLM is acceptable at this position (§9.1).
+    """The whole reason an LLM is acceptable at this position (9.1).
 
     A hallucinated requirement rejects every applicant who lacks something the
     job never asked for — across the entire run, invisibly in each result.
@@ -314,7 +314,7 @@ def test_editing_a_rubric_creates_a_new_version(service: ScreenerService) -> Non
 
 
 def test_create_run_snapshots_the_folder(service: ScreenerService, uow_factory) -> None:  # noqa: ANN001
-    """A run is a defined set of candidates at a point in time (§16.2)."""
+    """A run is a defined set of candidates at a point in time (16.2)."""
     position_id, rubric_id = approved_position(service)
     resumes_for("REQ-1", count=5)
 
@@ -446,7 +446,7 @@ def test_weight_and_must_have_are_rejoined_from_the_rubric(
 def test_escalation_rate_is_reported_live(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
-    """Surfaced during the run, not discovered at the end (§18.2)."""
+    """Surfaced during the run, not discovered at the end (18.2)."""
     run_id = _seed_run_with_candidates(service, uow_factory)
 
     assert service.run_status(run_id).escalation_rate == pytest.approx(1 / 3, abs=0.01)
@@ -458,7 +458,7 @@ def test_escalation_rate_is_reported_live(
 def test_purge_removes_trace_files_from_disk(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork], tmp_path: Path
 ) -> None:
-    """The step §12.6 calls easy to forget and fatal to omit.
+    """The step 12.6 calls easy to forget and fatal to omit.
 
     Clearing database columns while a full copy of the resume sits in a trace
     file leaves erasure looking implemented — worse than absent, because it gets
@@ -553,9 +553,9 @@ def test_a_digest_that_drifts_from_the_pin_is_reported(
 
 
 def test_the_service_never_imports_the_pipeline() -> None:
-    """§14's hard rule: it enqueues, the worker executes.
+    """14's hard rule: it enqueues, the worker executes.
 
-    A service that screens collapses the process boundaries in §2 and makes the
+    A service that screens collapses the process boundaries in 2 and makes the
     API unresponsive for the length of a 78-minute batch. Enforced fully by
     `test_layering.py` at step 20; asserted here because this is the module the
     rule is about.

@@ -1,4 +1,4 @@
-"""Persistence, cache, transactions and erasure (spec §12, build gate §20 step 10).
+"""Persistence, cache, transactions and erasure (spec 12, build gate 20 step 10).
 
 The gate names four things: cache hit/miss across all 8 key fields, transient
 flags not cached, audit triggers rejecting UPDATE/DELETE, and override+audit
@@ -174,7 +174,7 @@ def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> Non
 
 
 def test_an_unmigrated_database_refuses_to_start(tmp_path: Path) -> None:
-    """A schema/code mismatch on candidate data is an integrity incident (§12.1).
+    """A schema/code mismatch on candidate data is an integrity incident (12.1).
 
     Refusing beats warning, and refusing beats auto-migrating: applying a schema
     change as a side effect of process start runs it at an unplanned time on a
@@ -299,7 +299,7 @@ def test_cache_lookup_uses_the_partial_index(uow: UnitOfWork) -> None:
 
     Transient rows are excluded by `WHERE cacheable = 1` *in the index itself*.
     If the planner fell back to a table scan, exclusion would depend on the SQL
-    predicate alone, and the structural guarantee §12.5 describes would quietly
+    predicate alone, and the structural guarantee 12.5 describes would quietly
     become an ordinary filter that a future query could omit.
     """
     where = " AND ".join(f"{column} = ?" for column in results_store._CACHE_COLUMNS)  # noqa: SLF001
@@ -330,7 +330,7 @@ def test_the_cache_index_is_declared_partial(uow: UnitOfWork) -> None:
     [Flag.LLM_ERROR, Flag.SCHEMA_INVALID, Flag.PARSER_TIMEOUT, Flag.PARSER_CRASHED],
 )
 def test_transient_failures_are_invisible_to_the_cache(uow: UnitOfWork, flag: Flag) -> None:
-    """The §12.5 trap.
+    """The 12.5 trap.
 
     Cached, a single network blip comes back on resume as a permanent verdict —
     a real applicant sidelined forever by something that looks like a legitimate
@@ -521,7 +521,7 @@ def test_purge_clears_identifying_content_but_keeps_statistics(uow: UnitOfWork) 
 
 
 def test_purge_returns_trace_paths_for_deletion(uow: UnitOfWork, tmp_path: Path) -> None:
-    """Traces hold full resume text (§17).
+    """Traces hold full resume text (17).
 
     Clearing columns alone leaves erasure looking implemented while a complete
     second copy sits on disk — worse than not having it, because it gets

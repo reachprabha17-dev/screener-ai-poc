@@ -1,4 +1,4 @@
-"""Audit log (spec §17). Append-only, enforced by database triggers.
+"""Audit log (spec 17). Append-only, enforced by database triggers.
 
 This is the "who did what" stream, deliberately separate from the "what the
 system did" JSONL log. Different purposes, different mutability: this one records
@@ -7,7 +7,7 @@ while the operational log rotates.
 
 **Every append happens in the caller's transaction.** An audit row written in its
 own transaction can commit while the write it describes rolls back, or vice
-versa. The whole point of §12.2 is that the decision and the record of it land
+versa. The whole point of 12.2 is that the decision and the record of it land
 together or not at all.
 
 There is deliberately no `update` or `delete` here, and adding one would fail at

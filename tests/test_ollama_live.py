@@ -1,4 +1,4 @@
-"""Live Ollama checks (spec §11, build gate §20 step 7 `[assert]`).
+"""Live Ollama checks (spec 11, build gate 20 step 7 `[assert]`).
 
 Skipped when Ollama is unreachable, so the four build gates stay runnable on a
 machine without the model loaded. These are the tests that resolve
@@ -58,7 +58,7 @@ def test_the_character_heuristic_would_have_under_counted(llm: OllamaClient) -> 
     """Why the fallback is a fallback.
 
     Under-counting permits a *silent* context overflow that bypasses
-    `BUDGET_EXCEEDED` — the one outcome §10.1 exists to prevent. This records the
+    `BUDGET_EXCEEDED` — the one outcome 10.1 exists to prevent. This records the
     real gap on real text rather than asserting the divisor is fine.
     """
     text = "Python, Go, PostgreSQL, Redis, Kubernetes, Terraform, gRPC, CI/CD. " * 60
@@ -68,7 +68,7 @@ def test_the_character_heuristic_would_have_under_counted(llm: OllamaClient) -> 
 
     assert exact > 0
     # Not an assertion that the heuristic is safe — it is the measurement that
-    # says recalibrate before ever relying on it (§10.1).
+    # says recalibrate before ever relying on it (10.1).
     assert estimated != exact
 
 

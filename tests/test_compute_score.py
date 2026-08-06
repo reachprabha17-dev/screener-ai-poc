@@ -1,4 +1,4 @@
-"""Scoring arithmetic and the must-have gate (spec §10.4, §18.3)."""
+"""Scoring arithmetic and the must-have gate (spec 10.4, 18.3)."""
 
 import pytest
 from conftest import make_rubric, score_all, scored
@@ -12,7 +12,7 @@ VERDICTS: list[Verdict] = ["strong", "partial", "none"]
 
 
 def test_worked_example_from_spec() -> None:
-    """§10.4: C1(mh,3) C2(mh,3) C3(mh,2) C4(1) / strong strong none strong."""
+    """10.4: C1(mh,3) C2(mh,3) C3(mh,2) C4(1) / strong strong none strong."""
     rubric = make_rubric(("C1", True, 3), ("C2", True, 3), ("C3", True, 2), ("C4", False, 1))
     result = compute_score(score_all(rubric, "strong", "strong", "none", "strong"), rubric)
 
@@ -39,12 +39,12 @@ def test_all_none_is_zero() -> None:
 
 
 def test_a_missing_must_have_does_not_escalate() -> None:
-    """The partition *is* the outcome (§10.4) — no human adjudication needed.
+    """The partition *is* the outcome (10.4) — no human adjudication needed.
 
     Measured regression: flagging these for review drove the end-to-end
     escalation rate to 100% against a 3% budget. On any real corpus most
     applicants fail at least one hard requirement, so escalating them all puts
-    the entire run in the review queue — the §18.2 failure where oversight
+    the entire run in the review queue — the 18.2 failure where oversight
     collapses into rubber-stamping because nobody can read that much.
 
     Escalation is for what the *system* could not resolve, not for candidates it
@@ -71,7 +71,7 @@ def test_partial_must_have_stays_qualified_but_escalates() -> None:
 def test_denominator_is_the_rubric_not_the_returned_set() -> None:
     """A missing criterion must not shrink the denominator and inflate the score.
 
-    Guards the arithmetic independently of validate_verdicts (§10.3): if that
+    Guards the arithmetic independently of validate_verdicts (10.3): if that
     check were ever bypassed, a dropped criterion would otherwise read as a
     perfect score.
     """
@@ -91,7 +91,7 @@ def test_empty_rubric_raises() -> None:
         compute_score([], rubric)
 
 
-# --- Property-based invariants (§18.3) --------------------------------------
+# --- Property-based invariants (18.3) --------------------------------------
 
 
 @given(

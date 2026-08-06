@@ -1,4 +1,4 @@
-"""Structured logging and the trace store (spec §17, build gate §20 step 17).
+"""Structured logging and the trace store (spec 17, build gate 20 step 17).
 
 The gate is blunt: **purge deletes traces — assert no trace file contains the
 name**. That test is the last section, and it searches the whole trace directory
@@ -6,7 +6,7 @@ for the candidate's name rather than checking that a particular row went away.
 Checking the index would prove the index was updated; the thing that matters is
 whether a copy of the resume is still on disk.
 
-§17 calls this out as the step that is easy to forget and the one that would make
+17 calls this out as the step that is easy to forget and the one that would make
 the whole control ineffective: a trace directory outside the erasure path defeats
 `purge_candidate` **while appearing implemented**, which is worse than having no
 traces, because it gets reported as done.
@@ -119,7 +119,7 @@ def everything_under(root: Path) -> str:
 
 
 def test_a_trace_captures_what_was_actually_sent(workspace: Path) -> None:
-    """What makes offline evaluation possible without re-running a GPU batch (§18)."""
+    """What makes offline evaluation possible without re-running a GPU batch (18)."""
     path = TraceWriter().write("run1", trace_record())
 
     assert path is not None
@@ -155,7 +155,7 @@ def test_one_file_per_candidate_per_run(workspace: Path) -> None:
 
 
 def test_traces_are_not_world_readable(workspace: Path) -> None:
-    """`data/` holds candidate PII in plaintext; traces are part of that (§19)."""
+    """`data/` holds candidate PII in plaintext; traces are part of that (19)."""
     path = TraceWriter().write("run1", trace_record())
 
     assert path is not None
@@ -174,7 +174,7 @@ def test_purge_leaves_no_trace_file_containing_the_name(
     Checking that a row disappeared would prove the index was updated. What
     matters is whether a copy of the resume is still on disk — and a trace
     directory outside the erasure path defeats `purge_candidate` while appearing
-    implemented, which §17 calls worse than having no traces at all.
+    implemented, which 17 calls worse than having no traces at all.
     """
     trace_root = Path(settings.trace_dir)
     path = TraceWriter().write("run1", trace_record())
@@ -235,7 +235,7 @@ def test_purge_does_not_touch_another_candidates_trace(
 
 
 def test_old_traces_are_prunable(workspace: Path) -> None:
-    """Retention shorter than the audit log (§17).
+    """Retention shorter than the audit log (17).
 
     The audit trail records decisions and must outlive the raw text those
     decisions were made from.
@@ -271,7 +271,7 @@ def test_events_are_json_and_carry_their_context(workspace: Path) -> None:
     and it is exactly the question that matters.
 
     Read from the file rather than captured stdout: `data/logs/screener.jsonl`
-    is where §17 says these go, and it is what an operator will actually grep.
+    is where 17 says these go, and it is what an operator will actually grep.
     """
     import logging as stdlib_logging
 

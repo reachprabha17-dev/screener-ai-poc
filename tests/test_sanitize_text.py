@@ -1,4 +1,4 @@
-"""Unicode sanitization (spec §8.6, build gate §20 step 4).
+"""Unicode sanitization (spec 8.6, build gate 20 step 4).
 
 The gate names three fixture families: bidi, zero-width, and homoglyph. The first
 two are stripped and counted. The third is only *partly* handled by NFKC, and the
@@ -85,7 +85,7 @@ def test_nfkc_folds_compatibility_homoglyphs() -> None:
     """Fullwidth forms, mathematical alphanumerics and ligatures fold to ASCII.
 
     Without this, honest evidence quoting these characters would be unmatchable
-    in §10.5 against a document rendered any other way.
+    in 10.5 against a document rendered any other way.
     """
     cleaned, _ = sanitize("Ｐython 𝐆𝐨 certiﬁed")
 
@@ -116,7 +116,7 @@ def test_ideographic_space_normalizes_to_a_plain_space() -> None:
 def test_cyrillic_homoglyph_survives_nfkc() -> None:
     """Pinned deliberately. NFKC does not fold cross-script homoglyphs.
 
-    Anyone reading §8.6 and assuming sanitization neutralizes a Cyrillic ``а``
+    Anyone reading 8.6 and assuming sanitization neutralizes a Cyrillic ``а``
     is wrong, and this test is where they find out. Folding it would corrupt
     every legitimately Cyrillic name in the corpus, so detection is the answer,
     not transformation.

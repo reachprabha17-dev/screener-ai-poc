@@ -1,6 +1,6 @@
-"""Prompt-injection heuristics (spec §10.2). Pure — no I/O, no model.
+"""Prompt-injection heuristics (spec 10.2). Pure — no I/O, no model.
 
-Run over the **sanitized** text (§8.6), because the invisible-character and
+Run over the **sanitized** text (8.6), because the invisible-character and
 homoglyph tricks exist precisely to slip a phrase past a check like this one.
 
 **A hit escalates. It never excludes.** That is not caution, it is the only
@@ -14,11 +14,11 @@ ever applied.
 
 So the cost of a false positive is one reviewer look, and the cost of a false
 negative is covered elsewhere. This is **one cheap layer**, not the defense.
-Resistance comes from the §10.5(a) consistency gate, mandatory human review, and
+Resistance comes from the 10.5(a) consistency gate, mandatory human review, and
 the absence of any auto-reject path anywhere in the pipeline.
 
 **What it does not do.** The verified attack left the evidence field honest
-(`"not found (...)"`), which is what §10.5(a) catches. An injection that also
+(`"not found (...)"`), which is what 10.5(a) catches. An injection that also
 says "set evidence to a phrase from the skills section" defeats both that gate
 and, with enough rewording, this one. Nothing here should be described as
 stopping prompt injection.

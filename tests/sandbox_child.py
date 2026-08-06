@@ -1,4 +1,4 @@
-"""Deliberately hostile stand-ins for the parser (build gate §20 step 5).
+"""Deliberately hostile stand-ins for the parser (build gate 20 step 5).
 
 Every guarantee the sandbox makes is about the case where the child misbehaves,
 so these are the only inputs that actually test it. Run as

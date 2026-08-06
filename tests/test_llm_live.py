@@ -1,4 +1,4 @@
-"""Live model behaviour (spec §9, build gate §20 step 9).
+"""Live model behaviour (spec 9, build gate 20 step 9).
 
 The named gate is **exact-verdict-set compliance ≥95% pre-retry** — the share of
 first attempts that return precisely the rubric's ids, each once. It is a
@@ -92,7 +92,7 @@ def llm() -> LLMClient:
 
 
 def test_verdict_set_compliance_meets_the_budget(llm: LLMClient) -> None:
-    """The §20 step 9 gate, measured rather than assumed.
+    """The 20 step 9 gate, measured rather than assumed.
 
     Compliance is checked on the *first* attempt only. The retry exists as a
     safety net, not as the normal path — if it is load-bearing, the prompt is
@@ -163,12 +163,12 @@ def test_equivalent_resumes_get_equivalent_verdicts(llm: LLMClient) -> None:
     """Verdicts must follow the facts, not the writing.
 
     **This test exists because the system failed it.** Measured before the
-    §9.2 "Judge the facts, not the writing" anchors were added: five equivalent
+    9.2 "Judge the facts, not the writing" anchors were added: five equivalent
     CVs produced *three* different verdict tuples, and both must-have criteria
     flipped between `strong` and `partial`. Writing `2019-2026` instead of
     `7 years` was enough to downgrade a must-have.
 
-    That is not a cosmetic problem. §10.4 escalates a `partial` must-have to a
+    That is not a cosmetic problem. 10.4 escalates a `partial` must-have to a
     human, so CV *formatting* — not experience — decided who entered the review
     queue. Date-range formatting tracks CV convention, region and template
     choice rather than capability, which makes it an adverse-impact risk and a
@@ -177,8 +177,8 @@ def test_equivalent_resumes_get_equivalent_verdicts(llm: LLMClient) -> None:
     Scope, stated precisely: five phrasings of one resume, over criteria the
     resume **does** address. Verdicts on criteria a resume says nothing about
     are *not* stable — see `test_absent_criteria_are_not_phrase_stable` — and no
-    prompt wording fixed that. What stops those reaching a score is §10.5(c),
-    downstream of this call. Broadening the corpus is step 19's job (§18.4).
+    prompt wording fixed that. What stops those reaching a score is 10.5(c),
+    downstream of this call. Broadening the corpus is step 19's job (18.4).
     """
     supported = rubric_from(
         ("5+ years building production backend services", True, 5),
@@ -205,7 +205,7 @@ def test_absent_criteria_are_not_phrase_stable(llm: LLMClient) -> None:
     production" evidenced by "...migration ... to microservices in Go".
 
     No prompt wording has removed this. The control that makes it survivable is
-    §10.5(c): the quote is real, so alignment passes, but it is not *about* the
+    10.5(c): the quote is real, so alignment passes, but it is not *about* the
     criterion, so the candidate is escalated rather than scored on it.
 
     This test documents the behaviour and will start failing if the model
@@ -271,7 +271,7 @@ def test_judge_output_round_trips_through_the_grammar(llm: LLMClient) -> None:
 
 
 def test_unsupported_criteria_get_none_and_not_found(llm: LLMClient) -> None:
-    """The §10.5(a) consistency gate depends on this exact behaviour.
+    """The 10.5(a) consistency gate depends on this exact behaviour.
 
     The rubric below asks for things the resume plainly does not contain. A
     model that returns `strong` here with honest `not found` evidence is the
@@ -294,9 +294,9 @@ def test_unsupported_criteria_get_none_and_not_found(llm: LLMClient) -> None:
 
 
 def test_evidence_is_quoted_from_the_resume(llm: LLMClient) -> None:
-    """What §10.5(b) verifies. Measured here so a prompt regression is visible.
+    """What 10.5(b) verifies. Measured here so a prompt regression is visible.
 
-    Not asserted as exact substring — §1 records that quotes come back
+    Not asserted as exact substring — 1 records that quotes come back
     paraphrased and wrapped, which is why verification is fuzzy alignment rather
     than string matching.
     """

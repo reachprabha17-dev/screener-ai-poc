@@ -1,4 +1,4 @@
-"""Evidence verification (spec §10.5). Pure — no I/O, no model.
+"""Evidence verification (spec 10.5). Pure — no I/O, no model.
 
 Two checks, deliberately different in strictness *and in consequence*:
 
@@ -166,7 +166,7 @@ def evidence_mentions_criterion(criterion_text: str, evidence: str) -> bool:
     **The gap this closes.** `align()` answers "did this text appear in the
     document" and nothing else. It cannot tell a supporting quote from a real,
     verbatim, correctly-copied sentence about something entirely different — and
-    that failure passes every other check in §10.5.
+    that failure passes every other check in 10.5.
 
     Measured on this system: the model returned `strong` for **"Rust in
     production"** on a resume containing no Rust, evidenced by
@@ -183,7 +183,7 @@ def evidence_mentions_criterion(criterion_text: str, evidence: str) -> bool:
 
     **Synonyms will trip it**: a criterion saying "container orchestration"
     evidenced by "Kubernetes platform" shares no word. That is why a failure
-    escalates to a human and never moves a verdict — same reasoning as §10.5(b).
+    escalates to a human and never moves a verdict — same reasoning as 10.5(b).
     """
     topic = {t for t in normalize_tokens(criterion_text) if t not in _TOPIC_STOPWORDS}
     if not topic:
@@ -246,7 +246,7 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
     for criterion in rubric.criteria:
         cv = returned.get(criterion.id)
         if cv is None:
-            # validate_verdicts (§10.3) owns this case and will have flagged the
+            # validate_verdicts (10.3) owns this case and will have flagged the
             # candidate already; scoring the gap as absence would inflate nothing
             # here but must never look like a real judgment.
             continue

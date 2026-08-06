@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Local development runner (spec §22, §24.6).
+# Local development runner (spec 22, 24.6).
 #
 # One script instead of three remembered command lines, because the *order*
 # matters and getting it wrong is silent rather than loud:
@@ -8,7 +8,7 @@
 #   - the worker stops first and starts last. It is the only process that writes
 #     candidate results, so stopping it first means no job is half-written while
 #     the code underneath changes, and starting it last means the API has already
-#     passed the migration gate (§12.1).
+#     passed the migration gate (12.1).
 #   - the schema is migrated before anything serves. The API refuses to start
 #     against a stale schema; the worker does not, and would happily judge
 #     candidates against one.
@@ -104,7 +104,7 @@ start_ui() {
   port_busy "$UI_PORT" && die "port $UI_PORT is already in use by something this script did not start"
   banner ui
   # Streamlit resolves .streamlit/config.toml from the working directory, so the
-  # settings that matter are also passed as env vars (§22.2, decision #1).
+  # settings that matter are also passed as env vars (22.2, decision #1).
   SCREENER_API_URL="$API_URL" \
   STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
   STREAMLIT_SERVER_HEADLESS=true \
@@ -196,7 +196,7 @@ cmd_logs() {
 }
 
 cmd_check() {
-  # The same four gates the build order runs at every step (§20). Ordered
+  # The same four gates the build order runs at every step (20). Ordered
   # cheapest-first so a formatting slip does not cost a full test run.
   "$VENV/ruff" format --check .
   "$VENV/ruff" check .

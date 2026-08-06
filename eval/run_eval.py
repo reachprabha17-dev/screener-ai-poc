@@ -1,4 +1,4 @@
-"""Reproducibility measurement (spec §10.8, build gate §20 step 19).
+"""Reproducibility measurement (spec 10.8, build gate 20 step 19).
 
 `temperature=0` does **not** give bit-identical output from llama.cpp. Parallel
 slot assignment, KV-cache reuse and float reduction order on GPU all vary. So the
@@ -83,7 +83,7 @@ def measure(llm: LLMClient, corpus: Corpus, repeats: int) -> Stability:
             runs.append({c.id: c.verdict for c in judged.output.criteria})
 
             # Band is what a reviewer sees, so stability has to be measured on
-            # the band — not on the float behind it (§10.6).
+            # the band — not on the float behind it (10.6).
             verified = verify_evidence(judged.output, case.resume, rubric)
             if verified.scoreable and verified.criteria:
                 scored = compute_score(verified.criteria, rubric)

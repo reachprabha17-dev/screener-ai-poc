@@ -1,4 +1,4 @@
-# Streamlit configuration (spec decision #1, §22.2).
+# Streamlit configuration (spec decision #1, 22.2).
 #
 # Streamlit phones home by default. On first run it prints:
 #
@@ -19,7 +19,7 @@
 gatherUsageStats = false
 
 [server]
-# Loopback only, matching the API (§15.2). Auth is stubbed, so anything that can
+# Loopback only, matching the API (15.2). Auth is stubbed, so anything that can
 # reach this port can read every candidate in the system.
 address = "127.0.0.1"
 headless = true

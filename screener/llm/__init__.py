@@ -1,9 +1,9 @@
-"""Prompt loading and hashing (spec §9).
+"""Prompt loading and hashing (spec 9).
 
 Prompts live as files in ``screener/prompts/`` rather than as string literals in
 Python, because they are **versioned inputs to a decision**, not code. A prompt
 edit changes what the system concludes about a person, so it is hashed and the
-hash goes into the run record and the cache key (§6). Change a prompt and every
+hash goes into the run record and the cache key (6). Change a prompt and every
 cached judgment made under the old one stops matching — which is correct, and is
 the whole reason the hash exists.
 

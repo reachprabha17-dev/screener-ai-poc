@@ -1,4 +1,4 @@
-"""The screening daemon (spec §16, build gate §20 step 14).
+"""The screening daemon (spec 16, build gate 20 step 14).
 
 The gate names four properties: **resumes a batch killed at 50%**, **no duplicate
 work**, **no lost jobs**, and **folder rescan**.
@@ -48,7 +48,7 @@ RESUME = (
 
 # One quote per criterion, each genuinely about that criterion and present in
 # RESUME. A single generic quote reused across all four is exactly the
-# verified-but-irrelevant pattern §10.5(c) exists to catch.
+# verified-but-irrelevant pattern 10.5(c) exists to catch.
 EVIDENCE_BY_CRITERION = {
     "C1": "Asha Nair. Senior Backend Engineer with 7 years of experience",
     "C2": "Owned the Kubernetes platform for 12 services",
@@ -269,7 +269,7 @@ def test_a_second_pass_over_a_finished_run_does_nothing(
 def test_a_rerun_over_the_same_folder_hits_the_cache(
     worker: Worker, service: ScreenerService, llm: FakeLLM
 ) -> None:
-    """The point of excluding `run_id` from the cache key (§12.5).
+    """The point of excluding `run_id` from the cache key (12.5).
 
     Same files, same rubric, same model, same prompt — the judgments are already
     known, so a second run costs nothing but bookkeeping.
@@ -333,7 +333,7 @@ def test_files_added_mid_run_are_picked_up_by_rescan(
     worker: Worker, service: ScreenerService
 ) -> None:
     """Never silently. A ranking over a set that changed underneath it describes
-    nothing (§16.2)."""
+    nothing (16.2)."""
     run_id = seed_run(service, count=2)
     drain(worker)
     assert service.run_status(run_id).status == "completed"
@@ -370,7 +370,7 @@ def test_an_infrastructure_failure_returns_the_job_for_retry(
 def test_a_persistently_failing_job_stops_at_the_attempt_cap(
     worker: Worker, service: ScreenerService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A file that reliably kills the worker must not loop forever (§16.5)."""
+    """A file that reliably kills the worker must not loop forever (16.5)."""
     run_id = seed_run(service, count=1)
     monkeypatch.setattr(
         "screener.worker_loop.screen_one",
@@ -406,7 +406,7 @@ def test_one_bad_file_does_not_stop_the_batch(worker: Worker, service: ScreenerS
 def test_a_full_disk_stops_the_worker_claiming(
     worker: Worker, service: ScreenerService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A full disk mid-batch is recoverable only if the worker stopped first (§17)."""
+    """A full disk mid-batch is recoverable only if the worker stopped first (17)."""
     run_id = seed_run(service, count=2)
     monkeypatch.setattr(settings, "min_free_disk_gb", 10**9)
 
@@ -537,7 +537,7 @@ def _only_run(service: ScreenerService) -> str:
     return str(runs[0]["id"])
 
 
-# --- traces (§17) ------------------------------------------------------------
+# --- traces (17) ------------------------------------------------------------
 
 
 def test_the_worker_writes_and_indexes_a_trace(
@@ -546,7 +546,7 @@ def test_the_worker_writes_and_indexes_a_trace(
     """Both, or neither is useful.
 
     A trace on disk with no index row is resume text nothing knows about —
-    `purge_candidate` would report success and leave a full copy behind (§17).
+    `purge_candidate` would report success and leave a full copy behind (17).
     """
     from screener.storage import traces_store
 

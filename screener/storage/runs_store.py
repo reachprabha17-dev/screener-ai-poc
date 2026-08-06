@@ -1,4 +1,4 @@
-"""Runs — the reproducibility record (spec §12.4, §16.4).
+"""Runs — the reproducibility record (spec 12.4, 16.4).
 
 A run row is not bookkeeping. It freezes every input that determined the output:
 model name and digest, prompt hash, `num_ctx`, `num_predict`, seed,
@@ -7,7 +7,7 @@ is answerable only if those values were captured at the time — the model tag w
 have moved, the prompt will have been edited, and neither leaves a trace anywhere
 else.
 
-Status transitions follow §16.4: pending → running → completed, with aborted
+Status transitions follow 16.4: pending → running → completed, with aborted
 (resumable) and failed (needs investigation, not blind resumption) as terminal
 alternatives.
 """
@@ -89,7 +89,7 @@ def set_status(tx: Tx, run_id: str, status: str) -> None:
 def set_rates(
     tx: Tx, run_id: str, *, escalation_rate: float | None, reproducibility_rate: float | None
 ) -> None:
-    """Surfaced, not buried (§18.2)."""
+    """Surfaced, not buried (18.2)."""
     tx.execute(
         "UPDATE runs SET escalation_rate = ?, reproducibility_rate = ? WHERE id = ?",
         (escalation_rate, reproducibility_rate, run_id),

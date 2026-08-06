@@ -1,4 +1,4 @@
-"""The work queue (spec §16, build gate §20 step 11).
+"""The work queue (spec 16, build gate 20 step 11).
 
 The gate names four things: atomic claim, **startup reclaim after a simulated
 `kill -9`**, the attempt cap, and run status transitions.
@@ -119,7 +119,7 @@ def resumes(folder: Path, names: tuple[str, ...]) -> Path:
     return folder
 
 
-# --- snapshot (§16.2) --------------------------------------------------------
+# --- snapshot (16.2) --------------------------------------------------------
 
 
 def test_snapshot_queues_one_job_per_eligible_file(uow: UnitOfWork, tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_snapshot_recurses(uow: UnitOfWork, tmp_path: Path) -> None:
 def test_snapshot_is_idempotent_which_is_what_makes_rescan_work(
     uow: UnitOfWork, tmp_path: Path
 ) -> None:
-    """Rescan is the same call. It inserts only what is new (§16.2)."""
+    """Rescan is the same call. It inserts only what is new (16.2)."""
     seed_run(uow)
     folder = resumes(tmp_path / "REQ-1", ("a.pdf", "b.pdf"))
 
@@ -308,7 +308,7 @@ def test_empty_queue_returns_none_rather_than_blocking(uow: UnitOfWork) -> None:
         assert jobs_store.claim_next(tx, WORKER) is None
 
 
-# --- scheduling (§16.3) ------------------------------------------------------
+# --- scheduling (16.3) ------------------------------------------------------
 
 
 def test_a_small_run_jumps_ahead_of_a_mass_posting(uow: UnitOfWork) -> None:
@@ -389,7 +389,7 @@ def test_a_retryable_failure_returns_the_job_to_the_queue(uow: UnitOfWork) -> No
 
 
 def test_a_poison_file_stops_retrying_at_the_cap(uow: UnitOfWork) -> None:
-    """A file that reliably kills the parser must not loop forever (§16.5)."""
+    """A file that reliably kills the parser must not loop forever (16.5)."""
     seed_run(uow)
     add_jobs(uow, "run1", 1)
 
@@ -532,7 +532,7 @@ def test_reclaim_leaves_other_workers_jobs_alone(uow: UnitOfWork) -> None:
 
 
 def test_heartbeat_sequence_advances(uow: UnitOfWork) -> None:
-    """A monotonic counter, not a timestamp — immune to a clock step (§16.5)."""
+    """A monotonic counter, not a timestamp — immune to a clock step (16.5)."""
     seed_run(uow)
     add_jobs(uow, "run1", 1)
     with uow as tx:
@@ -571,7 +571,7 @@ def test_a_silent_worker_is_reclaimed(uow: UnitOfWork) -> None:
         assert jobs_store.reclaim_if_unchanged(tx, job.id, observed) is True
 
 
-# --- gate: run status transitions (§16.4) ------------------------------------
+# --- gate: run status transitions (16.4) ------------------------------------
 
 
 def test_a_run_is_complete_only_when_nothing_is_in_flight(uow: UnitOfWork) -> None:
@@ -624,7 +624,7 @@ def test_an_empty_run_is_not_reported_complete(uow: UnitOfWork) -> None:
 
 
 def test_aborting_a_run_returns_in_flight_jobs_to_pending(uow: UnitOfWork) -> None:
-    """Aborted runs are resumable (§16.4)."""
+    """Aborted runs are resumable (16.4)."""
     seed_run(uow)
     add_jobs(uow, "run1", 3)
     with uow as tx:

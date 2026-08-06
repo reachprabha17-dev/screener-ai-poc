@@ -1,4 +1,4 @@
-"""Verdict set integrity (spec §10.3). Pure — no I/O, no model.
+"""Verdict set integrity (spec 10.3). Pure — no I/O, no model.
 
 The JSON schema handed to Ollama constrains *shape*: a list of objects, each with
 an id, a verdict from three values, and an evidence string under 300 characters.

@@ -1,22 +1,22 @@
-"""Unicode sanitization (spec §8.6). Pure — no I/O, no model.
+"""Unicode sanitization (spec 8.6). Pure — no I/O, no model.
 
 Applied to extracted text **before** injection detection, redaction, budgeting or
-evidence matching, and the string it returns is the same one §10.5 later matches
+evidence matching, and the string it returns is the same one 10.5 later matches
 against. Everything downstream assumes it has already run.
 
 **Why this is load-bearing.** Zero-width characters and bidi overrides let a PDF
 display one thing to a reviewer and deliver another to the extractor — so a
 reviewer performing human oversight is reading text that is not what the model
 judged. That is oversight failing while appearing to work, which is the same
-failure mode §18.2 describes for the review queue. NFKC additionally folds the
+failure mode 18.2 describes for the review queue. NFKC additionally folds the
 compatibility homoglyphs (fullwidth forms, mathematical alphanumerics,
-ligatures) that would otherwise make honest evidence unmatchable in §10.5.
+ligatures) that would otherwise make honest evidence unmatchable in 10.5.
 
 **What NFKC does not do.** It does not fold cross-script homoglyphs: Cyrillic
 ``а`` (U+0430) survives normalization looking exactly like Latin ``a``. Mapping
 it would corrupt every legitimately Cyrillic name in the corpus, so this module
 does not transform it — ``find_mixed_script_tokens`` reports it instead, for the
-same reason §10.2 escalates rather than excludes. A word mixing scripts is worth
+same reason 10.2 escalates rather than excludes. A word mixing scripts is worth
 a human look; it is never grounds for an adverse outcome on its own.
 """
 

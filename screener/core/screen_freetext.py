@@ -1,4 +1,4 @@
-"""Free-text output screening (spec §10.7). Pure — no I/O, no model.
+"""Free-text output screening (spec 10.7). Pure — no I/O, no model.
 
 Omitting a sentiment *field* from the schema does not stop the model putting
 sentiment somewhere else. `JudgeOutput.summary` and `notable_strengths` are
@@ -16,7 +16,7 @@ the right response rather than escalation: there is no adverse outcome to guard
 against, and leaving the text in place is how a protected characteristic reaches
 a human reviewer's screen and anchors their judgement.
 
-The removed text goes to the **audit log, never to `candidates`** (§17). It is
+The removed text goes to the **audit log, never to `candidates`** (17). It is
 the evidence for correcting the prompt; storing it on the candidate row would
 re-import the exact content this function exists to remove.
 """

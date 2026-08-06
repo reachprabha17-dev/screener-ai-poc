@@ -1,4 +1,4 @@
-"""Rubric approval — the human gate in front of an LLM (spec §9.1, §15.1)."""
+"""Rubric approval — the human gate in front of an LLM (spec 9.1, 15.1)."""
 
 from fastapi import APIRouter, Depends
 

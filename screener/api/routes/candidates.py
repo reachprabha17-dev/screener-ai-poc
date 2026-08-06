@@ -1,4 +1,4 @@
-"""Candidate reads, overrides, and erasure (spec §15.1)."""
+"""Candidate reads, overrides, and erasure (spec 15.1)."""
 
 from fastapi import APIRouter, Depends
 
@@ -35,9 +35,9 @@ def purge_candidate(
     actor: Actor = Depends(get_actor),
     service: ScreenerService = Depends(get_service),
 ) -> CountResponse:
-    """Erase a candidate everywhere, trace files included (§12.6).
+    """Erase a candidate everywhere, trace files included (12.6).
 
     Kept unauthenticated-but-present in the PoC deliberately: it is what makes
-    the data disposable, and it is cheap now and expensive to retrofit (§21).
+    the data disposable, and it is cheap now and expensive to retrofit (21).
     """
     return CountResponse(count=service.purge_candidate(file_sha256, actor))

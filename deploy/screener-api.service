@@ -1,5 +1,5 @@
 [Unit]
-Description=Screener API — control plane, enqueues only (spec §15)
+Description=Screener API — control plane, enqueues only (spec 15)
 After=network.target
 
 [Service]
@@ -12,10 +12,10 @@ Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/opt/screener/.env
 
 # Bound to loopback. There is no external listener before real authentication
-# exists (§15.2) — `auth_mode=stub` trusts a header, so anything that can reach
+# exists (15.2) — `auth_mode=stub` trusts a header, so anything that can reach
 # this port is an admin.
 # `--factory`: the app is built by a function, not created at import. The
-# migration gate (§12.1) therefore runs once at startup rather than as an
+# migration gate (12.1) therefore runs once at startup rather than as an
 # import side effect.
 ExecStart=/opt/screener/.venv/bin/uvicorn screener.api.app:create_app --factory \
     --host 127.0.0.1 --port 8000

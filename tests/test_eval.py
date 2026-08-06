@@ -1,4 +1,4 @@
-"""The evaluation harness (spec §18, build gate §20 step 19).
+"""The evaluation harness (spec 18, build gate 20 step 19).
 
 The harness is the thing that decides whether this system is allowed to be
 trusted, so its own correctness matters more than most. Two properties get the
@@ -13,7 +13,7 @@ verdict dominates — two labellers who both answer `none` to everything agree
 100% of the time and have demonstrated nothing.
 
 The measurement scripts themselves run against fakes here; their real output is
-the `live` runs recorded in §18.2.1 and §10.8.
+the `live` runs recorded in 18.2.1 and 10.8.
 """
 
 import json
@@ -83,7 +83,7 @@ def test_the_shipped_corpus_loads_and_declares_itself() -> None:
 
 
 def test_the_seed_corpus_admits_it_is_not_a_substitute() -> None:
-    """§18.1 requires two independent labellers.
+    """18.1 requires two independent labellers.
 
     The seed set has one, and says so in terms nobody can quote past. A corpus
     that overstates itself is worse than none, because the number it produces
@@ -97,7 +97,7 @@ def test_the_seed_corpus_admits_it_is_not_a_substitute() -> None:
 
 
 def test_the_corpus_covers_the_verified_failure_modes() -> None:
-    """Every §1 failure mode that reached a candidate needs a regression case."""
+    """Every 1 failure mode that reached a candidate needs a regression case."""
     ids = {case.id for case in load().cases}
 
     for required in (
@@ -136,7 +136,7 @@ def test_a_corpus_without_labellers_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_missing_corpus_says_why_it_matters(tmp_path: Path) -> None:
-    with pytest.raises(CorpusError, match="§18.1"):
+    with pytest.raises(CorpusError, match="18.1"):
         load(tmp_path / "nothing.jsonl")
 
 
@@ -298,7 +298,7 @@ def test_escalation_reports_its_drivers_not_just_a_rate() -> None:
 
 
 def test_a_missing_must_have_is_not_counted_as_an_escalation() -> None:
-    """§10.4: the partition *is* the outcome.
+    """10.4: the partition *is* the outcome.
 
     Counting it here would restate the bug that drove the rate to 100%.
     """

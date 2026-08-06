@@ -1,4 +1,4 @@
-"""Resume → per-criterion verdicts (spec §9.2, §10.3). The core LLM call.
+"""Resume → per-criterion verdicts (spec 9.2, 10.3). The core LLM call.
 
 This module owns the *shape* of the judging request and nothing else. It does not
 score, rank, verify evidence, or decide anything about a candidate — those live
@@ -6,7 +6,7 @@ in `core/`, deliberately, where they are pure and testable without a GPU. What
 happens here is: assemble a prompt, constrain the decoder to a schema, and hand
 back what came out.
 
-**The retry is the one piece of control flow that belongs here.** §10.3 allows
+**The retry is the one piece of control flow that belongs here.** 10.3 allows
 exactly one corrective attempt when the returned criterion ids do not match the
 rubric, because the grammar cannot express set membership and the failure
 inflates scores. Retrying is only meaningful while the request is still in hand,
@@ -34,9 +34,9 @@ PROMPT_NAME = "judge_resume"
 
 # The resume sits inside explicit delimiters that appear nowhere else in the
 # prompt, so "where the untrusted data starts and stops" is unambiguous to the
-# model. This is scaffolding for the §9.2 clause that names them, not a defence
+# model. This is scaffolding for the 9.2 clause that names them, not a defence
 # on its own — a resume can write these markers too, which is exactly why the
-# real controls are the §10.5(a) consistency gate and mandatory human review.
+# real controls are the 10.5(a) consistency gate and mandatory human review.
 RESUME_OPEN = "<<<RESUME"
 RESUME_CLOSE = "RESUME>>>"
 
@@ -117,7 +117,7 @@ def judge_resume(client: LLMClient, resume_text: str, rubric: Rubric) -> JudgeRe
 
 
 def judge_prompt_hash() -> str:
-    """Recorded per run and part of the cache key (§6)."""
+    """Recorded per run and part of the cache key (6)."""
     _, digest = load_prompt_with_hash(PROMPT_NAME)
     return digest
 

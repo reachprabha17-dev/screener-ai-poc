@@ -1,10 +1,10 @@
-"""HTTP client for the control plane (spec §2, decision #11).
+"""HTTP client for the control plane (spec 2, decision #11).
 
 **This is the only way the UI reaches anything.** No database driver, no
 `screener.storage`, no `screener.pipeline` — the boundary between the client and
 the data is a process boundary, not a convention.
 
-> A caveat worth stating, because §3.1 overstates it: `sqlite3` is in the Python
+> A caveat worth stating, because 3.1 overstates it: `sqlite3` is in the Python
 > standard library, so "the `ui` extra installs no database driver" cannot make
 > the database *unreachable*. It removes the temptation and the connection
 > string, but the boundary is ultimately enforced by `tests/test_layering.py`,

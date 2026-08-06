@@ -1,4 +1,4 @@
-"""Command line interface (spec §4, §14, build gate §20 step 16).
+"""Command line interface (spec 4, 14, build gate 20 step 16).
 
 **The break-glass path.** Everything here runs in-process against `service.py`
 and `pipeline.py` — no HTTP, no daemon. When the API will not start, when the
@@ -14,7 +14,7 @@ the API does.
 
 Two commands exist only here, because they run *before* anything else can:
 `migrate` and `seed-user`. The API and worker both refuse to start against a
-stale schema (§12.1), so the tool that fixes that cannot be one of them.
+stale schema (12.1), so the tool that fixes that cannot be one of them.
 """
 
 import json as jsonlib
@@ -95,7 +95,7 @@ def seed_user(
     id: Annotated[str, typer.Option("--id", help="Actor id")],  # noqa: A002 — the documented flag name
     name: Annotated[str, typer.Option("--name")] = "",
 ) -> None:
-    """Create the operator row every actor foreign key points at (§19)."""
+    """Create the operator row every actor foreign key points at (19)."""
     from screener.storage import positions_store
     from screener.storage.uow import unit_of_work
 
@@ -191,7 +191,7 @@ def approve_rubric(
     rubric_id: Annotated[str, typer.Argument()],
     actor: ActorOption = settings.dev_actor_id,
 ) -> None:
-    """Record a named human accepting the rubric (§9.1)."""
+    """Record a named human accepting the rubric (9.1)."""
     rubric = _service().approve_rubric(rubric_id, _actor(actor))
     typer.secho(f"Approved by {rubric.approved_by} at {rubric.approved_at}", fg=typer.colors.GREEN)
 
@@ -205,7 +205,7 @@ def create_run(
     rubric_id: Annotated[str, typer.Option("--rubric")],
     actor: ActorOption = settings.dev_actor_id,
 ) -> None:
-    """Snapshot the position's folder into jobs. A run is a fixed set (§16.2)."""
+    """Snapshot the position's folder into jobs. A run is a fixed set (16.2)."""
     run = _service().create_run(position_id, rubric_id, _actor(actor))
     status = _service().run_status(run.id)
     typer.secho(f"{run.id}  {status.total} file(s) queued", fg=typer.colors.GREEN)
@@ -308,7 +308,7 @@ def candidates(
     run_id: Annotated[str, typer.Argument()],
     csv_out: Annotated[Path | None, typer.Option("--csv", help="Write a CSV for audit")] = None,
 ) -> None:
-    """Three partitions, never one list (§10.6).
+    """Three partitions, never one list (10.6).
 
     On screen this prints bands. The numeric score goes to the CSV, where its
     provenance travels with it — three verdict levels cannot support a rendered
@@ -338,7 +338,7 @@ def purge(
     file_sha256: Annotated[str, typer.Argument()],
     actor: ActorOption = settings.dev_actor_id,
 ) -> None:
-    """Erase a candidate everywhere, trace files included (§12.6)."""
+    """Erase a candidate everywhere, trace files included (12.6)."""
     removed = _service().purge_candidate(file_sha256, _actor(actor))
     typer.secho(f"Purged. {removed} trace file(s) deleted.", fg=typer.colors.GREEN)
 
@@ -359,7 +359,7 @@ def override(
 
 
 def _report_escalation(rate: float) -> None:
-    """Printed on every result, not buried in a report (§18.2)."""
+    """Printed on every result, not buried in a report (18.2)."""
     line = f"needing review  {rate:.0%}  (budget {settings.escalation_budget:.0%})"
     if rate > settings.escalation_budget:
         typer.secho(line, fg=typer.colors.YELLOW)

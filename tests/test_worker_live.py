@@ -1,4 +1,4 @@
-"""A real batch, end to end (spec §16, build gate §20 step 14).
+"""A real batch, end to end (spec 16, build gate 20 step 14).
 
 Real files, real sandbox, real model, real database. Everything below has been
 exercised against fakes; this is the only test that proves a folder of resumes
@@ -158,7 +158,7 @@ def test_a_rerun_costs_no_inference(worker: Worker) -> None:
     """The cache, end to end. A second run over an unchanged folder is bookkeeping.
 
     This is what makes resumption after a crash cheap rather than a re-run of the
-    whole batch (§12.5).
+    whole batch (12.5).
     """
     import time
 

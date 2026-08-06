@@ -1,13 +1,13 @@
-"""Runs — created, started, watched, aborted, signed off (spec §15.1).
+"""Runs — created, started, watched, aborted, signed off (spec 15.1).
 
 **Every route here enqueues or reports. None of them screen.** Screening never
 runs in a request lifecycle and never in `BackgroundTasks`: a 78-minute batch
 tied to a request loses orphan reclaim and resumption, and dies with the process
-(§15.3). `POST /runs/{id}/start` marks a run ready and returns immediately; the
+(15.3). `POST /runs/{id}/start` marks a run ready and returns immediately; the
 daemon picks it up.
 
 Progress is **polling**, not WebSockets. A job updating every few seconds over
-78 minutes does not justify the complexity (§22.2).
+78 minutes does not justify the complexity (22.2).
 """
 
 from fastapi import APIRouter, Depends
@@ -32,7 +32,7 @@ def create_run(
     actor: Actor = Depends(get_actor),
     service: ScreenerService = Depends(get_service),
 ) -> RunResponse:
-    """Snapshots the position's folder into jobs. A run is a fixed set (§16.2)."""
+    """Snapshots the position's folder into jobs. A run is a fixed set (16.2)."""
     return to_run(service.create_run(request.position_id, request.rubric_id, actor))
 
 

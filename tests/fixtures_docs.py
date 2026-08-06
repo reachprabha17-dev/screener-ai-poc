@@ -1,8 +1,8 @@
-"""Realistic document fixtures for the parse path (build gate §20 step 8).
+"""Realistic document fixtures for the parse path (build gate 20 step 8).
 
 Separate from `fixtures_files.py`, which builds *malicious* files to be rejected
 before parsing. These are documents meant to be read successfully — or to fail in
-the specific, well-behaved ways §8.5 distinguishes.
+the specific, well-behaved ways 8.5 distinguishes.
 
 Generated rather than committed, for the same reason: a binary fixture is
 unreviewable, and `git diff` cannot show what changed inside a PDF.
@@ -55,7 +55,7 @@ def scanned_pdf(path: Path, text: str = RESUME_TEXT, pages: int = 1) -> Path:
 
     This is the fixture that proves the OCR path runs. Without it, a corpus of
     scanned CVs would extract as empty and the conclusion drawn would be about
-    model quality rather than about documents that were never read (§3.3).
+    model quality rather than about documents that were never read (3.3).
     """
     images = []
     for index in range(pages):

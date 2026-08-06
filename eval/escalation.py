@@ -1,4 +1,4 @@
-"""Escalation rate and its drivers (spec §18.2, §18.2.1).
+"""Escalation rate and its drivers (spec 18.2, 18.2.1).
 
 **The escalation rate is a design budget, not an emergent property.** Human
 oversight collapses into rubber-stamping the moment the review queue exceeds what
@@ -10,8 +10,8 @@ nothing you can act on. "12% need review" prompts a shrug; "9 of 12 are
 `EVIDENCE_UNVERIFIED`, and 7 of those 9 had a perfect match ratio and failed only
 on quote length" prompts a fix.
 
-`--sweep` exists for §18.2.1 specifically. `evidence_match_min_chars` was
-inherited from the rejected `or 25 chars` clause (§22.1), where 25 was a
+`--sweep` exists for 18.2.1 specifically. `evidence_match_min_chars` was
+inherited from the rejected `or 25 chars` clause (22.1), where 25 was a
 *sufficient* condition — "verified if at least 25 chars matched". Reusing it as a
 *necessary* condition was never measured. This replays the persisted
 `match_ratio` / `longest_span` / matched-character figures against candidate
@@ -55,7 +55,7 @@ class Escalations:
 
 
 def measure(llm: LLMClient, corpus: Corpus) -> Escalations:
-    """Run the real §10.5 → §10.4 path over the corpus.
+    """Run the real 10.5 → 10.4 path over the corpus.
 
     Deliberately not the full `screen_one`: the corpus holds resume *text*, not
     files, so intake and parsing are not exercised. Their failure modes are
@@ -110,7 +110,7 @@ def measure(llm: LLMClient, corpus: Corpus) -> Escalations:
         if review or not verified.scoreable:
             result.escalated += 1
             for flag in flags:
-                if flag is not Flag.MISSING_MUST_HAVE:  # not an escalation (§10.4)
+                if flag is not Flag.MISSING_MUST_HAVE:  # not an escalation (10.4)
                     result.drivers[flag.value] += 1
             if not flags:
                 result.drivers["partial_must_have"] += 1
@@ -126,7 +126,7 @@ def _judge(llm: LLMClient, resume: str, rubric: object):  # noqa: ANN202, ANN001
 
 
 def sweep(result: Escalations) -> None:
-    """What would change if `evidence_match_min_chars` moved? (§18.2.1)
+    """What would change if `evidence_match_min_chars` moved? (18.2.1)
 
     Reports, for each candidate threshold, how many quotes would fail — split by
     whether they also failed the ratio gate. A quote at `ratio = 1.00` failing
@@ -177,7 +177,7 @@ def report(result: Escalations) -> int:
 
     irrelevant = sum(1 for s in result.evidence_stats if not s[5])
     if irrelevant:
-        print(f"\n  {irrelevant} quote(s) failed the §10.5(c) relevance check")
+        print(f"\n  {irrelevant} quote(s) failed the 10.5(c) relevance check")
 
     if result.failures:
         print(f"\nfailed ({len(result.failures)})")
@@ -189,7 +189,7 @@ def report(result: Escalations) -> int:
         return 0
     print(
         f"\nOVER BUDGET — {result.rate:.0%} against {budget:.0%}. The answer is fewer, "
-        "better-targeted escalations, never a bigger queue (§18.2)."
+        "better-targeted escalations, never a bigger queue (18.2)."
     )
     return 1
 
@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=settings.chat_model)
     parser.add_argument("--corpus", type=Path, default=None)
-    parser.add_argument("--sweep", action="store_true", help="§18.2.1 threshold analysis")
+    parser.add_argument("--sweep", action="store_true", help="18.2.1 threshold analysis")
     args = parser.parse_args(argv)
 
     settings.chat_model = args.model

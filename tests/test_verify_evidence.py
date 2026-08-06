@@ -1,4 +1,4 @@
-"""Evidence verification (spec §10.5, build gate §20 step 3).
+"""Evidence verification (spec 10.5, build gate 20 step 3).
 
 The fixtures here are the ones the spec names as gates. Several encode holes that
 earlier drafts actually shipped, so they are regression tests, not illustrations.
@@ -181,7 +181,7 @@ def test_matching_is_against_the_redacted_text_actually_sent() -> None:
 
 
 def test_persisted_metrics_are_recorded_for_tuning() -> None:
-    """match_ratio and longest_span exist so thresholds are tuned against data (§18.2)."""
+    """match_ratio and longest_span exist so thresholds are tuned against data (18.2)."""
     out = judge(
         ("C1", "strong", "Built and operated payment systems handling 40 million requests per day"),
         ("C2", "none", "not found"),

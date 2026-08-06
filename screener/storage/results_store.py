@@ -1,4 +1,4 @@
-"""Candidate persistence, the cache, and erasure (spec §12.5, §12.6).
+"""Candidate persistence, the cache, and erasure (spec 12.5, 12.6).
 
 Three responsibilities, each with a trap.
 
@@ -70,7 +70,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
 
     `cacheable` is derived from the flags here rather than trusted from the
     caller — it is the one column that decides whether a failure becomes
-    permanent, and a caller that forgets it would produce exactly the §12.5 bug.
+    permanent, and a caller that forgets it would produce exactly the 12.5 bug.
     """
     cursor = tx.execute(
         "INSERT INTO candidates ("
@@ -139,7 +139,7 @@ def list_for_run(tx: Tx, run_id: str) -> list[Candidate]:
 
 
 def find_duplicates(tx: Tx, run_id: str, file_sha256: str) -> int:
-    """Count of byte-identical files already seen in this run (§12.6).
+    """Count of byte-identical files already seen in this run (12.6).
 
     Exact hash collision only. The same CV re-exported from Word has a different
     hash, so this is documented as weak in the UI rather than implying coverage

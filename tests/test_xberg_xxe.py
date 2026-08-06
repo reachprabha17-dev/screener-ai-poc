@@ -1,4 +1,4 @@
-"""xberg XML backend safety (spec §8.3 `[assert]`, build gate §20 step 5).
+"""xberg XML backend safety (spec 8.3 `[assert]`, build gate 20 step 5).
 
 The spec marks this **[assert]** — claimed, not demonstrated — and forbids
 treating it as load-bearing until resolved. It is resolved here, by attack rather
@@ -61,7 +61,7 @@ def test_external_file_entity_is_not_resolved(tmp_path: Path, secret: Path) -> N
 def test_external_http_entity_is_not_fetched(tmp_path: Path) -> None:
     """The SSRF case. Port 9 (discard) so a fetch attempt fails fast rather than hanging.
 
-    The parser needs no network under any deployment (§8.4). This asserts it does
+    The parser needs no network under any deployment (8.4). This asserts it does
     not want one either — belt and braces with the sandbox, which is what
     actually enforces it under tiers 1 and 2.
     """

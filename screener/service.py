@@ -1,8 +1,8 @@
-"""Transactional command/query surface (spec §14).
+"""Transactional command/query surface (spec 14).
 
 Called by the API, the CLI, and the worker — three callers, one implementation,
 so every business rule is exercisable without an HTTP client. That is the test
-§15.4 sets for the route handlers, and it only holds if the rules live here.
+15.4 sets for the route handlers, and it only holds if the rules live here.
 
 **Three rules shape every method below.**
 
@@ -14,7 +14,7 @@ person that nobody can be held to.
 *No method contains inference.* `extract_rubric` is the single LLM call here, and
 it is one ~5 s request made while a human waits, not a batch. **This module never
 imports `pipeline.py`.** It enqueues; the worker executes. If the service layer
-ever starts screening, the process boundaries in §2 have collapsed and the API
+ever starts screening, the process boundaries in 2 have collapsed and the API
 stops being responsive during a 78-minute run.
 
 *No pass-through methods.* Every method below adds a transaction boundary, an
@@ -74,7 +74,7 @@ class NotFoundError(ServiceError):
 class RubricNotApprovedError(ServiceError):
     """A run may not be created against an unapproved rubric.
 
-    The approval is the human gate in front of an LLM-generated rubric (§9.1).
+    The approval is the human gate in front of an LLM-generated rubric (9.1).
     Without it, a hallucinated requirement silently rejects every applicant who
     lacks something the job never asked for — across the whole run, leaving no
     trace in any individual result.
@@ -100,7 +100,7 @@ class ScreenerService:
         requisition and whoever approves its results is the point of having an
         audit trail at all.
 
-        Auth is stubbed today (§15.2), so actors appear here on first use. When
+        Auth is stubbed today (15.2), so actors appear here on first use. When
         LDAP or local auth lands this becomes a lookup against the real
         directory rather than an insert, and no call site changes — which is the
         retrofit this plumbing exists to make cheap.
@@ -305,7 +305,7 @@ class ScreenerService:
         return added
 
     def start_run(self, run_id: str, actor: Actor) -> int:
-        """Mark a run ready. **Enqueues only** — the worker executes (§15.3).
+        """Mark a run ready. **Enqueues only** — the worker executes (15.3).
 
         Screening never runs in a request lifecycle: a 78-minute batch tied to
         one loses orphan reclaim, resumption, and dies with the process.
@@ -324,7 +324,7 @@ class ScreenerService:
         return progress.pending
 
     def abort_run(self, run_id: str, actor: Actor) -> None:
-        """Stop a run. Resumable — in-flight jobs go back to pending (§16.4)."""
+        """Stop a run. Resumable — in-flight jobs go back to pending (16.4)."""
         with self.uow_factory() as tx:
             if runs_store.get(tx, run_id) is None:
                 raise NotFoundError(f"run {run_id}")
@@ -337,7 +337,7 @@ class ScreenerService:
 
         The escalation rate is computed here rather than at the end: a reviewer
         who discovers a 200-item queue only when the run completes has already
-        lost 78 minutes, and §18.2 exists because that is when the control
+        lost 78 minutes, and 18.2 exists because that is when the control
         silently stops working.
         """
         with self.uow_factory() as tx:
@@ -363,7 +363,7 @@ class ScreenerService:
         )
 
     def sign_off_run(self, run_id: str, actor: Actor) -> None:
-        """A named human accepting the results. The end of the §23 flow."""
+        """A named human accepting the results. The end of the 23 flow."""
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
             if runs_store.get(tx, run_id) is None:
@@ -374,7 +374,7 @@ class ScreenerService:
     # --- candidates ----------------------------------------------------------
 
     def list_candidates(self, run_id: str) -> RankedResult:
-        """Three partitions plus the escalation rate (§10.6).
+        """Three partitions plus the escalation rate (10.6).
 
         `needs_review` is returned as its own list, never appended to the bottom
         of a ranking. At 1,000 applicants a reviewer only ever reads the top of
@@ -499,18 +499,18 @@ class ScreenerService:
 
     # --- worker-facing surface -----------------------------------------------
     #
-    # The worker owns no SQL. The transaction boundary is this layer (§12.2), and
+    # The worker owns no SQL. The transaction boundary is this layer (12.2), and
     # a daemon that opened its own would be a second place where a save and its
     # job-completion could drift apart — the exact divergence that makes a batch
     # either lose results or redo them.
     #
     # None of these write to `audit_log`. Per-job events are "what the system
     # did", which is the JSONL stream; `audit_log` is "who did what" and stays
-    # readable by a human (§17). A thousand claim rows per run would bury the
+    # readable by a human (17). A thousand claim rows per run would bury the
     # overrides and sign-offs that an auditor actually needs.
 
     def reclaim_orphaned(self, worker_id: str) -> int:
-        """Recover jobs this worker held in a previous life (§16.5).
+        """Recover jobs this worker held in a previous life (16.5).
 
         Audited *without* an actor, because no human did this. Inventing a
         synthetic user would make a crash recovery indistinguishable from a
@@ -569,13 +569,13 @@ class ScreenerService:
 
         The write and this call must both happen. A trace on disk with no row
         is resume text nothing knows about — erasure would report success while
-        leaving a full copy behind (§17).
+        leaving a full copy behind (17).
         """
         with self.uow_factory() as tx:
             traces_store.record(tx, run_id, file_sha256, path)
 
     def cached_candidate(self, key: CacheKey) -> Candidate | None:
-        """A prior judgment made under identical conditions (§12.5).
+        """A prior judgment made under identical conditions (12.5).
 
         This is what makes a re-run over an unchanged folder nearly free, and
         what keeps a transient failure from being served back as a verdict —
@@ -595,7 +595,7 @@ class ScreenerService:
         return rubric, run
 
     def cache_key_for(self, run: Run, rubric: Rubric, file_sha256: str) -> CacheKey:
-        """All eight fields that change the output (§6)."""
+        """All eight fields that change the output (6)."""
         return CacheKey(
             file_sha256=file_sha256,
             position_id=run.position_id,
@@ -608,10 +608,10 @@ class ScreenerService:
         )
 
     def finish_run_if_complete(self, run_id: str) -> bool:
-        """Close a run once nothing is pending or in flight (§16.4).
+        """Close a run once nothing is pending or in flight (16.4).
 
         The escalation rate is written at the same moment, so the finished run
-        carries the number §18.2 says nobody should have to discover candidate by
+        carries the number 18.2 says nobody should have to discover candidate by
         candidate.
         """
         with self.uow_factory() as tx:
@@ -674,7 +674,7 @@ class ScreenerService:
         free_gb = _free_disk_gb(Path(settings.db_path).parent)
         disk_ok = free_gb >= settings.min_free_disk_gb
         if not disk_ok:
-            # Traces grow fast; the worker stops claiming below this (§17).
+            # Traces grow fast; the worker stops claiming below this (17).
             detail["disk"] = f"{free_gb:.1f} GB free, below {settings.min_free_disk_gb} GB"
 
         return HealthReport(

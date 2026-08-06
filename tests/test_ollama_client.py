@@ -1,4 +1,4 @@
-"""Ollama adapter (spec §11, build gate §20 step 7).
+"""Ollama adapter (spec 11, build gate 20 step 7).
 
 Two suites. The default one drives the client against a fake and covers every
 error path — those are the branches that must never produce a score, and they
