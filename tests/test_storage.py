@@ -21,11 +21,14 @@ from screener.models import (
     Actor,
     Candidate,
     Criterion,
+    EscalationReason,
     Flag,
+    MatchBlock,
     Position,
     RedFlag,
     Rubric,
     ScoredCriterion,
+    Span,
     now,
 )
 from screener.ports import CacheKey
@@ -35,7 +38,6 @@ from screener.storage import (
     results_store,
     rubrics_store,
     runs_store,
-    traces_store,
 )
 from screener.storage.connection import (
     MIGRATIONS_ROOT,
@@ -171,7 +173,11 @@ def candidate(*, flags: list[Flag] | None = None, score: float | None = 7.8) -> 
 def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> None:
     path = tmp_path / "fresh.db"
 
-    assert apply_migrations(path) == ["0001.initial-schema", "0002.judge-digest-rename"]
+    assert apply_migrations(path) == [
+        "0001.initial-schema",
+        "0002.judge-digest-rename",
+        "0003.v6-schema",
+    ]
     assert pending_migrations(path) == []
     require_current_schema(path)
 
@@ -263,6 +269,7 @@ def test_cache_hit_on_an_identical_key(uow: UnitOfWork) -> None:
         ("position_id", "p2"),
         ("rubric_hash", "z" * 64),
         ("judge_digest", "sha256:bbb"),
+        ("verifier_digest", "sha256:ccc"),
         ("prompt_hash", "q" * 64),
         ("redaction_on", False),
         ("num_ctx", 4096),
@@ -270,10 +277,13 @@ def test_cache_hit_on_an_identical_key(uow: UnitOfWork) -> None:
     ],
 )
 def test_every_key_field_causes_a_miss(uow: UnitOfWork, field: str, value: object) -> None:
-    """All eight, individually.
+    """All nine, individually.
 
     Dropping any one means a change that alters the output — a re-pulled model,
-    an edited prompt, redaction toggled off — silently serves the old verdict.
+    an edited prompt, redaction toggled off, a swapped verifier — silently serves
+    the old verdict. `verifier_digest` joined the key in v6 because verification
+    became part of the stored result: without it, changing the verifier serves
+    back the previous one's flags and escalations.
     """
     seed(uow)
     make_run(uow)
@@ -539,30 +549,6 @@ def test_purge_clears_identifying_content_but_keeps_statistics(uow: UnitOfWork) 
     assert purged.band == "A"
 
 
-def test_purge_returns_trace_paths_for_deletion(uow: UnitOfWork, tmp_path: Path) -> None:
-    """Traces hold full resume text (17).
-
-    Clearing columns alone leaves erasure looking implemented while a complete
-    second copy sits on disk — worse than not having it, because it gets
-    reported as done.
-    """
-    seed(uow)
-    make_run(uow)
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text('{"resume": "Asha Nair, Senior Backend Engineer"}')
-
-    with uow as tx:
-        results_store.save(tx, "run1", candidate(), key())
-        traces_store.record(tx, "run1", "abc123", trace)
-
-    with uow as tx:
-        paths = results_store.purge_candidate(tx, "abc123")
-
-    assert paths == [trace]
-    with uow as tx:
-        assert traces_store.paths_for(tx, "abc123") == []
-
-
 def test_a_purged_candidate_is_removed_from_the_cache(uow: UnitOfWork) -> None:
     """Otherwise the next run serves the erased judgment straight back."""
     seed(uow)
@@ -670,3 +656,120 @@ def test_duplicate_detection_is_exact_hash_only(uow: UnitOfWork) -> None:
     with uow as tx:
         assert results_store.find_duplicates(tx, "run1", "abc123") == 1
         assert results_store.find_duplicates(tx, "run1", "different") == 0
+
+
+# --- v6: stored text, offsets, verification, decisions -----------------------
+
+
+def test_the_stored_text_versions_survive_a_round_trip(uow: UnitOfWork) -> None:
+    """12.6: `candidates` is a full-text store now, not a results table.
+
+    Verification is not recomputable without it. Scoring is — change a weight and
+    recompute from stored verdicts in milliseconds — but asking whether
+    `evidence_match_ratio = 0.55` would cut the escalation rate requires the exact
+    document each quote was matched against.
+    """
+    seed(uow)
+    make_run(uow)
+    stored = candidate().model_copy(
+        update={
+            "resume_text": "Asha Nair. Senior Backend Engineer.",
+            "sent_text": "[REDACTED]. Senior Backend Engineer.",
+            "redaction_map": [Span(src_start=10, src_end=35, dst_start=10, dst_end=35)],
+        }
+    )
+
+    with uow as tx:
+        results_store.save(tx, "run1", stored, key())
+
+    with uow as tx:
+        loaded = results_store.get_cached(tx, key())
+
+    assert loaded is not None
+    assert loaded.resume_text == stored.resume_text
+    assert loaded.sent_text == stored.sent_text
+    assert loaded.redaction_map == stored.redaction_map
+
+
+def test_match_blocks_survive_a_round_trip(uow: UnitOfWork) -> None:
+    """Without them a `match_ratio` of 0.42 is a number nobody can interrogate."""
+    seed(uow)
+    make_run(uow)
+    blocks = [MatchBlock(ev_start=0, ev_end=7, doc_start=12, doc_end=19)]
+    stored = candidate()
+    stored.criteria[0] = stored.criteria[0].model_copy(
+        update={"match_blocks": blocks, "negation_suspected": True}
+    )
+
+    with uow as tx:
+        results_store.save(tx, "run1", stored, key())
+
+    with uow as tx:
+        loaded = results_store.get_cached(tx, key())
+
+    assert loaded is not None
+    assert loaded.criteria[0].match_blocks == blocks
+    assert loaded.criteria[0].negation_suspected is True
+
+
+def test_save_verification_writes_phase_two_without_touching_the_score(uow: UnitOfWork) -> None:
+    """1.9 enforced at the storage layer, not only in `reconcile_judge`.
+
+    The column list in `save_verification` is what makes "the verifier never
+    overrules" a property of the SQL that runs rather than of a pure function
+    nobody re-checks.
+    """
+    seed(uow)
+    make_run(uow)
+    with uow as tx:
+        candidate_id = results_store.save(tx, "run1", candidate(), key())
+
+    verified = candidate().model_copy(
+        update={
+            "id": candidate_id,
+            "score": 0.0,  # a deliberately wrong value: it must not be written
+            "verification_status": "done",
+            "review_required": True,
+            "escalation_reasons": [EscalationReason.JUDGE_DISAGREEMENT],
+            "flags": [Flag.JUDGE_DISAGREES],
+        }
+    )
+    verified.criteria[0] = verified.criteria[0].model_copy(
+        update={
+            "verdict": "none",  # likewise
+            "support": "insufficient",
+            "suggested_verdict": "partial",
+            "verifier_rationale": "Skills-section mention only.",
+        }
+    )
+
+    with uow as tx:
+        results_store.save_verification(tx, candidate_id, verified)
+
+    with uow as tx:
+        loaded = results_store.get(tx, candidate_id)
+
+    assert loaded is not None
+    assert loaded.score == 7.8, "the verifier moved the score"
+    assert loaded.criteria[0].verdict == "strong", "the verifier moved the verdict"
+    assert loaded.criteria[0].support == "insufficient"
+    assert loaded.criteria[0].suggested_verdict == "partial"
+    assert loaded.verification_status == "done"
+    assert loaded.review_required is True
+    assert loaded.escalation_reasons == [EscalationReason.JUDGE_DISAGREEMENT]
+
+
+def test_a_fresh_candidate_is_pending_verification(uow: UnitOfWork) -> None:
+    """`pending` is not `skipped`: one is displayed as provisional (17.6)."""
+    seed(uow)
+    make_run(uow)
+    with uow as tx:
+        candidate_id = results_store.save(tx, "run1", candidate(), key())
+
+    with uow as tx:
+        loaded = results_store.get(tx, candidate_id)
+
+    assert loaded is not None
+    assert loaded.verification_status == "pending"
+    assert loaded.decision == "undecided"
+    assert loaded.id == candidate_id

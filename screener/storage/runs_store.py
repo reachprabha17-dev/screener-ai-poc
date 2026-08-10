@@ -36,11 +36,18 @@ def create(
     num_predict: int,
     seed: int,
     app_version: str,
+    verifier_model: str | None = None,
+    verifier_digest: str | None = None,
+    verification_enabled: bool = True,
+    file_count: int = 0,
+    status: str = "pending",
 ) -> None:
     tx.execute(
         "INSERT INTO runs (id, position_id, rubric_id, folder, judge_model, judge_digest, "
-        "prompt_hash, redaction_on, num_ctx, num_predict, seed, app_version, status, "
-        "created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+        "verifier_model, verifier_digest, verification_enabled, prompt_hash, redaction_on, "
+        "num_ctx, num_predict, seed, app_version, file_count, status, "
+        "created_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             run_id,
             position_id,
@@ -48,16 +55,32 @@ def create(
             folder,
             judge_model,
             judge_digest,
+            verifier_model,
+            verifier_digest,
+            int(verification_enabled),
             prompt_hash,
             int(redaction_on),
             num_ctx,
             num_predict,
             seed,
             app_version,
+            file_count,
+            status,
             created_by,
             now().isoformat(),
         ),
     )
+
+
+def set_phase(tx: Tx, run_id: str, phase: str) -> None:
+    """Advance a run between the judge and verify passes (17.4).
+
+    Separate from `set_status` because the two answer different questions: the
+    status is whether the run is alive, the phase is which model is loaded and
+    which queue is being drained. Collapsing them would make "running" ambiguous
+    at exactly the moment a reviewer wants to know how far along it is.
+    """
+    tx.execute("UPDATE runs SET phase = ? WHERE id = ?", (phase, run_id))
 
 
 def get(tx: Tx, run_id: str) -> Run | None:
@@ -117,11 +140,16 @@ def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
         rubric_id=row["rubric_id"],
         folder=row["folder"],
         status=row["status"],
+        phase=row["phase"],
         judge_digest=row["judge_digest"],
+        verifier_model=row["verifier_model"],
+        verifier_digest=row["verifier_digest"],
+        verification_enabled=bool(row["verification_enabled"]),
         prompt_hash=row["prompt_hash"],
         redaction_on=bool(row["redaction_on"]),
         num_ctx=row["num_ctx"],
         app_version=row["app_version"],
+        file_count=row["file_count"],
         escalation_rate=row["escalation_rate"],
         reproducibility_rate=row["reproducibility_rate"],
     )

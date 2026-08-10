@@ -100,7 +100,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]
     """A database and resume folder the CLI will find through settings."""
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "screener.db"))
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
-    monkeypatch.setattr(settings, "trace_dir", str(tmp_path / "traces"))
+    monkeypatch.setattr(settings, "failure_dir", str(tmp_path / "failures"))
     monkeypatch.setattr(settings, "min_free_disk_gb", 0)
 
     # The CLI builds its own service and worker; point both at fakes so the flow

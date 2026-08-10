@@ -41,11 +41,19 @@ class SchemaInvalidError(RuntimeError):
     ``num_predict`` and cutting the JSON mid-object — a configuration problem
     wearing a parsing problem's clothes, which is worth naming rather than
     retrying blindly.
+
+    Carries ``raw_output`` for the same reason, one level up: the text that
+    failed is the only thing that distinguishes those causes, and the exception
+    message alone leaves a `SCHEMA_INVALID` with nothing to diagnose (18). The
+    client does not write it to disk itself — it has no `file_sha256` to attribute
+    it to, and a capture nobody can tie to a candidate is a capture that cannot be
+    purged.
     """
 
-    def __init__(self, message: str, *, truncated: bool = False) -> None:
+    def __init__(self, message: str, *, truncated: bool = False, raw_output: str = "") -> None:
         super().__init__(message)
         self.truncated = truncated
+        self.raw_output = raw_output
 
 
 class BudgetBugError(RuntimeError):
@@ -291,6 +299,7 @@ class OllamaClient:
                     f"unparseable model output ({exc})"
                     + (f"; output hit num_predict={settings.num_predict}" if truncated else ""),
                     truncated=truncated,
+                    raw_output=content if isinstance(content, str) else repr(content),
                 )
                 # A truncation is not retried: the same prompt produces the same
                 # overflow, and `num_predict` is the thing to change.
@@ -327,4 +336,7 @@ def parse_or_raise[T](model: type[T], payload: dict[str, Any]) -> T:
     try:
         return model.model_validate(payload)  # type: ignore[attr-defined,no-any-return]
     except ValidationError as exc:
-        raise SchemaInvalidError(f"schema validation failed: {exc}") from exc
+        raise SchemaInvalidError(
+            f"schema validation failed: {exc}",
+            raw_output=json.dumps(payload, ensure_ascii=False, default=str),
+        ) from exc

@@ -14,7 +14,7 @@ Like ``models``, this module imports nothing else from the package.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -36,6 +36,11 @@ class CacheKey(BaseModel):
     position_id: str
     rubric_hash: str
     judge_digest: str
+    # Verification is part of the stored result from v6 on, so a changed
+    # verifier has to invalidate the entry. Empty string when verification is
+    # disabled — a nullable key field would make two different configurations
+    # hash to the same lookup.
+    verifier_digest: str = ""
     prompt_hash: str
     redaction_on: bool
     num_ctx: int
@@ -49,8 +54,14 @@ class Job(BaseModel):
 
     id: int
     run_id: str
+    # Which pass this job belongs to (17.4). Part of the job's identity, not a
+    # property of it: the same résumé has one judge job and one verify job, and
+    # they are distinct rows.
+    phase: Literal["judge", "verify"] = "judge"
     file_path: Path
     file_sha256: str | None = None
+    # Set on verify jobs only — phase 2 works from a stored candidate, not a file.
+    candidate_id: int | None = None
     attempts: int = 0
     claimed_by: str | None = None
     claimed_at: datetime | None = None

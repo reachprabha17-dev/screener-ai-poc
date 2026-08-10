@@ -1,4 +1,4 @@
-"""Structured logging and the trace store (spec 17).
+"""Structured logging and failure capture (spec 18).
 
 **Two streams, and they are not interchangeable.**
 
@@ -16,24 +16,26 @@ Every event carries `run_id`, `job_id`, `file_sha256`, `stage`, `duration_ms`,
 `worker_id`, `actor_id` where they apply — so a single resume's journey can be
 reconstructed from one grep.
 
-**Traces are a second store of candidate data, and that is the whole risk.**
-Each judge call writes the exact system and user strings sent to the model, which
-means full resume text on disk outside the database. That is what makes offline
-evaluation and prompt regression testing possible without re-running a GPU batch
-(18) — and it is also why, if `trace_dir` sat outside the erasure path, it would
-silently defeat `purge_candidate` **while appearing implemented**. Worse than not
-having traces at all, because it would be reported as working.
+**Failure capture replaced continuous tracing.** Tracing every judge call wrote
+the exact strings sent to the model — full resume text on disk, outside the
+database, needing its own index, retention, permissions and erasure path. A
+second PII store is a second thing to get wrong, and `sent_text` now holds the
+same content inside the database where all of that already exists (12.6).
 
-So every trace is indexed in the `traces` table by `file_sha256`, deleted by
-purge (12.6), written `0600` inside a `0700` directory, and pruned on a shorter
-retention than the audit log.
+What removing it cost was debuggability: when the model returns something that
+fails schema validation, the output that failed is the only thing that explains
+why, and it was gone. So the **raw model output is captured on validation failure
+and only then** (`capture_raw_on_failure`). Failure-only keeps it bounded — a
+healthy run writes nothing — but it is still candidate text, so it is written
+`0600` inside a `0700` directory and named with the file hash so
+`purge_candidate` can find it without a second index table.
 """
 
 import json
 import logging
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,14 +43,10 @@ import structlog
 
 from config.settings import settings
 
-# Traces hold resume text; logs hold file hashes and timings. Both are candidate-
-# adjacent enough that neither should be world-readable.
+# Failure captures hold model output derived from resume text; logs hold file
+# hashes and timings. Neither should be world-readable.
 DIR_MODE = 0o700
 FILE_MODE = 0o600
-
-# Shorter than the audit log by design (17). The audit trail is the record of
-# decisions and must outlive the raw text those decisions were made from.
-DEFAULT_TRACE_RETENTION_DAYS = 30
 
 
 def configure_logging(*, to_file: bool = True) -> None:
@@ -104,82 +102,63 @@ def clear_context() -> None:
     structlog.contextvars.clear_contextvars()
 
 
-# --- traces ------------------------------------------------------------------
+# --- failure capture (18) ----------------------------------------------------
+
+# `<file_sha256>.<something>.json`. The hash is the first component so purge can
+# find every capture for a candidate with a glob — deliberately not a second
+# index table, since needing one is what made continuous tracing expensive.
+FAILURE_SUFFIX = ".json"
 
 
-class TraceWriter:
-    """Writes one JSONL record per judge call.
+def failure_dir() -> Path:
+    return Path(settings.failure_dir)
 
-    Returns the path so the caller can index it in the `traces` table. **The
-    write and the index must both happen**, or purge cannot find the file — which
-    is the failure 17 calls out as worse than having no traces.
+
+def write_failure(
+    *,
+    file_sha256: str,
+    prompt_hash: str,
+    raw_output: str,
+    error: str,
+    job_id: int | None = None,
+) -> Path | None:
+    """Persist one model output that failed validation. Returns the path, or None.
+
+    Called on `ValidationError` and nowhere else. A run where nothing fails
+    writes nothing, which is what keeps this bounded where tracing was not.
+
+    The raw output is the whole point: a `SCHEMA_INVALID` with the offending text
+    thrown away leaves nothing to diagnose, and the usual causes — the model
+    emitting prose around the JSON, or `num_predict` truncating mid-object — are
+    indistinguishable from the exception alone.
     """
+    if not settings.capture_raw_on_failure:
+        return None
 
-    def __init__(self, trace_dir: Path | None = None) -> None:
-        self._dir = trace_dir or Path(settings.trace_dir)
+    directory = failure_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, DIR_MODE)  # noqa: PTH101 — Path.chmod is the same call
 
-    @property
-    def enabled(self) -> bool:
-        return settings.trace_enabled
-
-    def write(self, run_id: str, record: Any) -> Path | None:  # noqa: ANN401 — pipeline.TraceRecord
-        """Persist one judge call. Returns the path, or None when disabled.
-
-        Laid out one file per candidate per run rather than one giant file:
-        `purge_candidate` deletes whole files, and rewriting a shared log to
-        remove one person's text is the kind of operation that half-succeeds.
-        """
-        if not self.enabled:
-            return None
-
-        directory = self._dir / run_id
-        directory.mkdir(parents=True, exist_ok=True)
-        os.chmod(self._dir, DIR_MODE)  # noqa: PTH101
-        os.chmod(directory, DIR_MODE)  # noqa: PTH101
-
-        path = directory / f"{record.file_sha256}.jsonl"
-        payload = {
-            "ts": datetime.now(UTC).isoformat(),
-            "run_id": run_id,
-            "file_sha256": record.file_sha256,
-            "model": settings.judge_model,
-            "num_ctx": settings.num_ctx,
-            "num_predict": settings.num_predict,
-            "seed": settings.seed,
-            "temperature": settings.temperature,
-            "prompt_tokens": record.prompt_tokens,
-            "attempts": record.attempts,
-            # The exact strings sent. This is the resume text, and the reason
-            # this file sits inside the erasure path.
-            "system": record.system,
-            "user": record.user,
-            "output": record.output,
-        }
-        with path.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
-        os.chmod(path, FILE_MODE)  # noqa: PTH101
-        return path
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    path = directory / f"{file_sha256}.{stamp}{FAILURE_SUFFIX}"
+    payload = {
+        "ts": datetime.now(UTC).isoformat(),
+        "file_sha256": file_sha256,
+        "job_id": job_id,
+        "prompt_hash": prompt_hash,
+        "error": error,
+        "num_ctx": settings.num_ctx,
+        "num_predict": settings.num_predict,
+        "raw_output": raw_output,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+    os.chmod(path, FILE_MODE)  # noqa: PTH101
+    return path
 
 
-def prune_traces(older_than_days: int = DEFAULT_TRACE_RETENTION_DAYS) -> list[Path]:
-    """Delete trace files past their retention. Returns what was removed.
-
-    Deliberately **not** transactional with the index — a file that vanishes
-    before its row does is harmless (purge tolerates a missing file), whereas a
-    row deleted before its file leaves resume text on disk that nothing knows
-    about.
-    """
-    root = Path(settings.trace_dir)
-    if not root.is_dir():
+def failure_paths_for(file_sha256: str) -> list[Path]:
+    """Every capture belonging to one candidate, for the erasure path (12.10)."""
+    directory = failure_dir()
+    if not directory.is_dir():
         return []
-
-    cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).timestamp()
-    removed: list[Path] = []
-    for path in root.rglob("*.jsonl"):
-        try:
-            if path.stat().st_mtime < cutoff:
-                path.unlink()
-                removed.append(path)
-        except OSError:
-            continue
-    return removed
+    return sorted(directory.glob(f"{file_sha256}.*{FAILURE_SUFFIX}"))

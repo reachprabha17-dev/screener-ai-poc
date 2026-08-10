@@ -455,27 +455,30 @@ def test_escalation_rate_is_reported_live(
 # --- erasure -----------------------------------------------------------------
 
 
-def test_purge_removes_trace_files_from_disk(
+def test_purge_removes_failure_captures_from_disk(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork], tmp_path: Path
 ) -> None:
-    """The step 12.6 calls easy to forget and fatal to omit.
+    """The step 12.10 calls easy to forget and fatal to omit.
 
-    Clearing database columns while a full copy of the resume sits in a trace
-    file leaves erasure looking implemented — worse than absent, because it gets
-    reported as done.
+    Clearing database columns while model output derived from the résumé sits in
+    a failure capture leaves erasure looking implemented — worse than absent,
+    because it gets reported as done.
     """
-    from screener.storage import traces_store
+    from screener.logging import write_failure
 
-    run_id = _seed_run_with_candidates(service, uow_factory)
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text('{"resume": "Asha Nair, Senior Backend Engineer"}')
-    with uow_factory() as tx:
-        traces_store.record(tx, run_id, "sha-qualified", trace)
+    _seed_run_with_candidates(service, uow_factory)
+    capture = write_failure(
+        file_sha256="sha-qualified",
+        prompt_hash="p" * 64,
+        raw_output='{"evidence": "Asha Nair, Senior Backend Engineer"',
+        error="unterminated object",
+    )
+    assert capture is not None and capture.exists()
 
     removed = service.purge_candidate("sha-qualified", ACTOR)
 
     assert removed == 1
-    assert not trace.exists()
+    assert not capture.exists()
 
 
 def test_purge_keeps_a_non_identifying_audit_stub(
@@ -493,17 +496,21 @@ def test_purge_keeps_a_non_identifying_audit_stub(
     assert entry["entity_id"] == "sha-qualified"[:12]
 
 
-def test_purge_survives_an_already_missing_trace_file(
-    service: ScreenerService, uow_factory: Callable[[], UnitOfWork], tmp_path: Path
+def test_purge_succeeds_when_there_is_nothing_on_disk(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
-    """The index is the record; the file is a copy that may already be gone."""
-    from screener.storage import traces_store
-
-    run_id = _seed_run_with_candidates(service, uow_factory)
-    with uow_factory() as tx:
-        traces_store.record(tx, run_id, "sha-qualified", tmp_path / "never-written.jsonl")
+    """A healthy run writes no captures at all, and erasure still has to work."""
+    _seed_run_with_candidates(service, uow_factory)
 
     assert service.purge_candidate("sha-qualified", ACTOR) == 0
+
+    with uow_factory() as tx:
+        row = tx.execute(
+            "SELECT filename, resume_text FROM candidates WHERE file_sha256 = ?",
+            ("sha-qualified",),
+        ).fetchone()
+    assert row["filename"] == "[purged]"
+    assert row["resume_text"] is None
 
 
 # --- health ------------------------------------------------------------------

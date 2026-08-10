@@ -37,6 +37,7 @@ from config.settings import settings
 from screener.core.rank import rank
 from screener.llm.extract_rubric import extract_rubric as run_extraction
 from screener.llm.judge_resume import judge_prompt_hash
+from screener.logging import failure_paths_for
 from screener.models import (
     Actor,
     Candidate,
@@ -57,7 +58,6 @@ from screener.storage import (
     results_store,
     rubrics_store,
     runs_store,
-    traces_store,
 )
 from screener.storage.connection import pending_migrations
 from screener.storage.uow import Tx, UnitOfWork, unit_of_work
@@ -467,33 +467,41 @@ class ScreenerService:
             )
 
     def purge_candidate(self, file_sha256: str, actor: Actor) -> int:
-        """Erase a candidate everywhere. Returns how many trace files were removed.
+        """Erase a candidate everywhere. Returns how many files were removed.
 
         Database first, in one transaction; **files afterwards**. There is no
         rollback for `unlink`, so deleting inside the transaction would destroy
         data that a later abort was supposed to keep.
 
+        The files are the failure captures of 18 — raw model output written when
+        schema validation failed, which is derived from the résumé and is
+        therefore inside the erasure path. They are found by hash rather than
+        through an index table: needing an index is what made continuous tracing
+        expensive to keep correct, and a glob cannot fall out of step with the
+        thing it is indexing.
+
         The audit stub is deliberately non-identifying: recording *that* an
         erasure happened, without re-recording the person it was about.
         """
+        paths = failure_paths_for(file_sha256)
         with self.uow_factory() as tx:
-            trace_paths = results_store.purge_candidate(tx, file_sha256)
+            results_store.purge_candidate(tx, file_sha256)
             audit_store.append_for(
                 tx,
                 actor,
                 "purge_candidate",
                 "candidate",
                 file_sha256[:12],
-                {"traces": len(trace_paths)},
+                {"failure_captures": len(paths)},
             )
 
         removed = 0
-        for path in trace_paths:
+        for path in paths:
             try:
                 path.unlink()
                 removed += 1
             except FileNotFoundError:
-                # Already gone. The index is the record; the file is the copy.
+                # Already gone. The database row is the record; the file is a copy.
                 continue
         return removed
 
@@ -563,16 +571,6 @@ class ScreenerService:
         """Hand a job back on clean shutdown, without counting an attempt."""
         with self.uow_factory() as tx:
             jobs_store.release(tx, job.id)
-
-    def record_trace(self, run_id: str, file_sha256: str, path: Path) -> None:
-        """Index a trace file so `purge_candidate` can find it.
-
-        The write and this call must both happen. A trace on disk with no row
-        is resume text nothing knows about — erasure would report success while
-        leaving a full copy behind (17).
-        """
-        with self.uow_factory() as tx:
-            traces_store.record(tx, run_id, file_sha256, path)
 
     def cached_candidate(self, key: CacheKey) -> Candidate | None:
         """A prior judgment made under identical conditions (12.5).
@@ -687,10 +685,6 @@ class ScreenerService:
             app_version=settings.app_version,
             detail=detail,
         )
-
-    def trace_count(self) -> int:
-        with self.uow_factory() as tx:
-            return traces_store.count(tx)
 
 
 def _free_disk_gb(path: Path) -> float:

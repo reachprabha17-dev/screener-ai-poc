@@ -18,7 +18,7 @@ from fixtures_docs import real_docx, scanned_pdf
 from screener.clients.ollama_client import OllamaClient
 from screener.intake.sandbox import SandboxedParser
 from screener.models import Criterion, Flag, Rubric
-from screener.pipeline import Deps, TraceRecord, screen_batch, screen_one
+from screener.pipeline import Deps, screen_batch, screen_one
 
 pytestmark = pytest.mark.live
 
@@ -155,19 +155,21 @@ def test_the_budget_precheck_matches_the_real_prompt(deps: Deps, root: Path) -> 
     assert Flag.BUDGET_EXCEEDED not in candidate.flags
 
 
-def test_the_trace_captures_what_was_actually_sent(deps: Deps, root: Path) -> None:
-    """Traces hold full resume text — a second PII store, inside the erasure path."""
-    captured: list[TraceRecord] = []
-    traced = Deps(parser=deps.parser, llm=deps.llm, trace=captured.append)
+def test_the_candidate_carries_both_stored_text_versions(deps: Deps, root: Path) -> None:
+    """12.6: `resume_text` is what HR reads, `sent_text` is what the model saw.
+
+    This replaced the trace: the same content, in the database, where retention,
+    permissions and the erasure path already exist. Names are deliberately not
+    redacted (see `redact_pii`) — identifying one in free text needs NER, and
+    `Candidate.filename` carries it regardless — so both columns hold the résumé
+    in full, which is why both are named in `purge_candidate`.
+    """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
 
-    screen_one(path, RUBRIC, traced, run_id="run1", root=root)
+    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
 
-    assert len(captured) == 1
-    # Names are deliberately not redacted (see `redact_pii`): identifying one in
-    # free text needs NER, and `Candidate.filename` carries it regardless. So the
-    # trace holds the resume in full — which is exactly why it sits inside the
-    # erasure path (17).
-    assert "Asha Nair" in captured[0].user
-    assert "CRITERIA:" in captured[0].user
-    assert captured[0].prompt_tokens > 0
+    assert "Asha Nair" in candidate.resume_text
+    assert "Asha Nair" in candidate.sent_text
+    assert candidate.redaction_map, "no span map means every highlight lands wrong"
+    # The map covers the redacted string end to end, gaps included.
+    assert candidate.redaction_map[-1].dst_end <= len(candidate.sent_text)

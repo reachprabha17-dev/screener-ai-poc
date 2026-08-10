@@ -21,7 +21,7 @@ from conftest import make_rubric
 
 from config.settings import settings
 from screener.models import Flag, ParsedResume, ParseResult, RedFlag
-from screener.pipeline import Deps, TraceRecord, file_sha256, screen_batch, screen_one
+from screener.pipeline import Deps, file_sha256, screen_batch, screen_one
 
 RUBRIC = make_rubric(
     ("C1", True, 3, "Backend engineering experience"),
@@ -424,30 +424,6 @@ def test_non_terminal_flags_survive_to_the_end(root: Path) -> None:
 
     assert Flag.SANITIZED_TEXT in candidate.flags
     assert Flag.SUSPECTED_INJECTION in candidate.flags
-
-
-# --- tracing seam ------------------------------------------------------------
-
-
-def test_the_trace_records_the_exact_strings_sent(root: Path) -> None:
-    """What makes offline evaluation possible without re-running a GPU batch."""
-    captured: list[TraceRecord] = []
-    llm = FakeLLM()
-
-    run(root, FakeParser(), llm, trace=captured.append)
-
-    assert len(captured) == 1
-    assert captured[0].user == llm.last_user_message
-    assert captured[0].file_sha256
-
-
-def test_no_trace_is_written_when_the_judge_is_never_reached(root: Path) -> None:
-    captured: list[TraceRecord] = []
-    parser = FakeParser(result=ParseResult(flags=[Flag.PARSER_CRASHED], error="boom"))
-
-    run(root, parser, FakeLLM(), trace=captured.append)
-
-    assert captured == []
 
 
 # --- batch -------------------------------------------------------------------

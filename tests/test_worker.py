@@ -25,7 +25,6 @@ from typing import Any
 import pytest
 
 from config.settings import settings
-from screener.logging import TraceWriter
 from screener.models import Actor, Flag, ParsedResume, ParseResult
 from screener.pipeline import Deps
 from screener.service import ScreenerService
@@ -453,7 +452,6 @@ settings.min_free_disk_gb = 0
 from test_worker import FakeLLM, FakeParser
 from screener.pipeline import Deps
 from screener.service import ScreenerService
-from screener.logging import TraceWriter
 from worker import Worker
 
 llm = FakeLLM()
@@ -535,60 +533,3 @@ def _only_run(service: ScreenerService) -> str:
         runs = tx.execute("SELECT id FROM runs ORDER BY created_at").fetchall()
     assert runs_store is not None
     return str(runs[0]["id"])
-
-
-# --- traces (17) ------------------------------------------------------------
-
-
-def test_the_worker_writes_and_indexes_a_trace(
-    worker: Worker, service: ScreenerService, uow_factory: Callable[[], UnitOfWork], tmp_path: Path
-) -> None:
-    """Both, or neither is useful.
-
-    A trace on disk with no index row is resume text nothing knows about —
-    `purge_candidate` would report success and leave a full copy behind (17).
-    """
-    from screener.storage import traces_store
-
-    settings.trace_dir = str(tmp_path / "traces")
-    settings.trace_enabled = True
-    worker.traces = TraceWriter()
-
-    run_id = seed_run(service, count=2)
-    drain(worker)
-
-    written = list((tmp_path / "traces").rglob("*.jsonl"))
-    assert len(written) == 2
-
-    with uow_factory() as tx:
-        indexed = traces_store.paths_for_run(tx, run_id)
-    assert sorted(indexed) == sorted(written)
-
-
-def test_a_cache_hit_writes_no_trace(
-    worker: Worker, service: ScreenerService, tmp_path: Path
-) -> None:
-    """Nothing was sent to the model, so there is nothing to trace.
-
-    A trace implying an inference that never happened would corrupt exactly the
-    offline evaluation traces exist for.
-    """
-    from screener.storage import runs_store
-
-    settings.trace_dir = str(tmp_path / "traces")
-    settings.trace_enabled = True
-    worker.traces = TraceWriter()
-
-    first = seed_run(service, count=2)
-    drain(worker)
-    assert len(list((tmp_path / "traces").rglob("*.jsonl"))) == 2
-
-    with service.uow_factory() as tx:
-        run = runs_store.get(tx, first)
-    assert run is not None
-    second = service.create_run(run.position_id, run.rubric_id, ACTOR)
-    service.start_run(second.id, ACTOR)
-    drain(worker)
-
-    # Still two — the re-run was served entirely from the cache.
-    assert len(list((tmp_path / "traces").rglob("*.jsonl"))) == 2

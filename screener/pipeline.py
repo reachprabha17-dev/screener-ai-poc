@@ -27,7 +27,6 @@ sandbox (4 layering: pipeline → core, intake, clients, models — never storag
 """
 
 import hashlib
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,32 +49,11 @@ _HASH_CHUNK = 1024 * 1024
 
 
 @dataclass(frozen=True)
-class TraceRecord:
-    """One judge call, for offline evaluation and prompt regression testing (17).
-
-    **Contains full resume text.** Whatever consumes this is a second store of
-    candidate data and must sit inside the erasure path, or `purge_candidate`
-    silently stops working while appearing implemented.
-    """
-
-    file_sha256: str
-    system: str
-    user: str
-    output: dict[str, object]
-    prompt_tokens: int
-    attempts: int
-
-
-TraceSink = Callable[[TraceRecord], None]
-
-
-@dataclass(frozen=True)
 class Deps:
     """Collaborators, injected. The seam that keeps this module testable."""
 
     parser: ResumeParser
     llm: LLMClient
-    trace: TraceSink | None = None
 
 
 @dataclass
@@ -235,18 +213,6 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
         acc.add(*judged.flags, review=True)
         return _unscoreable(
             run_id=run_id, path=path, sha=sha, acc=acc, summary=judged.check.describe()
-        )
-
-    if deps.trace is not None:
-        deps.trace(
-            TraceRecord(
-                file_sha256=sha,
-                system=system,
-                user=user,
-                output=judged.output.model_dump(),
-                prompt_tokens=budget.prompt_tokens,
-                attempts=judged.attempts,
-            )
         )
 
     # --- 10.7 free-text screening, before anything is shown or scored -------

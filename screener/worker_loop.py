@@ -32,15 +32,16 @@ you least want a surprise.
 
 import signal
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
 from typing import Any
 
 from config.settings import settings
-from screener.logging import TraceWriter, bind_job, clear_context, get_logger
+from screener.clients.ollama_client import SchemaInvalidError
+from screener.logging import bind_job, clear_context, get_logger, write_failure
 from screener.models import Candidate, Rubric, Run
-from screener.pipeline import Deps, TraceRecord, TraceSink, file_sha256, screen_one
+from screener.pipeline import Deps, file_sha256, screen_one
 from screener.ports import CacheKey, Job
 from screener.service import ScreenerService
 from screener.storage.connection import require_current_schema
@@ -57,8 +58,6 @@ class Worker:
     deps: Deps
     worker_id: str = field(default_factory=lambda: settings.worker_id)
     poll_interval_s: float = field(default_factory=lambda: settings.worker_poll_interval_s)
-
-    traces: TraceWriter = field(default_factory=TraceWriter)
 
     _stopping: bool = False
     _rubrics: dict[str, tuple[Rubric, Run]] = field(default_factory=dict)
@@ -105,8 +104,8 @@ class Worker:
         and assert on the state between jobs.
         """
         if not self._has_disk_headroom():
-            # Traces grow fast, and a full disk mid-batch is only recoverable if
-            # the worker stopped before filling it (17).
+            # A full disk mid-batch is only recoverable if the worker stopped
+            # before filling it (18).
             self._sleep_interruptibly(self.poll_interval_s)
             return False
 
@@ -157,41 +156,29 @@ class Worker:
         if candidate is not None:
             self._log.info("cache_hit", stage="cache", file_sha256=sha)
         else:
-            deps = replace(self.deps, trace=self._trace_sink(job.run_id, sha))
-            candidate = screen_one(path, rubric, deps, run_id=job.run_id, root=Path(run.folder))
+            try:
+                candidate = screen_one(
+                    path, rubric, self.deps, run_id=job.run_id, root=Path(run.folder)
+                )
+            except SchemaInvalidError as exc:
+                # Capture here rather than in the client or the pipeline: this is
+                # the first frame that knows *which candidate* the output belongs
+                # to, and a capture that cannot be attributed to a file hash is
+                # one `purge_candidate` can never find again (18).
+                write_failure(
+                    file_sha256=sha,
+                    prompt_hash=run.prompt_hash,
+                    raw_output=exc.raw_output,
+                    error=str(exc)[:2000],
+                    job_id=job.id,
+                )
+                raise
             # `screen_one` hashes the file itself; prefer that over the pre-hash,
             # which is empty when the path vanished between claim and read.
             key = self.service.cache_key_for(run, rubric, candidate.file_sha256 or sha)
 
         self.service.complete_job(job, candidate, key)
         return candidate
-
-    def _trace_sink(self, run_id: str, sha: str) -> TraceSink | None:
-        """Write the trace **and** index it, or neither.
-
-        A file with no row is resume text outside the erasure path; a row with
-        no file is harmless. So the index write follows the file write, and a
-        failure to index is logged loudly rather than swallowed.
-        """
-        if not self.traces.enabled:
-            return None
-
-        def sink(record: TraceRecord) -> None:
-            path = self.traces.write(run_id, record)
-            if path is None:
-                return
-            try:
-                self.service.record_trace(run_id, record.file_sha256, path)
-            except Exception as exc:  # noqa: BLE001 — never lose the resume, never lose the run
-                self._log.error(
-                    "trace_unindexed",
-                    stage="trace",
-                    file_sha256=record.file_sha256,
-                    path=str(path),
-                    error=str(exc)[:200],
-                )
-
-        return sink
 
     def _cached(self, key: CacheKey, job: Job) -> Candidate | None:
         """A prior judgment under identical conditions, re-filed under this run.

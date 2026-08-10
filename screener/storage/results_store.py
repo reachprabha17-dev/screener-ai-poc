@@ -24,11 +24,22 @@ while a second copy of the candidate's data sits on disk — worse than not havi
 it, because it would be reported as done.
 """
 
+import hashlib
 import json
-from pathlib import Path
 from typing import Any
 
-from screener.models import Band, Candidate, Flag, RedFlag, ScoredCriterion, Verdict
+from screener.models import (
+    Band,
+    Candidate,
+    EscalationReason,
+    Flag,
+    RedFlag,
+    ScoredCriterion,
+    Span,
+    Support,
+    Verdict,
+)
+from screener.models import MatchBlock as MatchBlockModel
 from screener.ports import CacheKey
 from screener.storage.uow import Tx
 
@@ -38,6 +49,7 @@ _CACHE_COLUMNS = (
     "position_id",
     "rubric_hash",
     "judge_digest",
+    "verifier_digest",
     "prompt_hash",
     "redaction_on",
     "num_ctx",
@@ -50,9 +62,9 @@ _REDACTED = "[purged]"
 def get_cached(tx: Tx, key: CacheKey) -> Candidate | None:
     """A prior judgment made under identical conditions, or nothing.
 
-    All eight key fields are matched. Dropping any one of them means a change
+    All nine key fields are matched. Dropping any one of them means a change
     that alters the output — a re-pulled model, an edited prompt, redaction
-    toggled off — silently serves the old verdict.
+    toggled off, a different verifier — silently serves the old verdict.
     """
     where = " AND ".join(f"{column} = ?" for column in _CACHE_COLUMNS)
     row = tx.execute(
@@ -74,21 +86,30 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
     """
     cursor = tx.execute(
         "INSERT INTO candidates ("
-        "run_id, filename, file_sha256, score, band, must_haves_met, scoreable, "
-        "review_required, cacheable, summary, notable_strengths_json, red_flags_json, "
-        "flags_json, position_id, rubric_hash, judge_digest, prompt_hash, redaction_on, "
-        "num_ctx, app_version, scored_at"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "run_id, filename, file_sha256, resume_text, sent_text, sent_text_sha256, "
+        "redaction_map_json, score, band, must_haves_met, scoreable, "
+        "review_required, cacheable, escalation_reasons_json, verification_status, "
+        "summary, notable_strengths_json, red_flags_json, "
+        "flags_json, position_id, rubric_hash, judge_digest, verifier_digest, "
+        "prompt_hash, redaction_on, num_ctx, app_version, scored_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+        "?, ?, ?, ?, ?)",
         (
             run_id,
             candidate.filename,
             candidate.file_sha256,
+            candidate.resume_text or None,
+            candidate.sent_text or None,
+            _sha256(candidate.sent_text),
+            _dump_spans(candidate.redaction_map),
             candidate.score,
             candidate.band,
             int(candidate.must_haves_met),
             int(candidate.scoreable),
             int(candidate.review_required),
             int(candidate.cacheable),
+            json.dumps([r.value for r in candidate.escalation_reasons]),
+            candidate.verification_status,
             candidate.summary,
             json.dumps(candidate.notable_strengths, ensure_ascii=False),
             json.dumps([f.value for f in candidate.red_flags]),
@@ -96,6 +117,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
             key.position_id,
             key.rubric_hash,
             key.judge_digest,
+            key.verifier_digest,
             key.prompt_hash,
             int(key.redaction_on),
             key.num_ctx,
@@ -109,7 +131,8 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
         tx.executemany(
             "INSERT INTO verdicts ("
             "candidate_id, criterion_id, verdict, model_verdict, evidence, verified, "
-            "match_ratio, longest_span) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "match_ratio, longest_span, match_blocks_json, negation_suspected"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     candidate_id,
@@ -120,12 +143,70 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
                     int(c.verified),
                     c.match_ratio,
                     c.longest_span,
+                    _dump_blocks(c.match_blocks),
+                    int(c.negation_suspected),
                 )
                 for c in candidate.criteria
             ],
         )
 
     return candidate_id
+
+
+def save_verification(tx: Tx, candidate_id: int, candidate: Candidate) -> None:
+    """Write what phase 2 produced. **Never score, band, or verdict.**
+
+    The column list is the enforcement of 1.9 at the storage layer: the verifier
+    escalates and proposes, so the only things this statement can change are
+    flags, escalation reasons, review state and the per-criterion verifier
+    columns. `reconcile_judge` already refuses to touch a verdict; writing the
+    verdict column here anyway would make that guarantee depend on a pure
+    function nobody re-checks rather than on the SQL that actually runs.
+    """
+    tx.execute(
+        "UPDATE candidates SET verification_status = ?, review_required = ?, "
+        "escalation_reasons_json = ?, flags_json = ?, verifier_digest = ? WHERE id = ?",
+        (
+            candidate.verification_status,
+            int(candidate.review_required),
+            json.dumps([r.value for r in candidate.escalation_reasons]),
+            json.dumps([f.value for f in candidate.flags]),
+            _verifier_digest_of(tx, candidate_id),
+            candidate_id,
+        ),
+    )
+    tx.executemany(
+        "UPDATE verdicts SET support = ?, suggested_verdict = ?, verifier_rationale = ?, "
+        "absence_confirmed = ?, absence_evidence = ?, negation_suspected = ? "
+        "WHERE candidate_id = ? AND criterion_id = ?",
+        [
+            (
+                c.support,
+                c.suggested_verdict,
+                c.verifier_rationale,
+                None if c.absence_confirmed is None else int(c.absence_confirmed),
+                c.absence_evidence or None,
+                int(c.negation_suspected),
+                candidate_id,
+                c.id,
+            )
+            for c in candidate.criteria
+        ],
+    )
+
+
+def _verifier_digest_of(tx: Tx, candidate_id: int) -> str | None:
+    """The digest recorded on the run, copied onto the candidate at verify time.
+
+    Denormalized for the same reason the other cache columns are: a cache lookup
+    should be one index probe, not a join back to `runs`.
+    """
+    row = tx.execute(
+        "SELECT r.verifier_digest AS digest FROM candidates c "
+        "JOIN runs r ON r.id = c.run_id WHERE c.id = ?",
+        (candidate_id,),
+    ).fetchone()
+    return row["digest"] if row else None
 
 
 def get(tx: Tx, candidate_id: int) -> Candidate | None:
@@ -152,52 +233,76 @@ def find_duplicates(tx: Tx, run_id: str, file_sha256: str) -> int:
     return int(row["n"]) if row else 0
 
 
-def purge_candidate(tx: Tx, file_sha256: str) -> list[Path]:
-    """Erase candidate content everywhere. Returns trace files for the caller to unlink.
+def purge_candidate(tx: Tx, file_sha256: str) -> None:
+    """Erase candidate content everywhere in the database (12.10).
 
-    Score, band and flags survive as non-identifying statistics — a purged
-    candidate should still be countable in an escalation rate without being
-    identifiable.
+    Score, band, flags and decision survive as non-identifying statistics — a
+    purged candidate should still be countable in an escalation rate without
+    being identifiable.
 
-    Trace paths are **returned rather than deleted here** so that filesystem
-    removal happens outside the transaction. A store that unlinked files would
-    delete them even when the transaction later rolled back, and there is no
-    rollback for `unlink`.
+    **Every text column has to be listed here.** v6 added four of them
+    (`resume_text`, `sent_text`, `redaction_map_json`, `verdicts.absence_evidence`)
+    and `candidates` stopped being a results table the moment it started holding
+    full résumés. Missing one leaves erasure looking implemented while a complete
+    copy of the person's CV sits in the row next to the redacted one — which is
+    worse than not having the control, because it gets reported as done.
+
+    Files are the caller's job (`service.purge_candidate`): there is no rollback
+    for `unlink`, so a store that deleted them would destroy data a later abort
+    was supposed to keep.
     """
-    rows = tx.execute(
-        "SELECT trace_path FROM traces WHERE file_sha256 = ?", (file_sha256,)
-    ).fetchall()
-    trace_paths = [Path(row["trace_path"]) for row in rows]
-
     tx.execute(
-        "UPDATE verdicts SET evidence = NULL WHERE candidate_id IN "
-        "(SELECT id FROM candidates WHERE file_sha256 = ?)",
+        "UPDATE verdicts SET evidence = NULL, absence_evidence = NULL "
+        "WHERE candidate_id IN (SELECT id FROM candidates WHERE file_sha256 = ?)",
         (file_sha256,),
     )
     tx.execute(
         "UPDATE candidates SET filename = ?, summary = NULL, "
-        "notable_strengths_json = NULL, cacheable = 0 WHERE file_sha256 = ?",
+        "notable_strengths_json = NULL, resume_text = NULL, sent_text = NULL, "
+        "sent_text_sha256 = NULL, redaction_map_json = NULL, cacheable = 0 "
+        "WHERE file_sha256 = ?",
         (_REDACTED, file_sha256),
     )
-    tx.execute("DELETE FROM traces WHERE file_sha256 = ?", (file_sha256,))
-
-    return trace_paths
 
 
 # --- row mapping -------------------------------------------------------------
 
 
+def _sha256(text: str) -> str | None:
+    """Identity of what the model actually read.
+
+    Stored beside `sent_text` so a later question — "was this candidate judged
+    against the same string we are now showing?" — is answerable without
+    diffing two large columns.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None
+
+
+def _dump_spans(spans: list[Span]) -> str | None:
+    return json.dumps([s.model_dump() for s in spans]) if spans else None
+
+
+def _dump_blocks(blocks: list[MatchBlockModel]) -> str | None:
+    return json.dumps([b.model_dump() for b in blocks]) if blocks else None
+
+
 def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite3.Row
     verdict_rows = tx.execute(
         "SELECT criterion_id, verdict, model_verdict, evidence, verified, match_ratio, "
-        "longest_span FROM verdicts WHERE candidate_id = ? ORDER BY id",
+        "longest_span, match_blocks_json, negation_suspected, support, suggested_verdict, "
+        "verifier_rationale, absence_confirmed, absence_evidence "
+        "FROM verdicts WHERE candidate_id = ? ORDER BY id",
         (row["id"],),
     ).fetchall()
 
     return Candidate(
+        id=row["id"],
         run_id=row["run_id"],
         filename=row["filename"],
         file_sha256=row["file_sha256"],
+        resume_text=row["resume_text"] or "",
+        sent_text=row["sent_text"] or "",
+        redaction_map=[Span(**s) for s in json.loads(row["redaction_map_json"] or "[]")],
         score=row["score"],
         band=_as_band(row["band"]),
         must_haves_met=bool(row["must_haves_met"]),
@@ -210,6 +315,19 @@ def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite
                 verified=bool(v["verified"]),
                 match_ratio=v["match_ratio"] or 0.0,
                 longest_span=v["longest_span"] or 0,
+                match_blocks=[
+                    MatchBlockModel(**b) for b in json.loads(v["match_blocks_json"] or "[]")
+                ],
+                negation_suspected=bool(v["negation_suspected"]),
+                support=_as_support(v["support"]),
+                suggested_verdict=(
+                    _as_verdict(v["suggested_verdict"]) if v["suggested_verdict"] else None
+                ),
+                verifier_rationale=v["verifier_rationale"] or "",
+                absence_confirmed=(
+                    None if v["absence_confirmed"] is None else bool(v["absence_confirmed"])
+                ),
+                absence_evidence=v["absence_evidence"] or "",
                 # Weight and must_have are rubric facts, not verdict facts. They
                 # are not stored per verdict — re-deriving them from the rubric
                 # keeps one source of truth for the arithmetic.
@@ -224,6 +342,13 @@ def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite
         flags=[Flag(f) for f in json.loads(row["flags_json"] or "[]")],
         scoreable=bool(row["scoreable"]),
         review_required=bool(row["review_required"]),
+        escalation_reasons=[
+            EscalationReason(r) for r in json.loads(row["escalation_reasons_json"] or "[]")
+        ],
+        verification_status=row["verification_status"],
+        decision=row["decision"],
+        decided_by=row["decided_by"],
+        decided_at=row["decided_at"],
         scored_at=row["scored_at"],
     )
 
@@ -233,6 +358,20 @@ def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite
 # only thing catching a value the schema should never have allowed.
 _VERDICTS: dict[str, Verdict] = {"strong": "strong", "partial": "partial", "none": "none"}
 _BANDS: dict[str, Band] = {"A": "A", "B": "B", "C": "C", "D": "D"}
+_SUPPORTS: dict[str, Support] = {
+    "supported": "supported",
+    "insufficient": "insufficient",
+    "contradicted": "contradicted",
+}
+
+
+def _as_support(value: str | None) -> Support | None:
+    if value is None:
+        return None
+    try:
+        return _SUPPORTS[value]
+    except KeyError:
+        raise ValueError(f"unknown support value in database: {value!r}") from None
 
 
 def _as_verdict(value: str) -> Verdict:

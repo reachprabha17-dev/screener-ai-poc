@@ -480,12 +480,23 @@ class Run(BaseModel):
     position_id: str
     rubric_id: str
     folder: str
-    status: Literal["pending", "running", "completed", "failed", "aborted"]
+    # `empty` is not a flavour of `completed`. A run over a folder with no
+    # eligible files must say so — a reviewer shown a blank results screen with
+    # a green tick has no way to tell "nobody applied" from "something broke"
+    # (17.2).
+    status: Literal["pending", "running", "completed", "empty", "failed", "aborted"]
+    # Two-phase execution (17.4). `judge` and `verify` are work; `done` means
+    # both passes are finished and is what stops a completed run being re-entered.
+    phase: Literal["judge", "verify", "done"] = "judge"
     judge_digest: str
+    verifier_model: str | None = None
+    verifier_digest: str | None = None
+    verification_enabled: bool = True
     prompt_hash: str
     redaction_on: bool
     num_ctx: int
     app_version: str
+    file_count: int = 0
     escalation_rate: float | None = None
     reproducibility_rate: float | None = None
 

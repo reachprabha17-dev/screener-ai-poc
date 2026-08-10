@@ -194,10 +194,10 @@ class Settings(BaseSettings):
     # erasure path.
     capture_raw_on_failure: bool = True
     failure_dir: str = "data/failures"
-    trace_dir: str = "data/traces"
     log_dir: str = "data/logs"
-    trace_enabled: bool = True
-    min_free_disk_gb: int = 20  # readiness gate; traces grow fast
+    # Readiness gate. `resume_text` + `sent_text` add roughly 40 MB per 1,000-CV
+    # run to the database, so the floor still matters after traces are gone.
+    min_free_disk_gb: int = 20
 
     @property
     def app_version(self) -> str:

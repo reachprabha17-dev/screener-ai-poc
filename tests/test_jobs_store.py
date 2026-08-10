@@ -308,34 +308,18 @@ def test_empty_queue_returns_none_rather_than_blocking(uow: UnitOfWork) -> None:
         assert jobs_store.claim_next(tx, WORKER) is None
 
 
-# --- scheduling (16.3) ------------------------------------------------------
+# --- scheduling (17.3) ------------------------------------------------------
 
 
-def test_a_small_run_jumps_ahead_of_a_mass_posting(uow: UnitOfWork) -> None:
-    """Shortest-job-first where it is cheap.
+def test_runs_are_served_first_in_first_out(uow: UnitOfWork) -> None:
+    """FIFO by run creation, then job id. No fast lane (17.3).
 
-    A specialist role with 5 applicants should not sit behind two 1,000-CV
-    postings for two hours.
+    Shortest-job-first was removed rather than reimplemented: batch duration was
+    never the constraint — recruiters currently screen a thousand CVs by hand and
+    will not notice 2.6 hours against 78 minutes. Reviewer time is the
+    constraint. The fast lane bought nothing against it, and it needed an aging
+    rule of its own to stop a trickle of small runs starving a large one.
     """
-    seed_run(uow, "big", position_id="p1", reference="REQ-BIG", created_at=minutes_ago(60))
-    seed_run(
-        uow,
-        "small",
-        position_id="p2",
-        reference="REQ-SMALL",
-        created_at=minutes_ago(30),
-    )
-    add_jobs(uow, "big", settings.fast_lane_max_files + 10, prefix="big")
-    add_jobs(uow, "small", 3, prefix="small")
-
-    with uow as tx:
-        job = jobs_store.claim_next(tx, WORKER)
-
-    assert job is not None
-    assert job.run_id == "small"  # submitted later, served first
-
-
-def test_runs_of_equal_lane_are_served_fifo(uow: UnitOfWork) -> None:
     seed_run(uow, "first", position_id="p1", reference="A", created_at=minutes_ago(60))
     seed_run(uow, "second", position_id="p2", reference="B", created_at=minutes_ago(30))
     add_jobs(uow, "first", 2, prefix="f")
@@ -348,28 +332,25 @@ def test_runs_of_equal_lane_are_served_fifo(uow: UnitOfWork) -> None:
     assert job.run_id == "first"
 
 
-def test_an_aged_large_run_is_promoted(uow: UnitOfWork) -> None:
-    """Aging exists so a trickle of small runs cannot starve a big one forever."""
-    seed_run(uow, "big", position_id="p1", reference="BIG", created_at=minutes_ago(60 * 24 * 365))
-    seed_run(uow, "small", position_id="p2", reference="SMALL", created_at=now().isoformat())
-    add_jobs(uow, "big", settings.fast_lane_max_files + 10, prefix="big")
+def test_a_large_run_is_not_overtaken_by_a_later_small_one(uow: UnitOfWork) -> None:
+    """The behaviour change from v4, stated as a test so it is not a surprise.
+
+    A specialist role with three applicants now waits behind a mass posting
+    submitted before it. That is the accepted cost of dropping the fast lane —
+    and the reason round-robin stays rejected too: ranking is only meaningful
+    over a complete run, so partial progress across several runs gives every
+    reviewer something they cannot act on.
+    """
+    seed_run(uow, "big", position_id="p1", reference="REQ-BIG", created_at=minutes_ago(60))
+    seed_run(uow, "small", position_id="p2", reference="REQ-SMALL", created_at=minutes_ago(30))
+    add_jobs(uow, "big", 200, prefix="big")
     add_jobs(uow, "small", 3, prefix="small")
 
     with uow as tx:
         job = jobs_store.claim_next(tx, WORKER)
 
     assert job is not None
-    assert job.run_id == "big"  # aged into the fast lane, then wins on FIFO
-
-
-def test_eta_reflects_outstanding_work(uow: UnitOfWork) -> None:
-    seed_run(uow)
-    add_jobs(uow, "run1", 100)
-
-    with uow as tx:
-        eta = jobs_store.progress(tx, "run1").eta_seconds
-
-    assert eta == pytest.approx(100 * settings.seconds_per_resume)
+    assert job.run_id == "big"
 
 
 # --- gate: the attempt cap ---------------------------------------------------
@@ -644,3 +625,147 @@ def test_queue_depth_counts_only_work_served_earlier(uow: UnitOfWork) -> None:
     with uow as tx:
         assert jobs_store.queue_depth_ahead(tx, "second") == 4
         assert jobs_store.queue_depth_ahead(tx, "first") == 0
+
+
+# --- gate: two-phase execution (17.4) and phase-2 idempotence (12.9) ---------
+
+
+def save_candidate(uow: UnitOfWork, run_id: str, sha: str, *, scoreable: bool = True) -> int:
+    """A judged candidate, so phase 2 has something to claim."""
+    from screener.models import Candidate
+    from screener.ports import CacheKey
+    from screener.storage import results_store
+
+    with uow as tx:
+        return results_store.save(
+            tx,
+            run_id,
+            Candidate(
+                run_id=run_id,
+                filename=f"{sha}.pdf",
+                file_sha256=sha,
+                sent_text="Senior Backend Engineer, 2019-2024.",
+                score=7.8 if scoreable else None,
+                band="A" if scoreable else None,
+                must_haves_met=scoreable,
+                scoreable=scoreable,
+            ),
+            CacheKey(
+                file_sha256=sha,
+                position_id="p1",
+                rubric_hash="r" * 64,
+                judge_digest="sha256:aaa",
+                prompt_hash="p" * 64,
+                redaction_on=True,
+                num_ctx=8192,
+                app_version="v0.1.0",
+            ),
+        )
+
+
+def test_a_verify_job_does_not_collide_with_the_judge_job_for_the_same_file(
+    uow: UnitOfWork,
+) -> None:
+    """`UNIQUE(run_id, phase, file_path)`. Without the phase, phase 2 enqueues nothing.
+
+    `INSERT OR IGNORE` makes that failure completely silent: the insert is
+    ignored, the count comes back zero, and the run advances to `done` having
+    verified nobody.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    save_candidate(uow, "run1", "sha-a")
+
+    with uow as tx:
+        enqueued = jobs_store.enqueue_verify_jobs(tx, "run1")
+
+    assert enqueued == 1
+
+
+def test_only_scoreable_candidates_are_verified(uow: UnitOfWork) -> None:
+    """An unscoreable candidate is already going to a human for a stronger reason.
+
+    Spending ~5 s of GPU per résumé to confirm it would be the review queue
+    paying for work that changes nothing.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 2)
+    save_candidate(uow, "run1", "sha-ok", scoreable=True)
+    save_candidate(uow, "run1", "sha-bad", scoreable=False)
+
+    with uow as tx:
+        assert jobs_store.enqueue_verify_jobs(tx, "run1") == 1
+
+
+def test_resuming_mid_verification_re_verifies_nothing(uow: UnitOfWork) -> None:
+    """**The gate.** 12.9: the phase-2 claim excludes candidates already done.
+
+    Without it a run resumed after a crash re-runs the verifier over every
+    candidate it had already checked — hours of GPU, and a non-deterministic
+    second opinion re-rolled over settled candidates, which can change who is in
+    the review queue on what was supposed to be a resumption.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 2)
+    first = save_candidate(uow, "run1", "sha-a")
+    save_candidate(uow, "run1", "sha-b")
+    with uow as tx:
+        jobs_store.enqueue_verify_jobs(tx, "run1")
+        # `sha-a` was verified before the crash.
+        tx.execute("UPDATE candidates SET verification_status = 'done' WHERE id = ?", (first,))
+
+    claimed = []
+    for _ in range(3):
+        with uow as tx:
+            job = jobs_store.claim_next(tx, WORKER, phase="verify")
+        if job is None:
+            break
+        claimed.append(job)
+        with uow as tx:
+            jobs_store.complete(tx, job.id)
+
+    assert len(claimed) == 1, "a verified candidate was claimed again"
+    assert claimed[0].candidate_id != first
+
+
+def test_enqueueing_twice_adds_nothing(uow: UnitOfWork) -> None:
+    """A worker that dies between enqueueing and advancing the phase must not double up."""
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    save_candidate(uow, "run1", "sha-a")
+
+    with uow as tx:
+        assert jobs_store.enqueue_verify_jobs(tx, "run1") == 1
+        assert jobs_store.enqueue_verify_jobs(tx, "run1") == 0
+
+
+def test_a_phase_claims_only_its_own_work(uow: UnitOfWork) -> None:
+    """Phase 1 must not hand a verify job to a worker holding the judge model."""
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    save_candidate(uow, "run1", "sha-a")
+    with uow as tx:
+        jobs_store.enqueue_verify_jobs(tx, "run1")
+
+    with uow as tx:
+        judged = jobs_store.claim_next(tx, WORKER, phase="judge")
+    assert judged is not None and judged.phase == "judge"
+
+    with uow as tx:
+        verify = jobs_store.claim_next(tx, WORKER, phase="verify")
+    assert verify is not None and verify.phase == "verify"
+    assert verify.candidate_id is not None
+
+
+def test_a_phase_is_drained_only_when_nothing_is_in_flight(uow: UnitOfWork) -> None:
+    """Advancing under a claimed job would unload the model it is mid-call against."""
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+
+    with uow as tx:
+        assert jobs_store.no_pending(tx, "run1", "judge") is False
+        job = jobs_store.claim_next(tx, WORKER, phase="judge")
+        assert job is not None
+        assert jobs_store.no_pending(tx, "run1", "judge") is False
+        jobs_store.complete(tx, job.id)
+        assert jobs_store.no_pending(tx, "run1", "judge") is True

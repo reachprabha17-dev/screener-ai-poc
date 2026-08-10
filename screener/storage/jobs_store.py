@@ -83,21 +83,46 @@ def snapshot_folder(tx: Tx, run_id: str, folder: Path) -> int:
     the result reproducible. Files added later need an explicit rescan — nothing
     is ever silently added mid-run.
 
-    `INSERT OR IGNORE` against `UNIQUE(run_id, file_path)` makes this idempotent,
-    so rescan is the same call and inserts only what is new.
+    `INSERT OR IGNORE` against `UNIQUE(run_id, phase, file_path)` makes this
+    idempotent, so rescan is the same call and inserts only what is new. The
+    phase is part of that key: without it, the verify job for a résumé collides
+    with the judge job that produced the candidate, and phase 2 silently
+    enqueues nothing.
     """
     timestamp = now().isoformat()
     inserted = 0
 
     for path in _eligible_files(folder):
         cursor = tx.execute(
-            "INSERT OR IGNORE INTO jobs (run_id, file_path, status, created_at, updated_at) "
-            "VALUES (?, ?, 'pending', ?, ?)",
+            "INSERT OR IGNORE INTO jobs (run_id, phase, file_path, status, created_at, "
+            "updated_at) VALUES (?, 'judge', ?, 'pending', ?, ?)",
             (run_id, str(path), timestamp, timestamp),
         )
         inserted += cursor.rowcount or 0
 
     return inserted
+
+
+def enqueue_verify_jobs(tx: Tx, run_id: str) -> int:
+    """Queue phase 2 for this run's scoreable candidates. Returns how many.
+
+    **Scoreable only.** An unscoreable candidate is already going to a human for
+    a stronger reason than anything the verifier could add, and spending ~5 s of
+    GPU per résumé to confirm it would be the review queue paying for work that
+    changes nothing (10.4).
+
+    Idempotent through the same UNIQUE key as the snapshot, so a worker that
+    crashes between enqueueing and advancing the phase re-enqueues nothing.
+    """
+    timestamp = now().isoformat()
+    cursor = tx.execute(
+        "INSERT OR IGNORE INTO jobs (run_id, phase, file_path, file_sha256, candidate_id, "
+        "status, created_at, updated_at) "
+        "SELECT c.run_id, 'verify', c.filename, c.file_sha256, c.id, 'pending', ?, ? "
+        "FROM candidates c WHERE c.run_id = ? AND c.scoreable = 1",
+        (timestamp, timestamp, run_id),
+    )
+    return cursor.rowcount or 0
 
 
 def _eligible_files(folder: Path) -> list[Path]:
@@ -137,20 +162,29 @@ def _eligible_files(folder: Path) -> list[Path]:
 # --- claim / release ---------------------------------------------------------
 
 
-def claim_next(tx: Tx, worker_id: str) -> Job | None:
-    """Take ownership of exactly one job, or return None.
+def claim_next(tx: Tx, worker_id: str, phase: str = "judge") -> Job | None:
+    """Take ownership of exactly one job in this phase, or return None.
 
-    Selection order implements 16.3: runs under `fast_lane_max_files` first
-    (shortest-job-first where it is cheap, so a small specialist role does not
-    sit behind two 1,000-CV mass postings), then FIFO by run creation, then job
-    id within a run.
+    **FIFO by run creation, then job id.** The fast lane is gone (17.3): batch
+    duration was never the constraint — recruiters currently screen by hand, and
+    nobody notices 2.6 hours against 78 minutes. Reviewer time is the constraint,
+    and shortest-job-first bought nothing against it while adding a starvation
+    problem that then needed an aging rule to fix.
 
-    Aging is folded into the same ORDER BY: a large run whose wait has exceeded
-    `run_aging_hours` is promoted into the fast lane, so a stream of small runs
-    cannot starve it indefinitely.
+    **Phase 2 skips candidates already verified.** Without that clause a run
+    resumed mid-verification re-verifies everything it had already checked, at
+    ~5 s of GPU each (12.9) — and re-running a non-deterministic second opinion
+    over settled candidates can change who is in the review queue on a rerun that
+    was supposed to be a resumption.
     """
     timestamp = now().isoformat()
     placeholders = ",".join("?" for _ in _ACTIVE_RUN_STATUSES)
+    # Phase 2 works from stored candidates, so the queue is filtered by their
+    # state rather than by the job's alone.
+    verify_join = "JOIN candidates c ON c.id = j.candidate_id " if phase == "verify" else ""
+    verify_where = (
+        "AND c.verification_status = 'pending' AND c.scoreable = 1 " if phase == "verify" else ""
+    )
 
     row = tx.execute(
         f"""
@@ -165,34 +199,36 @@ def claim_next(tx: Tx, worker_id: str) -> Job | None:
         WHERE id = (
             SELECT j.id FROM jobs j
             JOIN runs r ON r.id = j.run_id
-            JOIN (
-                SELECT run_id, COUNT(*) AS n FROM jobs WHERE status = 'pending' GROUP BY run_id
-            ) q ON q.run_id = j.run_id
+            {verify_join}
             WHERE j.status = 'pending'
+              AND j.phase = ?
               AND r.status IN ({placeholders})
-            ORDER BY
-                CASE WHEN q.n <= ? THEN 0
-                     WHEN (julianday(?) - julianday(r.created_at)) * 24.0 >= ? THEN 0
-                     ELSE 1 END,
-                r.created_at,
-                j.id
+              {verify_where}
+            ORDER BY r.created_at, j.id
             LIMIT 1
         )
-        RETURNING id, run_id, file_path, file_sha256, attempts, claimed_by, claimed_at
-        """,  # noqa: S608 — placeholders are generated from a module constant, not input
-        (
-            worker_id,
-            timestamp,
-            timestamp,
-            timestamp,
-            *_ACTIVE_RUN_STATUSES,
-            settings.fast_lane_max_files,
-            timestamp,
-            settings.run_aging_hours,
-        ),
+        RETURNING id, run_id, phase, file_path, file_sha256, candidate_id, attempts,
+                  claimed_by, claimed_at
+        """,  # noqa: S608 — fragments are module-local constants keyed on `phase`, never caller input
+        (worker_id, timestamp, timestamp, timestamp, phase, *_ACTIVE_RUN_STATUSES),
     ).fetchone()
 
     return _to_job(row) if row else None
+
+
+def no_pending(tx: Tx, run_id: str, phase: str) -> bool:
+    """Is this phase drained? The condition for advancing to the next one.
+
+    Counts `claimed` as well as `pending`: a job in flight on another worker is
+    not finished, and advancing the phase underneath it would unload the model
+    it is mid-call against.
+    """
+    row = tx.execute(
+        "SELECT COUNT(*) AS n FROM jobs WHERE run_id = ? AND phase = ? "
+        "AND status IN ('pending','claimed')",
+        (run_id, phase),
+    ).fetchone()
+    return int(row["n"]) == 0
 
 
 def heartbeat(tx: Tx, job_id: int, worker_id: str) -> None:
@@ -378,11 +414,14 @@ def abort_run_jobs(tx: Tx, run_id: str) -> int:
 
 
 def _to_job(row: Any) -> Job:  # noqa: ANN401 — sqlite3.Row
+    keys = row.keys()
     return Job(
         id=int(row["id"]),
         run_id=row["run_id"],
+        phase=row["phase"] if "phase" in keys else "judge",
         file_path=Path(row["file_path"]),
         file_sha256=row["file_sha256"],
+        candidate_id=row["candidate_id"] if "candidate_id" in keys else None,
         attempts=int(row["attempts"]),
         claimed_by=row["claimed_by"],
         claimed_at=row["claimed_at"],

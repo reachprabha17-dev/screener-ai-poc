@@ -1,15 +1,16 @@
-"""Structured logging and the trace store (spec 17, build gate 20 step 17).
+"""Structured logging and failure capture (spec 18, build gate 20 step 17).
 
-The gate is blunt: **purge deletes traces — assert no trace file contains the
-name**. That test is the last section, and it searches the whole trace directory
-for the candidate's name rather than checking that a particular row went away.
-Checking the index would prove the index was updated; the thing that matters is
-whether a copy of the resume is still on disk.
+The gate is blunt and it moved: **purge leaves no copy of the résumé anywhere**.
+In v4 "anywhere" meant the trace directory. In v6 traces are gone and the same
+text lives in `candidates.resume_text` and `candidates.sent_text`, so the gate
+searches the database columns *and* the failure-capture directory, by content,
+for the candidate's name.
 
-17 calls this out as the step that is easy to forget and the one that would make
-the whole control ineffective: a trace directory outside the erasure path defeats
-`purge_candidate` **while appearing implemented**, which is worse than having no
-traces, because it gets reported as done.
+Searching by content rather than checking that a particular column went NULL is
+the point. A `purge_candidate` that clears the columns it was written against and
+misses the one added last month reports success while a complete copy of the
+person's CV sits in the row next to the redacted one — which is worse than not
+having the control, because it gets reported as done.
 """
 
 import json
@@ -19,21 +20,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from helpers_storage import make_rubric_row
 
 from config.settings import settings
 from screener.logging import (
     DIR_MODE,
     FILE_MODE,
-    TraceWriter,
     bind_job,
     clear_context,
-    prune_traces,
+    failure_paths_for,
+    write_failure,
 )
-from screener.models import Actor, Candidate, ScoredCriterion
-from screener.pipeline import TraceRecord
+from screener.models import Actor, Candidate, Position, ScoredCriterion, now
 from screener.ports import CacheKey
 from screener.service import ScreenerService
-from screener.storage import results_store, traces_store
+from screener.storage import positions_store, results_store, runs_store
 from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
 
@@ -44,6 +45,7 @@ RESUME_TEXT = (
     f"{CANDIDATE_NAME}. Senior Backend Engineer with 7 years of experience. "
     "Contact: asha.nair@example.com. Owned the Kubernetes platform for 12 services."
 )
+SENT_TEXT = RESUME_TEXT.replace("asha.nair@example.com", "[EMAIL]")
 
 
 class FakeLLM:
@@ -74,10 +76,10 @@ class FakeLLM:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "screener.db"))
-    monkeypatch.setattr(settings, "trace_dir", str(tmp_path / "traces"))
+    monkeypatch.setattr(settings, "failure_dir", str(tmp_path / "failures"))
     monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
-    monkeypatch.setattr(settings, "trace_enabled", True)
+    monkeypatch.setattr(settings, "capture_raw_on_failure", True)
     apply_migrations(tmp_path / "screener.db")
     return tmp_path
 
@@ -96,169 +98,169 @@ def service(uow_factory: Callable[[], UnitOfWork]) -> ScreenerService:
     return ScreenerService(llm=FakeLLM(), uow_factory=uow_factory)  # type: ignore[arg-type]
 
 
-def trace_record(sha: str = "sha-asha") -> TraceRecord:
-    return TraceRecord(
+def capture(sha: str = "sha-asha") -> Path:
+    """One failure capture, holding model output derived from the résumé."""
+    path = write_failure(
         file_sha256=sha,
-        system="You are a resume screener.",
-        # The exact string sent to the model — full resume text.
-        user=f"CRITERIA:\nC1: backend\n\n<<<RESUME\n{RESUME_TEXT}\nRESUME>>>",
-        output={"criteria": [{"id": "C1", "verdict": "strong", "evidence": "7 years"}]},
-        prompt_tokens=900,
-        attempts=1,
+        prompt_hash="p" * 64,
+        raw_output=f'Here is the JSON you asked for: {{"criteria": [{{"evidence": "{RESUME_TEXT}"',
+        error="unterminated object at position 812",
+        job_id=7,
     )
+    assert path is not None
+    return path
 
 
 def everything_under(root: Path) -> str:
     """Every byte of every file under a directory, concatenated."""
+    if not root.is_dir():
+        return ""
     return "".join(
         p.read_text(encoding="utf-8", errors="replace") for p in root.rglob("*") if p.is_file()
     )
 
 
-# --- the trace record --------------------------------------------------------
+def everything_in(db: Path) -> str:
+    """Every text value in the database. The content search the gate runs."""
+    connection = connect(db)
+    try:
+        tables = [
+            r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        ]
+        return "".join(
+            str(value)
+            for table in tables
+            for row in connection.execute(f"SELECT * FROM {table}")  # noqa: S608 — table names from sqlite_master
+            for value in row
+            if value is not None
+        )
+    finally:
+        connection.close()
 
 
-def test_a_trace_captures_what_was_actually_sent(workspace: Path) -> None:
-    """What makes offline evaluation possible without re-running a GPU batch (18)."""
-    path = TraceWriter().write("run1", trace_record())
-
-    assert path is not None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-
-    assert payload["file_sha256"] == "sha-asha"
-    assert RESUME_TEXT in payload["user"]
-    assert payload["model"] == settings.judge_model
-    # Everything needed to re-run this exact call offline.
-    for key in ("seed", "num_ctx", "num_predict", "temperature", "prompt_tokens"):
-        assert key in payload
+# --- failure capture ---------------------------------------------------------
 
 
-def test_tracing_can_be_switched_off(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "trace_enabled", False)
+def test_a_schema_failure_captures_the_output_that_caused_it(workspace: Path) -> None:
+    """A `SCHEMA_INVALID` with the offending text discarded explains nothing.
 
-    assert TraceWriter().write("run1", trace_record()) is None
-
-
-def test_one_file_per_candidate_per_run(workspace: Path) -> None:
-    """Not one shared log.
-
-    Purge deletes whole files. Rewriting a shared log to excise one person's
-    text is exactly the operation that half-succeeds.
+    The usual causes — prose wrapped around the JSON, or `num_predict` cutting an
+    object in half — are indistinguishable from the exception alone, which is
+    what made removing continuous tracing a regression until this replaced it.
     """
-    writer = TraceWriter()
-    first = writer.write("run1", trace_record("sha-a"))
-    second = writer.write("run1", trace_record("sha-b"))
+    path = capture()
 
-    assert first != second
-    assert first is not None and second is not None
-    assert first.parent == second.parent
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["file_sha256"] == "sha-asha"
+    assert payload["prompt_hash"] == "p" * 64
+    assert payload["job_id"] == 7
+    assert "unterminated object" in payload["error"]
+    assert payload["raw_output"].startswith("Here is the JSON")
+    assert payload["num_predict"] == settings.num_predict
 
 
-def test_traces_are_not_world_readable(workspace: Path) -> None:
-    """`data/` holds candidate PII in plaintext; traces are part of that (19)."""
-    path = TraceWriter().write("run1", trace_record())
+def test_nothing_is_written_when_capture_is_disabled(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "capture_raw_on_failure", False)
 
-    assert path is not None
+    assert write_failure(file_sha256="s", prompt_hash="p", raw_output="x", error="e") is None
+    assert everything_under(Path(settings.failure_dir)) == ""
+
+
+def test_captures_are_not_world_readable(workspace: Path) -> None:
+    """`data/` holds candidate PII in plaintext and this is part of that (20)."""
+    path = capture()
+
     assert stat.S_IMODE(path.stat().st_mode) == FILE_MODE
     assert stat.S_IMODE(path.parent.stat().st_mode) == DIR_MODE
 
 
-# --- the gate: purge leaves no copy on disk ----------------------------------
+def test_captures_are_found_by_hash_without_an_index(workspace: Path) -> None:
+    """The glob is the lookup. Needing an index is what made tracing expensive."""
+    mine = capture("sha-asha")
+    capture("sha-ben")
+
+    assert failure_paths_for("sha-asha") == [mine]
 
 
-def test_purge_leaves_no_trace_file_containing_the_name(
+def test_two_failures_for_one_candidate_do_not_overwrite_each_other(workspace: Path) -> None:
+    """A retry that fails differently is a second data point, not a correction."""
+    first = capture()
+    second = capture()
+
+    assert first != second
+    assert len(failure_paths_for("sha-asha")) == 2
+
+
+# --- the gate: purge leaves no copy anywhere ---------------------------------
+
+
+def test_purge_leaves_no_copy_of_the_resume_anywhere(
     workspace: Path, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
-    """**The gate.** Searches the whole trace directory, not the index.
+    """**The gate.** Searches by content, across the database and the disk.
 
-    Checking that a row disappeared would prove the index was updated. What
-    matters is whether a copy of the resume is still on disk — and a trace
-    directory outside the erasure path defeats `purge_candidate` while appearing
-    implemented, which 17 calls worse than having no traces at all.
+    v6 moved the résumé into `candidates`, so the database is now the primary
+    place a copy can survive a purge — and `sent_text`, `redaction_map_json` and
+    `verdicts.absence_evidence` all arrived after the original purge statement
+    was written. Asserting on columns would only prove the columns someone
+    remembered are cleared.
     """
-    trace_root = Path(settings.trace_dir)
-    path = TraceWriter().write("run1", trace_record())
-    assert path is not None
-
+    path = capture()
     _seed_candidate(service, uow_factory, sha="sha-asha")
-    with uow_factory() as tx:
-        traces_store.record(tx, "run1", "sha-asha", path)
+    db = workspace / "screener.db"
 
-    # Precondition: the name really is on disk before we purge.
-    assert CANDIDATE_NAME in everything_under(trace_root)
+    # Precondition: the name really is in both places before we purge.
+    assert CANDIDATE_NAME in everything_in(db)
+    assert CANDIDATE_NAME in everything_under(Path(settings.failure_dir))
 
     removed = service.purge_candidate("sha-asha", ACTOR)
 
     assert removed == 1
-    assert CANDIDATE_NAME not in everything_under(trace_root)
-    assert "asha.nair@example.com" not in everything_under(trace_root)
+    assert CANDIDATE_NAME not in everything_in(db)
+    assert "asha.nair@example.com" not in everything_in(db)
+    assert CANDIDATE_NAME not in everything_under(Path(settings.failure_dir))
     assert not path.exists()
 
 
-def test_purge_clears_the_index_as_well_as_the_disk(
+def test_purge_keeps_the_non_identifying_statistics(
     workspace: Path, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
-    path = TraceWriter().write("run1", trace_record())
-    assert path is not None
+    """A purged candidate stays countable in an escalation rate (12.10)."""
     _seed_candidate(service, uow_factory, sha="sha-asha")
-    with uow_factory() as tx:
-        traces_store.record(tx, "run1", "sha-asha", path)
 
     service.purge_candidate("sha-asha", ACTOR)
 
     with uow_factory() as tx:
-        assert traces_store.paths_for(tx, "sha-asha") == []
+        row = tx.execute(
+            "SELECT score, band, cacheable FROM candidates WHERE file_sha256 = ?", ("sha-asha",)
+        ).fetchone()
+
+    assert row["score"] == 7.5
+    assert row["band"] == "A"
+    # Never served from cache again: the text it was judged against is gone.
+    assert row["cacheable"] == 0
 
 
-def test_purge_does_not_touch_another_candidates_trace(
+def test_purge_does_not_touch_another_candidate(
     workspace: Path, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
     """Erasure is per-candidate. Taking a neighbour's data with it is its own incident."""
-    writer = TraceWriter()
-    mine = writer.write("run1", trace_record("sha-asha"))
-    theirs = writer.write("run1", trace_record("sha-ben"))
-    assert mine is not None and theirs is not None
-
+    mine = capture("sha-asha")
+    theirs = capture("sha-ben")
     _seed_candidate(service, uow_factory, sha="sha-asha")
-    _seed_candidate(service, uow_factory, sha="sha-ben")
-    with uow_factory() as tx:
-        traces_store.record(tx, "run1", "sha-asha", mine)
-        traces_store.record(tx, "run1", "sha-ben", theirs)
+    _seed_candidate(service, uow_factory, sha="sha-ben", filename="Ben Okoro.pdf")
 
     service.purge_candidate("sha-asha", ACTOR)
 
     assert not mine.exists()
     assert theirs.exists()
-
-
-# --- retention ---------------------------------------------------------------
-
-
-def test_old_traces_are_prunable(workspace: Path) -> None:
-    """Retention shorter than the audit log (17).
-
-    The audit trail records decisions and must outlive the raw text those
-    decisions were made from.
-    """
-    import os
-    import time
-
-    path = TraceWriter().write("run1", trace_record())
-    assert path is not None
-    old = time.time() - 60 * 60 * 24 * 90
-    os.utime(path, (old, old))
-
-    removed = prune_traces(older_than_days=30)
-
-    assert path in removed
-    assert not path.exists()
-
-
-def test_pruning_keeps_recent_traces(workspace: Path) -> None:
-    path = TraceWriter().write("run1", trace_record())
-
-    assert prune_traces(older_than_days=30) == []
-    assert path is not None and path.exists()
+    with uow_factory() as tx:
+        row = tx.execute(
+            "SELECT resume_text FROM candidates WHERE file_sha256 = ?", ("sha-ben",)
+        ).fetchone()
+    assert row["resume_text"] == RESUME_TEXT
 
 
 # --- the JSONL event stream --------------------------------------------------
@@ -271,7 +273,7 @@ def test_events_are_json_and_carry_their_context(workspace: Path) -> None:
     and it is exactly the question that matters.
 
     Read from the file rather than captured stdout: `data/logs/screener.jsonl`
-    is where 17 says these go, and it is what an operator will actually grep.
+    is where 18 says these go, and it is what an operator will actually grep.
     """
     import logging as stdlib_logging
 
@@ -325,11 +327,12 @@ def test_context_does_not_leak_between_jobs(workspace: Path) -> None:
 
 
 def _seed_candidate(
-    service: ScreenerService, uow_factory: Callable[[], UnitOfWork], *, sha: str
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+    *,
+    sha: str,
+    filename: str = f"{CANDIDATE_NAME}.pdf",
 ) -> None:
-    from screener.models import Position, now
-    from screener.storage import positions_store, rubrics_store, runs_store
-
     with uow_factory() as tx:
         positions_store.seed_user(tx, ACTOR.id, ACTOR.display_name)
         if positions_store.get(tx, "p1") is None:
@@ -344,8 +347,6 @@ def _seed_candidate(
                     created_at=now(),
                 ),
             )
-            from helpers_storage import make_rubric_row
-
             make_rubric_row(tx, "p1", "r1")
             runs_store.create(
                 tx,
@@ -363,15 +364,18 @@ def _seed_candidate(
                 seed=42,
                 app_version="v",
             )
-            assert rubrics_store.get(tx, "r1") is not None
 
         results_store.save(
             tx,
             "run1",
             Candidate(
                 run_id="run1",
-                filename=f"{CANDIDATE_NAME}.pdf",
+                filename=filename,
                 file_sha256=sha,
+                # Both stored text versions, because both are what the gate is
+                # actually searching for.
+                resume_text=RESUME_TEXT,
+                sent_text=SENT_TEXT,
                 score=7.5,
                 band="A",
                 must_haves_met=True,
@@ -386,6 +390,7 @@ def _seed_candidate(
                         longest_span=8,
                         weight=1,
                         must_have=False,
+                        absence_evidence="",
                     )
                 ],
             ),
