@@ -331,7 +331,7 @@ def test_create_run_freezes_the_reproducibility_inputs(service: ScreenerService)
 
     run = service.create_run(position_id, rubric_id, ACTOR)
 
-    assert run.model_digest == "sha256:aaa"
+    assert run.judge_digest == "sha256:aaa"
     assert len(run.prompt_hash) == 64
     assert run.num_ctx == settings.num_ctx
     assert run.redaction_on == settings.redact_pii
@@ -540,7 +540,7 @@ def test_a_digest_that_drifts_from_the_pin_is_reported(
     uow_factory: Callable[[], UnitOfWork], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every decision stored under the old weights has stopped being reproducible."""
-    monkeypatch.setattr(settings, "model_digest_pin", "sha256:expected")
+    monkeypatch.setattr(settings, "judge_digest_pin", "sha256:expected")
     service = ScreenerService(llm=FakeLLM(digest="sha256:actual"), uow_factory=uow_factory)  # type: ignore[arg-type]
 
     report = service.health()
@@ -599,7 +599,7 @@ def _seed_run_with_candidates(
             file_sha256=sha,
             position_id=position_id,
             rubric_hash="r" * 64,
-            model_digest="sha256:aaa",
+            judge_digest="sha256:aaa",
             prompt_hash="p" * 64,
             redaction_on=True,
             num_ctx=settings.num_ctx,

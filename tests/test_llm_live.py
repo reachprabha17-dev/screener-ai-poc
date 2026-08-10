@@ -308,7 +308,7 @@ def test_evidence_is_quoted_from_the_resume(llm: LLMClient) -> None:
     supported = [c for c in result.output.criteria if c.verdict != "none"]
     assert supported, "expected at least one supported criterion on this resume"
 
-    ratios = [align(c.evidence, RESUME)[0] for c in supported]
+    ratios = [align(c.evidence, RESUME).ratio for c in supported]
     assert sum(r >= 0.6 for r in ratios) >= len(ratios) * 0.8, ratios
 
 

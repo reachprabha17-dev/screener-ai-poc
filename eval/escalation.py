@@ -86,14 +86,14 @@ def measure(llm: LLMClient, corpus: Corpus) -> Escalations:
             cv = by_id.get(criterion.id)
             if cv is None or cv.verdict == "none":
                 continue
-            ratio, span, chars = align(cv.evidence, case.resume)
+            alignment = align(cv.evidence, case.resume)
             result.evidence_stats.append(
                 (
                     criterion.text,
                     cv.evidence,
-                    ratio,
-                    span,
-                    chars,
+                    alignment.ratio,
+                    alignment.longest_span,
+                    alignment.matched_chars,
                     evidence_mentions_criterion(criterion.text, cv.evidence),
                 )
             )
@@ -167,8 +167,9 @@ def sweep(result: Escalations) -> None:
 
 def report(result: Escalations) -> int:
     budget = settings.escalation_budget
+    stated = "unset" if budget is None else f"{budget:.0%}"
     print(f"\ncandidates          {result.candidates}")
-    print(f"needing review      {result.escalated}  =  {result.rate:.0%}  (budget {budget:.0%})")
+    print(f"needing review      {result.escalated}  =  {result.rate:.0%}  (budget {stated})")
 
     if result.drivers:
         print("\ndrivers")
@@ -184,6 +185,16 @@ def report(result: Escalations) -> int:
         for failure in result.failures[:10]:
             print(f"  {failure}")
 
+    if budget is None:
+        # This report is where the number is supposed to come from (19.2), so an
+        # unset budget is the expected state on the first run — and a pass/fail
+        # against a guess would be worse than no verdict at all.
+        print(
+            f"\nNO BUDGET SET — this run measured {result.rate:.0%}. Set escalation_budget "
+            "from it and record escalation_budget_source_run."
+        )
+        return 0
+
     if result.rate <= budget:
         print("\nWITHIN BUDGET")
         return 0
@@ -196,12 +207,12 @@ def report(result: Escalations) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=settings.chat_model)
+    parser.add_argument("--model", default=settings.judge_model)
     parser.add_argument("--corpus", type=Path, default=None)
     parser.add_argument("--sweep", action="store_true", help="18.2.1 threshold analysis")
     args = parser.parse_args(argv)
 
-    settings.chat_model = args.model
+    settings.judge_model = args.model
     try:
         corpus = load(args.corpus)
     except CorpusError as exc:

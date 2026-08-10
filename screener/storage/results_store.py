@@ -37,7 +37,7 @@ _CACHE_COLUMNS = (
     "file_sha256",
     "position_id",
     "rubric_hash",
-    "model_digest",
+    "judge_digest",
     "prompt_hash",
     "redaction_on",
     "num_ctx",
@@ -76,7 +76,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
         "INSERT INTO candidates ("
         "run_id, filename, file_sha256, score, band, must_haves_met, scoreable, "
         "review_required, cacheable, summary, notable_strengths_json, red_flags_json, "
-        "flags_json, position_id, rubric_hash, model_digest, prompt_hash, redaction_on, "
+        "flags_json, position_id, rubric_hash, judge_digest, prompt_hash, redaction_on, "
         "num_ctx, app_version, scored_at"
         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
@@ -95,7 +95,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
             json.dumps([f.value for f in candidate.flags]),
             key.position_id,
             key.rubric_hash,
-            key.model_digest,
+            key.judge_digest,
             key.prompt_hash,
             int(key.redaction_on),
             key.num_ctx,

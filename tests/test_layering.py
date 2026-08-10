@@ -188,17 +188,59 @@ def test_core_does_not_reach_into_infrastructure() -> None:
 
 
 def test_core_may_read_settings_but_nothing_else_stateful() -> None:
-    """A documented deviation from 4's "models.py only".
+    """Two documented deviations from 4's "models.py only".
 
-    `core/` imports `config.settings` for thresholds — `evidence_match_ratio`,
+    **`config.settings`** for thresholds — `evidence_match_ratio`,
     `band_thresholds`, `max_resume_tokens`. Those are policy, not state, and
     inlining them would put tuning constants in three files instead of one.
-    Everything else internal is forbidden.
+
+    **Each other**, since v6. The alternative is worse in both places it comes
+    up. `detect_negation` reads the window before a match block, which means it
+    must tokenize exactly as `verify_evidence` did — a second tokenizer is a
+    second thing that must agree forever, and the symptom of disagreement is a
+    highlight off by one word, which reads as a rendering quirk and is never
+    reported. `reconcile_judge` re-runs stage B over the verifier's own quote
+    (10.6 B), which *is* `verify_evidence` — reimplementing it would mean the
+    check that stops one hallucination overriding another drifting away from the
+    check it is supposed to be.
+
+    The constraint that still holds is that all of it is pure and acyclic; the
+    next test enforces the second half.
     """
-    allowed = ("screener.models", "config.settings")
+    allowed = ("screener.models", "config.settings", "screener.core.")
     for path, modules in package_imports("screener/core").items():
         internal = [m for m in modules if m.startswith(("screener", "config"))]
         assert all(m.startswith(allowed) for m in internal), f"{path}: {internal}"
+
+
+def test_core_modules_do_not_import_in_a_cycle() -> None:
+    """Pure functions calling pure functions is fine; a cycle is not.
+
+    Import cycles inside `core/` would make the decision path circular, and the
+    thing that makes these modules testable in a REPL against a literal is that
+    each one bottoms out.
+    """
+    graph = {
+        path.stem: {
+            m.removeprefix("screener.core.")
+            for m in modules
+            if m.startswith("screener.core.") and m != "screener.core"
+        }
+        for path, modules in package_imports("screener/core").items()
+    }
+
+    seen: set[str] = set()
+
+    def visit(module: str, stack: tuple[str, ...]) -> None:
+        assert module not in stack, f"import cycle: {' -> '.join([*stack, module])}"
+        if module in seen:
+            return
+        seen.add(module)
+        for dependency in sorted(graph.get(module, ())):
+            visit(dependency, (*stack, module))
+
+    for module in sorted(graph):
+        visit(module, ())
 
 
 # --- models and ports are the bottom of the graph ----------------------------

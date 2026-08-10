@@ -9,7 +9,7 @@ which is indistinguishable downstream from a genuinely weak candidate.
 ``num_predict`` — left unset, output caps truncate the JSON mid-object and the
 failure surfaces as a schema error whose real cause is invisible.
 
-``model_digest_pin`` — model tags are mutable. Re-pulling ``granite4.1:8b`` can
+``judge_digest_pin`` — model tags are mutable. Re-pulling ``granite4.1:8b`` can
 change the weights underneath decisions already stored, breaking reproducibility
 and the audit record.
 
@@ -39,16 +39,28 @@ def _app_version() -> str:
 
 class Settings(BaseSettings):
     # --- Inference ---
+    #
+    # Two models, deliberately different weights (1.3). A verifier trained on
+    # the same data as the judge shares its blind spots, and a second opinion
+    # that agrees for the same reason as the first is not a second opinion.
+    # They do not co-reside in 12 GB, which is why runs are two-phase (17.4).
     ollama_host: str = "http://localhost:11434"
-    chat_model: str = "granite4.1:8b"
-    model_digest_pin: str | None = None
+    judge_model: str = "granite4.1:8b"
+    verifier_model: str = "gemma4:12b"
+    judge_digest_pin: str | None = None
+    verifier_digest_pin: str | None = None
     num_ctx: int = 8192
     num_predict: int = 1536
+    # 10.6 B sends the whole résumé plus every `none` criterion in one call, so
+    # the verifier needs materially more room than the judge.
+    verifier_num_ctx: int = 16384
     temperature: float = 0.0
     top_k: int = 1
     seed: int = 42
     keep_alive: str = "30m"
-    request_timeout_s: int = 180
+    # Raised from 180: phase 2 reads a full résumé at `verifier_num_ctx` on a
+    # 12b model, which is slower than anything phase 1 does.
+    request_timeout_s: int = 300
     max_retries: int = 2
     # Reasoning models emit their chain of thought *into the generation budget*
     # before producing any JSON. Measured on `gemma4:12b`: 1536 tokens consumed
@@ -59,6 +71,15 @@ class Settings(BaseSettings):
     # *output* — a thinking model spends that reservation on reasoning nobody
     # scores. Disabling it is what makes such a model usable here at all.
     disable_thinking: bool = True
+
+    # --- Verification (10.6) ---
+    verification_enabled: bool = True
+    # `all` by default. `must_have_and_borderline` is the lever to pull if the
+    # escalation rate proves unmanageable — a smaller queue, not a bigger one
+    # (19.2). Absence checking is never skipped by scope: it is the only check
+    # on a `none`, and `none` on a must-have is the disqualifying outcome.
+    verify_scope: Literal["all", "must_have_and_borderline"] = "all"
+    borderline_ratio_max: float = 0.75
 
     # --- Budget (10.1) ---
     max_resume_tokens: int = 4200
@@ -111,11 +132,30 @@ class Settings(BaseSettings):
     # `evidence_match_ratio = 0.60` requiring most of the quote to align.
     evidence_match_min_chars: int = 16
     evidence_min_block_tokens: int = 3  # 10.5 — AND. Do not set to 1.
+    # 10.5 C. How far back to look for a negation marker before a verified
+    # quote. Six tokens covers "has no production experience with" without
+    # reaching back into the previous bullet, where a "not" belonging to a
+    # different sentence would flag a perfectly good quote.
+    negation_window_tokens: int = 6
     freetext_screen: bool = True
-    escalation_budget: float = 0.03  # 18.2 — warn above this
+    # 19.2 — **unset on purpose.** 3% was a guess, and a guessed budget is worse
+    # than none: it reads as a measurement in every report that quotes it. The
+    # worker warns on every run while this is None, so "measure it later" cannot
+    # quietly become "never", and setting it requires naming the run it came
+    # from — a number nobody can trace back is a number nobody can revisit.
+    escalation_budget: float | None = None
+    escalation_budget_source_run: str | None = None
 
     # --- Ranking ---
     band_thresholds: tuple[float, float, float] = (7.5, 5.5, 3.5)
+
+    # --- Review / UI (15.5) ---
+    bulk_decision_enabled: bool = True
+    # Do not disable. Candidates are `review_required` precisely because the
+    # system could not be confident about them, so they are the exact set that
+    # must be opened individually — a bulk action over them is the oversight
+    # control being switched off through the interface.
+    bulk_excludes_review_required: bool = True
 
     # --- API ---
     api_host: str = "127.0.0.1"  # loopback: no external listener in the PoC
@@ -140,9 +180,20 @@ class Settings(BaseSettings):
     seconds_per_resume: float = 5.4
 
     # --- Storage / observability ---
+    # Selects the migration directory and, later, the SQL dialect (12.2). It is
+    # not cosmetic: migrations live one directory per backend because yoyo reads
+    # a single directory without recursing, so the wrong value here means every
+    # migration is silently skipped rather than failing loudly.
+    db_backend: Literal["sqlite", "mssql"] = "sqlite"
     db_path: str = "data/screener.db"
     resumes_dir: str = "data/resumes"
     quarantine_dir: str = "data/quarantine"
+    # 18 — raw model output, captured **only** on a schema failure. Removing
+    # continuous tracing left schema errors undebuggable; failure-only capture
+    # is bounded, but it is still candidate text, so 0700 and inside the
+    # erasure path.
+    capture_raw_on_failure: bool = True
+    failure_dir: str = "data/failures"
     trace_dir: str = "data/traces"
     log_dir: str = "data/logs"
     trace_enabled: bool = True
@@ -152,9 +203,9 @@ class Settings(BaseSettings):
     def app_version(self) -> str:
         return _app_version()
 
-    # An unset key in .env (e.g. `MODEL_DIGEST_PIN=`) arrives as "" and would
+    # An unset key in .env (e.g. `JUDGE_DIGEST_PIN=`) arrives as "" and would
     # otherwise fail parsing; treat it as "not configured".
-    @field_validator("model_digest_pin", mode="before")
+    @field_validator("judge_digest_pin", "verifier_digest_pin", mode="before")
     @classmethod
     def _empty_str_to_none(cls, v: Any) -> Any:  # noqa: ANN401 — pre-validation input is genuinely untyped
         if isinstance(v, str) and not v.strip():

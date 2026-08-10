@@ -447,4 +447,8 @@ def test_the_escalation_rate_is_printed_with_results(runner: CliRunner, workspac
     output = invoke(runner, "candidates", run_id).output
 
     assert "needing review" in output
-    assert "budget 3%" in output
+    # Unset by default in v6 (19.2): 3% was a guess, and a guessed budget reads
+    # as a measurement everywhere it is quoted. The nag has to be visible on
+    # every result, or "measure it on the first real run" becomes "never".
+    assert "no budget set" in output
+    assert "escalation_budget_source_run" in output

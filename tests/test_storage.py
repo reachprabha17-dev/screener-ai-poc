@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from config.settings import settings
 from screener.models import (
     Actor,
     Candidate,
@@ -37,9 +38,11 @@ from screener.storage import (
     traces_store,
 )
 from screener.storage.connection import (
+    MIGRATIONS_ROOT,
     PendingMigrationsError,
     apply_migrations,
     connect,
+    migrations_dir,
     pending_migrations,
     require_current_schema,
 )
@@ -106,8 +109,8 @@ def make_run(uow: UnitOfWork, run_id: str = "run1") -> None:
             rubric_id="r1",
             folder="data/resumes/REQ-1",
             created_by=ACTOR.id,
-            model_name="granite4.1:8b",
-            model_digest="sha256:aaa",
+            judge_model="granite4.1:8b",
+            judge_digest="sha256:aaa",
             prompt_hash="p" * 64,
             redaction_on=True,
             num_ctx=8192,
@@ -122,7 +125,7 @@ def key(**overrides: object) -> CacheKey:
         "file_sha256": "abc123",
         "position_id": "p1",
         "rubric_hash": "r" * 64,
-        "model_digest": "sha256:aaa",
+        "judge_digest": "sha256:aaa",
         "prompt_hash": "p" * 64,
         "redaction_on": True,
         "num_ctx": 8192,
@@ -168,9 +171,25 @@ def candidate(*, flags: list[Flag] | None = None, score: float | None = 7.8) -> 
 def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> None:
     path = tmp_path / "fresh.db"
 
-    assert apply_migrations(path) == ["0001.initial-schema"]
+    assert apply_migrations(path) == ["0001.initial-schema", "0002.judge-digest-rename"]
     assert pending_migrations(path) == []
     require_current_schema(path)
+
+
+def test_every_migration_lives_where_yoyo_will_read_it() -> None:
+    """`read_migrations` globs one directory and does not recurse (12.3).
+
+    A migration left in `migrations/` rather than `migrations/<backend>/` is not
+    an error and produces no warning — it is simply never read. The database
+    then reports itself current while the code runs against the previous schema,
+    which is the one failure mode the startup gate cannot catch, because the gate
+    asks the same question of the same directory.
+    """
+    stray = sorted(p.name for p in MIGRATIONS_ROOT.glob("*.sql"))
+    assert stray == [], f"invisible to yoyo — move under migrations/<backend>/: {stray}"
+
+    assert migrations_dir() == MIGRATIONS_ROOT / settings.db_backend
+    assert sorted(p.name for p in migrations_dir().glob("*.sql"))
 
 
 def test_an_unmigrated_database_refuses_to_start(tmp_path: Path) -> None:
@@ -208,8 +227,8 @@ def test_foreign_keys_are_actually_enforced(uow: UnitOfWork) -> None:
             rubric_id="r1",
             folder="f",
             created_by=ACTOR.id,
-            model_name="m",
-            model_digest="d",
+            judge_model="m",
+            judge_digest="d",
             prompt_hash="h",
             redaction_on=True,
             num_ctx=8192,
@@ -243,7 +262,7 @@ def test_cache_hit_on_an_identical_key(uow: UnitOfWork) -> None:
         ("file_sha256", "different"),
         ("position_id", "p2"),
         ("rubric_hash", "z" * 64),
-        ("model_digest", "sha256:bbb"),
+        ("judge_digest", "sha256:bbb"),
         ("prompt_hash", "q" * 64),
         ("redaction_on", False),
         ("num_ctx", 4096),
@@ -621,7 +640,7 @@ def test_run_freezes_its_reproducibility_inputs(uow: UnitOfWork) -> None:
         record = runs_store.get(tx, "run1")
 
     assert record is not None
-    assert record.model_digest == "sha256:aaa"
+    assert record.judge_digest == "sha256:aaa"
     assert record.num_ctx == 8192
     assert record.redaction_on is True
     assert record.status == "pending"

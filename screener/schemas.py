@@ -149,7 +149,7 @@ class RunResponse(BaseModel):
     rubric_id: str
     folder: str
     status: str
-    model_digest: str
+    judge_digest: str
     prompt_hash: str
     app_version: str
 

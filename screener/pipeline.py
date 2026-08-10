@@ -36,7 +36,7 @@ from screener.core.budget import check_budget
 from screener.core.compute_score import compute_score
 from screener.core.detect_injection import detect_injection
 from screener.core.rank import assign_band
-from screener.core.redact_pii import redact_pii
+from screener.core.redact_pii import identity_map, redact_pii
 from screener.core.screen_freetext import screen_freetext
 from screener.core.verify_evidence import verify_evidence
 from screener.intake.sanitize_text import sanitize
@@ -203,7 +203,15 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
             acc.add(Flag.SUSPECTED_INJECTION, review=True)
 
     # --- 10.x redaction. `sent` is what the model sees and what 10.5 matches
-    sent = redact_pii(text)[0] if settings.redact_pii else text
+    #
+    # `span_map` travels with them: evidence offsets address `sent`, HR reads
+    # `text`, and the two only line up through the map (12.6). Deriving it later
+    # from the two strings is not possible — a placeholder does not encode the
+    # length of what it replaced.
+    if settings.redact_pii:
+        sent, _redaction, span_map = redact_pii(text)
+    else:
+        sent, span_map = text, identity_map(text)
 
     # --- 10.1 budget, against the assembled prompt --------------------------
     system = load_prompt(PROMPT_NAME)
@@ -273,6 +281,9 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
         run_id=run_id,
         filename=path.name,
         file_sha256=sha,
+        resume_text=text,
+        sent_text=sent,
+        redaction_map=span_map,
         score=scored.score,
         band=assign_band(scored.score),
         must_haves_met=scored.must_haves_met,

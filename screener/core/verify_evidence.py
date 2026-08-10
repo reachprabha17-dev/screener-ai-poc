@@ -28,13 +28,13 @@ from screener.models import (
     CriterionVerdict,
     Flag,
     JudgeOutput,
+    MatchBlock,
     Rubric,
     ScoredCriterion,
 )
 
 _SOFT_HYPHEN = "­"
-_PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
-_WS = re.compile(r"\s+")
+_WORD = re.compile(r"\w", re.UNICODE)
 
 # An assertion of support paired with one of these is self-contradiction, not a
 # near-miss quote. Matched as a prefix: the observed injection returned
@@ -62,16 +62,66 @@ class VerificationResult:
     review_required: bool = False
 
 
-def normalize_tokens(text: str) -> list[str]:
-    """Casefold, drop soft hyphens and punctuation, collapse whitespace, split to words.
+@dataclass(frozen=True)
+class Alignment:
+    """What one quote-against-document comparison produced.
 
-    Tokens rather than characters: at character granularity a resume-length ``b``
-    sequence makes almost every letter a repeated element, and the alignment
-    stops meaning anything.
+    ``blocks`` is the part that is new in v6 and the part a reviewer can use:
+    the ratio says *how much* of the quote was found, the blocks say *which
+    part*. Persisted as character offsets (12.6) so the UI highlights without
+    re-tokenizing.
     """
-    cleaned = text.replace(_SOFT_HYPHEN, "").casefold()
-    cleaned = _PUNCT.sub(" ", cleaned)
-    return _WS.sub(" ", cleaned).strip().split()
+
+    ratio: float
+    longest_span: int
+    matched_chars: int
+    blocks: list[MatchBlock] = field(default_factory=list)
+
+
+def tokenize_with_offsets(text: str) -> tuple[list[str], list[tuple[int, int]]]:
+    """Tokens plus each token's character span in the **original** string.
+
+    One tokenizer, used for both matching and highlighting. Two would be two
+    things that must agree forever, and the symptom of them disagreeing is a
+    highlight off by one word — which looks like a rendering quirk rather than a
+    bug and would never be reported.
+
+    Tokens rather than characters for the alignment itself: at character
+    granularity a resume-length ``b`` sequence makes almost every letter a
+    repeated element and the alignment stops meaning anything.
+
+    Soft hyphens are dropped without splitting the token — a line-broken
+    ``co\xadoperate`` is one word, and treating it as two loses the match that a
+    reviewer can plainly see is there.
+    """
+    tokens: list[str] = []
+    offsets: list[tuple[int, int]] = []
+    current: list[str] = []
+    start = 0
+
+    for index, character in enumerate(text):
+        if character == _SOFT_HYPHEN:
+            continue
+        if _WORD.match(character):
+            if not current:
+                start = index
+            current.append(character.casefold())
+            continue
+        if current:
+            tokens.append("".join(current))
+            offsets.append((start, index))
+            current = []
+
+    if current:
+        tokens.append("".join(current))
+        offsets.append((start, len(text)))
+
+    return tokens, offsets
+
+
+def normalize_tokens(text: str) -> list[str]:
+    """The tokens alone, for callers that do not need offsets."""
+    return tokenize_with_offsets(text)[0]
 
 
 def is_non_substantive(evidence: str) -> bool:
@@ -81,8 +131,8 @@ def is_non_substantive(evidence: str) -> bool:
     return normalized.startswith(NON_SUBSTANTIVE)
 
 
-def align(evidence: str, document: str) -> tuple[float, int, int]:
-    """Return ``(match_ratio, longest_span, matched_chars)`` for a quote against a document.
+def align(evidence: str, document: str) -> Alignment:
+    """Align a quote against a document: how much matched, and which parts.
 
     ``autojunk=False`` is mandatory. With it enabled, any element appearing in
     ``b`` more than 1% of the time is treated as junk once ``len(b) >= 200`` —
@@ -100,10 +150,10 @@ def align(evidence: str, document: str) -> tuple[float, int, int]:
     *alignment*: ordering is what distinguishes a quotation from a word cloud,
     which is why token-set overlap and Jaccard were rejected.
     """
-    ev = normalize_tokens(evidence)
-    doc = normalize_tokens(document)
+    ev, ev_offsets = tokenize_with_offsets(evidence)
+    doc, doc_offsets = tokenize_with_offsets(document)
     if not ev:
-        return 0.0, 0, 0
+        return Alignment(ratio=0.0, longest_span=0, matched_chars=0)
 
     matcher = difflib.SequenceMatcher(None, ev, doc, autojunk=False)
     min_block = settings.evidence_min_block_tokens
@@ -113,7 +163,20 @@ def align(evidence: str, document: str) -> tuple[float, int, int]:
     longest_span = max((b.size for b in blocks), default=0)
     matched_chars = sum(len(t) for b in blocks for t in ev[b.a : b.a + b.size])
 
-    return matched_tokens / len(ev), longest_span, matched_chars
+    return Alignment(
+        ratio=matched_tokens / len(ev),
+        longest_span=longest_span,
+        matched_chars=matched_chars,
+        blocks=[
+            MatchBlock(
+                ev_start=ev_offsets[b.a][0],
+                ev_end=ev_offsets[b.a + b.size - 1][1],
+                doc_start=doc_offsets[b.b][0],
+                doc_end=doc_offsets[b.b + b.size - 1][1],
+            )
+            for b in blocks
+        ],
+    )
 
 
 # Words that carry no topic. Deliberately short: this list is subtracted from the
@@ -216,17 +279,29 @@ def _same_word(a: str, b: str) -> bool:
 _STEM_FLOOR = 4
 
 
-def _is_verified(ratio: float, longest_span: int, matched_chars: int) -> bool:
+def _is_verified(alignment: Alignment) -> bool:
     """All three conditions, AND-ed.
 
     An earlier draft used ``ratio OR 25 chars``, which let a single short
     fragment verify an otherwise fabricated quote.
     """
     return (
-        ratio >= settings.evidence_match_ratio
-        and longest_span >= settings.evidence_min_block_tokens
-        and matched_chars >= settings.evidence_match_min_chars
+        alignment.ratio >= settings.evidence_match_ratio
+        and alignment.longest_span >= settings.evidence_min_block_tokens
+        and alignment.matched_chars >= settings.evidence_match_min_chars
     )
+
+
+def quote_verifies(evidence: str, document: str) -> bool:
+    """Does this quote survive stage B against this document?
+
+    Public because phase 2 needs it: the verifier's own "I found evidence for a
+    criterion you called absent" is put through exactly this check before it is
+    allowed to escalate anything (10.6 B). Without that, one unverifiable
+    assertion overrides another and the second model's hallucinations are treated
+    as corrections of the first's.
+    """
+    return not is_non_substantive(evidence) and _is_verified(align(evidence, document))
 
 
 def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> VerificationResult:
@@ -251,8 +326,8 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
             # here but must never look like a real judgment.
             continue
 
-        ratio, longest_span, matched_chars = align(cv.evidence, sent_text)
-        verified = _is_verified(ratio, longest_span, matched_chars)
+        alignment = align(cv.evidence, sent_text)
+        verified = _is_verified(alignment)
         verdict = cv.verdict
 
         if cv.verdict != "none" and is_non_substantive(cv.evidence):
@@ -294,8 +369,12 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
                 model_verdict=cv.verdict,
                 evidence=cv.evidence,
                 verified=verified,
-                match_ratio=round(ratio, 4),
-                longest_span=longest_span,
+                match_ratio=round(alignment.ratio, 4),
+                longest_span=alignment.longest_span,
+                # Kept even when the quote failed to verify — "which part of the
+                # quote *was* in the resume" is precisely the reviewer's
+                # question about an unverified quote (15.3).
+                match_blocks=alignment.blocks,
                 weight=criterion.weight,
                 must_have=criterion.must_have,
             )

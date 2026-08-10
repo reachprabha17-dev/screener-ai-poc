@@ -35,7 +35,7 @@ class CacheKey(BaseModel):
     file_sha256: str
     position_id: str
     rubric_hash: str
-    model_digest: str
+    judge_digest: str
     prompt_hash: str
     redaction_on: bool
     num_ctx: int

@@ -127,7 +127,7 @@ def test_a_trace_captures_what_was_actually_sent(workspace: Path) -> None:
 
     assert payload["file_sha256"] == "sha-asha"
     assert RESUME_TEXT in payload["user"]
-    assert payload["model"] == settings.chat_model
+    assert payload["model"] == settings.judge_model
     # Everything needed to re-run this exact call offline.
     for key in ("seed", "num_ctx", "num_predict", "temperature", "prompt_tokens"):
         assert key in payload
@@ -354,8 +354,8 @@ def _seed_candidate(
                 rubric_id="r1",
                 folder="f",
                 created_by=ACTOR.id,
-                model_name="m",
-                model_digest="sha256:aaa",
+                judge_model="m",
+                judge_digest="sha256:aaa",
                 prompt_hash="p" * 64,
                 redaction_on=True,
                 num_ctx=8192,
@@ -393,7 +393,7 @@ def _seed_candidate(
                 file_sha256=sha,
                 position_id="p1",
                 rubric_hash="r" * 64,
-                model_digest="sha256:aaa",
+                judge_digest="sha256:aaa",
                 prompt_hash="p" * 64,
                 redaction_on=True,
                 num_ctx=8192,

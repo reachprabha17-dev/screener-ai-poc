@@ -142,7 +142,7 @@ class TraceWriter:
             "ts": datetime.now(UTC).isoformat(),
             "run_id": run_id,
             "file_sha256": record.file_sha256,
-            "model": settings.chat_model,
+            "model": settings.judge_model,
             "num_ctx": settings.num_ctx,
             "num_predict": settings.num_predict,
             "seed": settings.seed,

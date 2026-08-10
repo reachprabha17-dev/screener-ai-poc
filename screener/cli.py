@@ -360,8 +360,19 @@ def override(
 
 def _report_escalation(rate: float) -> None:
     """Printed on every result, not buried in a report (18.2)."""
-    line = f"needing review  {rate:.0%}  (budget {settings.escalation_budget:.0%})"
-    if rate > settings.escalation_budget:
+    budget = settings.escalation_budget
+    if budget is None:
+        # Unset is the default and is not a failure — but it must be visible,
+        # or "measure it on the first real run" becomes "never" (19.2).
+        typer.secho(
+            f"needing review  {rate:.0%}  (no budget set — measure this run and record "
+            "escalation_budget_source_run)",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    line = f"needing review  {rate:.0%}  (budget {budget:.0%})"
+    if rate > budget:
         typer.secho(line, fg=typer.colors.YELLOW)
         typer.secho(
             "  A queue larger than a person will genuinely read is the point at "

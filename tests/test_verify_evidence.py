@@ -10,6 +10,7 @@ from screener.core.verify_evidence import (
     align,
     evidence_mentions_criterion,
     is_non_substantive,
+    tokenize_with_offsets,
     verify_evidence,
 )
 from screener.models import CriterionVerdict, Flag, JudgeOutput
@@ -84,10 +85,10 @@ def test_non_substantive_variants() -> None:
 
 def test_verbatim_quote_verifies() -> None:
     quote = "Built and operated payment systems handling 40 million requests per day"
-    ratio, span, chars = align(quote, RESUME)
-    assert ratio == 1.0
-    assert span >= 3
-    assert chars >= 25
+    result = align(quote, RESUME)
+    assert result.ratio == 1.0
+    assert result.longest_span >= 3
+    assert result.matched_chars >= 25
 
 
 def test_mid_quote_insertion_still_verifies() -> None:
@@ -100,10 +101,10 @@ def test_mid_quote_insertion_still_verifies() -> None:
         "Built and operated payment systems INSERTED handling 40 million requests per day "
         "Python and Go across the whole stack"
     )
-    ratio, span, chars = align(quote, RESUME)
-    assert ratio >= 0.60
-    assert span >= 3
-    assert chars >= 25
+    result = align(quote, RESUME)
+    assert result.ratio >= 0.60
+    assert result.longest_span >= 3
+    assert result.matched_chars >= 25
 
 
 def test_stopword_confetti_is_rejected() -> None:
@@ -114,8 +115,8 @@ def test_stopword_confetti_is_rejected() -> None:
     anything. MIN_BLOCK is what closes it.
     """
     quote = "the and of the in a for the with and to the from a of the"
-    ratio, _span, _chars = align(quote, RESUME)
-    assert ratio < 0.60
+    result = align(quote, RESUME)
+    assert result.ratio < 0.60
 
 
 def test_short_fragment_is_rejected_despite_perfect_ratio() -> None:
@@ -124,9 +125,9 @@ def test_short_fragment_is_rejected_despite_perfect_ratio() -> None:
     The three conditions are AND-ed, so a fully-matching but very short quote
     still escalates.
     """
-    ratio, span, chars = align("Python and Go", RESUME)
-    assert ratio == 1.0 and span >= 3  # passes two conditions
-    assert chars < 25  # fails the third
+    result = align("Python and Go", RESUME)
+    assert result.ratio == 1.0 and result.longest_span >= 3  # passes two conditions
+    assert result.matched_chars < 25  # fails the third
 
     out = judge(
         ("C1", "strong", "Python and Go"),
@@ -166,18 +167,98 @@ def test_autojunk_regression_on_a_large_document() -> None:
     assert len(big) > 20_000
 
     quote = "Built and operated payment systems handling 40 million requests per day"
-    ratio, span, chars = align(quote, big)
-    assert ratio == 1.0
-    assert span >= 3 and chars >= 25
+    result = align(quote, big)
+    assert result.ratio == 1.0
+    assert result.longest_span >= 3 and result.matched_chars >= 25
+
+
+# --- match blocks: which part of the quote was found (12.6) ------------------
+
+
+def test_blocks_point_at_the_matched_text_in_both_strings() -> None:
+    """The offsets have to address real substrings, or the highlight is fiction.
+
+    A ratio of 0.42 is a number nobody can interrogate. The blocks answer the
+    question it provokes — *which* part of the quote was not in the resume — and
+    they only do that if both ends of every block land where they claim.
+    """
+    quote = "Built and operated payment systems handling 40 million requests per day"
+
+    result = align(quote, RESUME)
+
+    assert result.blocks
+    for block in result.blocks:
+        assert quote[block.ev_start : block.ev_end] in RESUME
+        assert RESUME[block.doc_start : block.doc_end] == quote[block.ev_start : block.ev_end]
+
+
+def test_an_unverified_quote_still_reports_what_did_match() -> None:
+    """Blocks matter most exactly when verification failed (15.3).
+
+    "Which part of this quote isn't in the resume?" is the reviewer's question
+    about an escalated candidate, and answering it is the difference between a
+    review queue that gets worked and one that gets clicked through.
+    """
+    quote = "Python and Go across the whole stack while leading a team of forty engineers"
+
+    result = align(quote, RESUME)
+
+    assert result.ratio < 1.0, "this quote is meant to be partly fabricated"
+    matched = [quote[b.ev_start : b.ev_end] for b in result.blocks]
+    assert any("Python and Go" in fragment for fragment in matched)
+    assert not any("forty engineers" in fragment for fragment in matched)
+
+
+def test_blocks_are_dropped_by_the_same_filter_as_the_ratio() -> None:
+    """Stopword confetti scores no blocks, not just a low ratio.
+
+    If the filter applied to the ratio but not to the blocks, the UI would
+    highlight scattered single words across the whole document and present that
+    as evidence of a match.
+    """
+    result = align("the and of the in a for the with and to the from a of the", RESUME)
+
+    assert result.ratio < 0.60
+    assert result.blocks == []
+
+
+def test_a_line_broken_word_stays_one_token() -> None:
+    """Soft hyphens are dropped without splitting — a PDF line break is not a word break."""
+    tokens, offsets = tokenize_with_offsets("co\xadoperate with teams")
+
+    assert tokens[0] == "cooperate"
+    assert offsets[0][0] == 0
+
+
+def test_offsets_round_trip_through_the_tokenizer() -> None:
+    """Every token's span must reproduce that token from the original string."""
+    tokens, offsets = tokenize_with_offsets(RESUME)
+
+    for token, (start, end) in zip(tokens, offsets, strict=True):
+        assert RESUME[start:end].casefold() == token
+
+
+def test_verify_evidence_persists_the_blocks() -> None:
+    """They are stored per criterion (12.7), so they must survive the scoring step."""
+    out = judge(
+        ("C1", "strong", "payment systems handling 40 million requests per day"),
+        ("C2", "strong", "7 years backend engineer experience"),
+        ("C3", "none", "not found"),
+        ("C4", "none", "not found"),
+    )
+
+    result = verify_evidence(out, RESUME, RUBRIC)
+
+    c1 = next(c for c in result.criteria if c.id == "C1")
+    assert c1.match_blocks
+    assert RESUME[c1.match_blocks[0].doc_start : c1.match_blocks[0].doc_end]
 
 
 def test_matching_is_against_the_redacted_text_actually_sent() -> None:
     """Quotes must be checked against `sent`, not the pre-redaction original."""
     redacted = RESUME.replace("Asha Nair", "[REDACTED]")
-    ratio, _, _ = align(
-        "Senior Backend Engineer with 7 years backend engineer experience", redacted
-    )
-    assert ratio == 1.0
+    result = align("Senior Backend Engineer with 7 years backend engineer experience", redacted)
+    assert result.ratio == 1.0
 
 
 def test_persisted_metrics_are_recorded_for_tuning() -> None:

@@ -26,9 +26,22 @@ from typing import Any
 
 from config.settings import settings
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+MIGRATIONS_ROOT = Path(__file__).resolve().parent / "migrations"
 
 _local = threading.local()
+
+
+def migrations_dir() -> Path:
+    """The migration directory for the configured backend (12.2, 12.3).
+
+    Migrations are **per dialect**, so the directory has to be selected rather
+    than fixed. The subtlety worth stating: `yoyo.read_migrations` globs a single
+    directory and does **not** recurse. A migration filed one level down is not
+    an error — it is simply never read, so `pending_migrations()` reports the
+    schema current while the code runs against the previous one. Pointing this
+    at the root would silently disable every migration under it.
+    """
+    return MIGRATIONS_ROOT / settings.db_backend
 
 
 class PendingMigrationsError(RuntimeError):
@@ -110,7 +123,7 @@ def _backend(path: Path) -> Any:  # noqa: ANN401 — yoyo ships no type informat
 def _migrations() -> Any:  # noqa: ANN401 — yoyo ships no type information
     from yoyo import read_migrations
 
-    return read_migrations(str(MIGRATIONS_DIR))
+    return read_migrations(str(migrations_dir()))
 
 
 def pending_migrations(path: Path | None = None) -> list[str]:
@@ -146,5 +159,5 @@ def require_current_schema(path: Path | None = None) -> None:
     if outstanding:
         raise PendingMigrationsError(
             f"{len(outstanding)} migration(s) pending: {', '.join(outstanding)}. "
-            f"Run: yoyo apply --database sqlite:///{(path or db_path())} {MIGRATIONS_DIR}"
+            f"Run: yoyo apply --database sqlite:///{(path or db_path())} {migrations_dir()}"
         )

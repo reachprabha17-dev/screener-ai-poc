@@ -74,7 +74,7 @@ class FakeOllama:
         return {
             "models": [
                 {"model": "other-model:1b", "digest": "sha256:wrong"},
-                {"model": settings.chat_model, "digest": "sha256:abc123"},
+                {"model": settings.judge_model, "digest": "sha256:abc123"},
             ]
         }
 
@@ -218,14 +218,14 @@ def test_digest_matches_the_configured_model_not_the_first_entry() -> None:
 
 def test_digest_pin_mismatch_is_reported_not_raised(monkeypatch: pytest.MonkeyPatch) -> None:
     """The operator needs the run marked non-reproducible more than a dead process."""
-    monkeypatch.setattr(settings, "model_digest_pin", "sha256:different")
+    monkeypatch.setattr(settings, "judge_digest_pin", "sha256:different")
     llm, _ = client()
 
     assert llm.check_digest_pin() is False
 
 
 def test_no_pin_configured_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "model_digest_pin", None)
+    monkeypatch.setattr(settings, "judge_digest_pin", None)
     llm, _ = client()
 
     assert llm.check_digest_pin() is True

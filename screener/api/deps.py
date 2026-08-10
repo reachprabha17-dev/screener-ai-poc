@@ -111,7 +111,7 @@ def to_run(run: Run) -> RunResponse:
         rubric_id=run.rubric_id,
         folder=run.folder,
         status=run.status,
-        model_digest=run.model_digest,
+        judge_digest=run.judge_digest,
         prompt_hash=run.prompt_hash,
         app_version=run.app_version,
     )

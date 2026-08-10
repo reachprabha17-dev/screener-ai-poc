@@ -243,7 +243,7 @@ class ScreenerService:
 
         # Outside the transaction: reaching Ollama for the digest is a network
         # call, and the write lock is not held across one.
-        model_digest = self.llm.model_digest
+        judge_digest = self.llm.model_digest
         prompt_hash = judge_prompt_hash()
 
         with self.uow_factory() as tx:
@@ -267,8 +267,8 @@ class ScreenerService:
                 rubric_id=rubric_id,
                 folder=str(folder),
                 created_by=actor.id,
-                model_name=settings.chat_model,
-                model_digest=model_digest,
+                judge_model=settings.judge_model,
+                judge_digest=judge_digest,
                 prompt_hash=prompt_hash,
                 redaction_on=settings.redact_pii,
                 num_ctx=settings.num_ctx,
@@ -600,7 +600,7 @@ class ScreenerService:
             file_sha256=file_sha256,
             position_id=run.position_id,
             rubric_hash=rubric.content_hash,
-            model_digest=run.model_digest,
+            judge_digest=run.judge_digest,
             prompt_hash=run.prompt_hash,
             redaction_on=run.redaction_on,
             num_ctx=run.num_ctx,
@@ -655,8 +655,8 @@ class ScreenerService:
             detail["llm"] = str(exc)[:200]
 
         digest_ok = True
-        if llm_reachable and settings.model_digest_pin:
-            digest_ok = self.llm.model_digest == settings.model_digest_pin
+        if llm_reachable and settings.judge_digest_pin:
+            digest_ok = self.llm.model_digest == settings.judge_digest_pin
             if not digest_ok:
                 # Not fatal, but every decision stored under the old weights has
                 # stopped being reproducible and the operator must know.

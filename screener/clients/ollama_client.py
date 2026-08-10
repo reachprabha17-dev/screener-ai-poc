@@ -110,7 +110,7 @@ class OllamaClient:
             name = getattr(entry, "model", None) or (
                 entry.get("model") if isinstance(entry, dict) else None
             )
-            if name == settings.chat_model:
+            if name == settings.judge_model:
                 digest = getattr(entry, "digest", None) or (
                     entry.get("digest") if isinstance(entry, dict) else None
                 )
@@ -124,7 +124,7 @@ class OllamaClient:
         the operator needs the run's stored decisions marked non-reproducible
         more than they need the process dead.
         """
-        pin = settings.model_digest_pin
+        pin = settings.judge_digest_pin
         return not pin or self.model_digest == pin
 
     def health(self) -> bool:
@@ -157,7 +157,7 @@ class OllamaClient:
 
         try:
             response = self._client.generate(
-                model=settings.chat_model,
+                model=settings.judge_model,
                 prompt=text,
                 options={"num_predict": 1, "num_ctx": settings.num_ctx, "temperature": 0},
                 keep_alive=settings.keep_alive,
@@ -192,7 +192,7 @@ class OllamaClient:
         costs the same one prompt-eval and cannot drift.
         """
         response = self._client.chat(
-            model=settings.chat_model,
+            model=settings.judge_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -252,7 +252,7 @@ class OllamaClient:
             started = time.monotonic()
             try:
                 response = self._client.chat(
-                    model=settings.chat_model,
+                    model=settings.judge_model,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},

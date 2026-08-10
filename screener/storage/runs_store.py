@@ -28,8 +28,8 @@ def create(
     rubric_id: str,
     folder: str,
     created_by: str,
-    model_name: str,
-    model_digest: str,
+    judge_model: str,
+    judge_digest: str,
     prompt_hash: str,
     redaction_on: bool,
     num_ctx: int,
@@ -38,7 +38,7 @@ def create(
     app_version: str,
 ) -> None:
     tx.execute(
-        "INSERT INTO runs (id, position_id, rubric_id, folder, model_name, model_digest, "
+        "INSERT INTO runs (id, position_id, rubric_id, folder, judge_model, judge_digest, "
         "prompt_hash, redaction_on, num_ctx, num_predict, seed, app_version, status, "
         "created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
         (
@@ -46,8 +46,8 @@ def create(
             position_id,
             rubric_id,
             folder,
-            model_name,
-            model_digest,
+            judge_model,
+            judge_digest,
             prompt_hash,
             int(redaction_on),
             num_ctx,
@@ -117,7 +117,7 @@ def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
         rubric_id=row["rubric_id"],
         folder=row["folder"],
         status=row["status"],
-        model_digest=row["model_digest"],
+        judge_digest=row["judge_digest"],
         prompt_hash=row["prompt_hash"],
         redaction_on=bool(row["redaction_on"]),
         num_ctx=row["num_ctx"],

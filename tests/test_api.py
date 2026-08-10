@@ -155,7 +155,7 @@ def test_the_whole_control_plane_flow(client: TestClient) -> None:
     resumes(count=3)
     run = client.post("/runs", json={"position_id": position_id, "rubric_id": rubric["id"]}).json()
     assert run["status"] == "pending"
-    assert run["model_digest"] == "sha256:aaa"
+    assert run["judge_digest"] == "sha256:aaa"
 
     started = client.post(f"/runs/{run['id']}/start")
     assert started.json() == {"count": 3}
@@ -597,7 +597,7 @@ def _seed_scored_candidate(
         file_sha256="sha-qualified",
         position_id=run.position_id,
         rubric_hash="r" * 64,
-        model_digest="sha256:aaa",
+        judge_digest="sha256:aaa",
         prompt_hash="p" * 64,
         redaction_on=True,
         num_ctx=settings.num_ctx,

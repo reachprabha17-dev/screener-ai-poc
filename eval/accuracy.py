@@ -155,11 +155,11 @@ def report(corpus: Corpus, result: Result, model: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=settings.chat_model)
+    parser.add_argument("--model", default=settings.judge_model)
     parser.add_argument("--corpus", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    settings.chat_model = args.model
+    settings.judge_model = args.model
     try:
         corpus = load(args.corpus)
     except CorpusError as exc:
