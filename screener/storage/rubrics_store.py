@@ -17,12 +17,22 @@ from screener.models import Actor, Criterion, Rubric, now
 from screener.storage.uow import Tx
 
 
-def next_version(tx: Tx, position_id: str) -> int:
+def latest_version(tx: Tx, position_id: str) -> int:
+    """The highest stored version, or 0 when the position has no rubric yet.
+
+    0 rather than `None` so a first save can pass `base_version=0` and be checked
+    by the same comparison as every later one — otherwise "no rubric existed when
+    I started" is the one concurrent case with no way to express it.
+    """
     row = tx.execute(
         "SELECT COALESCE(MAX(version), 0) AS v FROM rubrics WHERE position_id = ?",
         (position_id,),
     ).fetchone()
-    return int(row["v"]) + 1
+    return int(row["v"])
+
+
+def next_version(tx: Tx, position_id: str) -> int:
+    return latest_version(tx, position_id) + 1
 
 
 def create(tx: Tx, rubric: Rubric) -> None:

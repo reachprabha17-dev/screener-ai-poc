@@ -23,7 +23,12 @@ from fastapi.responses import JSONResponse
 
 from config.settings import settings
 from screener.api.routes import candidates, health, positions, rubrics, runs
-from screener.service import NotFoundError, RubricNotApprovedError, ServiceError
+from screener.service import (
+    ConflictError,
+    NotFoundError,
+    RubricNotApprovedError,
+    ServiceError,
+)
 from screener.storage.connection import require_current_schema
 
 
@@ -46,6 +51,13 @@ def _install_error_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": f"rubric {exc} has not been approved"},
         )
+
+    @app.exception_handler(ConflictError)
+    def _conflict(request: Request, exc: ConflictError) -> JSONResponse:
+        # 409 for the same reason as above: the body is fine, the world moved.
+        # A 400 here would read as "you sent something wrong" to someone whose
+        # only mistake was having the page open while a colleague saved.
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)})
 
     @app.exception_handler(ServiceError)
     def _bad_request(request: Request, exc: ServiceError) -> JSONResponse:

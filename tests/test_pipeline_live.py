@@ -18,7 +18,7 @@ from fixtures_docs import real_docx, scanned_pdf
 from screener.clients.ollama_client import OllamaClient
 from screener.intake.sandbox import SandboxedParser
 from screener.models import Criterion, Flag, Rubric
-from screener.pipeline import Deps, screen_batch, screen_one
+from screener.pipeline import Deps, judge_one, screen_batch
 
 pytestmark = pytest.mark.live
 
@@ -68,7 +68,7 @@ def test_a_docx_becomes_a_scored_candidate(deps: Deps, root: Path) -> None:
     """The whole chain: file → sandbox → sanitize → redact → judge → verify → score."""
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
 
-    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
+    candidate = judge_one(path, RUBRIC, deps, run_id="run1", root=root)
 
     assert candidate.scoreable is True, candidate.flags
     assert candidate.score is not None
@@ -85,7 +85,7 @@ def test_verdicts_reflect_the_document(deps: Deps, root: Path) -> None:
     """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
 
-    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
+    candidate = judge_one(path, RUBRIC, deps, run_id="run1", root=root)
     by_id = {c.id: c for c in candidate.criteria}
 
     assert by_id["C1"].verdict in ("strong", "partial")
@@ -104,7 +104,7 @@ def test_evidence_verifies_against_real_parser_output(deps: Deps, root: Path) ->
     """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
 
-    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
+    candidate = judge_one(path, RUBRIC, deps, run_id="run1", root=root)
     supported = [c for c in candidate.criteria if c.verdict != "none"]
 
     assert supported
@@ -122,7 +122,7 @@ def test_a_scanned_resume_screens_through_ocr(deps: Deps, root: Path) -> None:
     """
     path = scanned_pdf(root / "scan.pdf", text="Senior Backend Engineer, 7 years, Python and Go")
 
-    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
+    candidate = judge_one(path, RUBRIC, deps, run_id="run1", root=root)
 
     assert Flag.EXTRACTION_FAILED not in candidate.flags
     assert candidate.criteria
@@ -150,7 +150,7 @@ def test_the_budget_precheck_matches_the_real_prompt(deps: Deps, root: Path) -> 
     """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
 
-    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
+    candidate = judge_one(path, RUBRIC, deps, run_id="run1", root=root)
 
     assert Flag.BUDGET_EXCEEDED not in candidate.flags
 
@@ -166,7 +166,7 @@ def test_the_candidate_carries_both_stored_text_versions(deps: Deps, root: Path)
     """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))
 
-    candidate = screen_one(path, RUBRIC, deps, run_id="run1", root=root)
+    candidate = judge_one(path, RUBRIC, deps, run_id="run1", root=root)
 
     assert "Asha Nair" in candidate.resume_text
     assert "Asha Nair" in candidate.sent_text

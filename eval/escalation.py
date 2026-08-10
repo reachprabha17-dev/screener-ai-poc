@@ -57,7 +57,7 @@ class Escalations:
 def measure(llm: LLMClient, corpus: Corpus) -> Escalations:
     """Run the real 10.5 → 10.4 path over the corpus.
 
-    Deliberately not the full `screen_one`: the corpus holds resume *text*, not
+    Deliberately not the full `judge_one`: the corpus holds resume *text*, not
     files, so intake and parsing are not exercised. Their failure modes are
     covered by the step 5 and step 8 gates; what is under measurement here is the
     escalation the *judging* path produces.

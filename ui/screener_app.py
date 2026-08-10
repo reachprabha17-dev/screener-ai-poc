@@ -29,6 +29,8 @@ rather than discovered afterwards (18.2).
 
 import os
 import sys
+from collections import Counter
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -385,32 +387,57 @@ def review_page() -> None:
     unqualified = result["missing_must_have"]
     review = result["needs_review"]
 
-    tabs = st.tabs(
-        [
-            f"Meets requirements ({len(qualified)})",
-            f"Missing a must-have ({len(unqualified)})",
-            f"Needs review ({len(review)})",
-        ]
-    )
+    # Sections in fixed order, **needs-review first and open** (15.4). Tabs were
+    # the previous shape and they were wrong for the same reason a long list is:
+    # at 1,000 applicants a reviewer works the first thing on the screen, and a
+    # third tab is a place escalations go to be not looked at.
+    with st.expander(f"⚠ Needs review — {len(review)}", expanded=True):
+        st.caption(
+            "The system could not produce a reliable result for these. They are "
+            "**not ranked and not scored** — that is a statement about the "
+            "system, not about the candidate."
+        )
+        escalation_breakdown(review)
+        partition(review, run_id, unranked=True)
 
-    with tabs[0]:
+    with st.expander(f"Meets all must-haves — {len(qualified)}", expanded=not review):
         partition(qualified, run_id)
-    with tabs[1]:
+
+    with st.expander(f"Missing a must-have — {len(unqualified)}", expanded=False):
         st.caption(
             "These did not meet a stated hard requirement. They are ranked "
             "among themselves, never against the group above — the two are not "
             "comparable."
         )
         partition(unqualified, run_id)
-    with tabs[2]:
-        st.caption(
-            "The system could not produce a reliable result for these. They are "
-            "**not ranked and not scored** — that is a statement about the "
-            "system, not about the candidate."
-        )
-        partition(review, run_id, unranked=True)
 
     sign_off_section(client, run_id, result)
+
+
+ESCALATION_LABELS = {
+    "unverified_evidence": "unverified evidence",
+    "judge_disagreement": "judge disagreement",
+    "absence_found": 'evidence found for an "absent" criterion',
+    "negation": "negation suspected",
+    "partial_must_have": "partial evidence on a must-have",
+    "unprocessable": "could not be processed",
+    "suspected_injection": "suspected injection",
+}
+
+
+def escalation_breakdown(candidates: list[dict[str, Any]]) -> None:
+    """Grouped by reason, never one undifferentiated count (15.4).
+
+    "23 need review" prompts a shrug. "8 unverified evidence, 7 judge
+    disagreement" tells a reviewer that similar cases can be worked in a batch,
+    which is the difference between a queue that gets cleared and one that does
+    not.
+    """
+    counts = Counter(
+        reason for candidate in candidates for reason in candidate.get("escalation_reasons", [])
+    )
+    for reason, count in counts.most_common():
+        st.write(f"**{count}** &nbsp; {ESCALATION_LABELS.get(reason, reason)}")
 
 
 def partition(candidates: list[dict[str, Any]], run_id: str, *, unranked: bool = False) -> None:
@@ -450,9 +477,55 @@ def partition(candidates: list[dict[str, Any]], run_id: str, *, unranked: bool =
         help="Includes the numeric score for audit. On screen, reviewers see bands.",
     )
 
+    if not unranked:
+        bulk_decision_form(candidates, run_id)
+
+
+def bulk_decision_form(candidates: list[dict[str, Any]], run_id: str) -> None:
+    """One decision across a group, with a shared reason.
+
+    Offered here and **not** on the needs-review section. A reviewer working 400
+    clear rejections one modal at a time stops reading them, so the bulk path is
+    real; but the escalated ones are exactly where the system said a human has to
+    look, and the server skips them regardless of what this sends.
+    """
+    eligible = [c for c in candidates if not c["review_required"] and c.get("id")]
+    if not eligible:
+        return
+
+    with st.expander(f"Decide on all {len(eligible)} at once"):
+        with st.form(f"bulk-{run_id}-{len(candidates)}"):
+            decision = st.radio("Decision", ["advance", "reject", "hold"], horizontal=True)
+            reason = st.text_area("Shared reason", help="Required. Recorded against every one.")
+            if st.form_submit_button(f"Record for {len(eligible)}"):
+                if not reason.strip():
+                    st.error("A reason is required.")
+                    return
+                result = call(
+                    get_client().decide_bulk, [int(c["id"]) for c in eligible], decision, reason
+                )
+                if result is not None:
+                    st.success(f"Recorded for {len(result['decided'])}.")
+                    if result["skipped"]:
+                        st.warning(
+                            f"{len(result['skipped'])} skipped — they need review and "
+                            "have to be opened individually."
+                        )
+
 
 def candidate_detail(candidate: dict[str, Any], run_id: str) -> None:
     st.subheader(candidate["filename"])
+
+    if candidate.get("verification_status") == "pending":
+        # A half-verified result that renders like a finished one is how someone
+        # signs off on work that has not happened yet (17.6).
+        st.warning(
+            "**Provisional** — the second model has not checked this candidate "
+            "yet. Escalations it would raise are not shown below."
+        )
+
+    if candidate.get("id"):
+        st.link_button("Open the original document", get_client().file_url(candidate["id"]))
 
     left, right = st.columns([1, 2])
     left.metric("Band", candidate["band"] or "Not scored")
@@ -479,54 +552,121 @@ def candidate_detail(candidate: dict[str, Any], run_id: str) -> None:
         "model read the resume faithfully — it cannot tell a true claim from a "
         "false one, and it is not fraud detection."
     )
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Criterion": c["id"],
-                    "Verdict": c["verdict"],
-                    "Must have": c["must_have"],
-                    "Weight": c["weight"],
-                    "Evidence": c["evidence"],
-                    "Verified": "yes" if c["verified"] else "no",
-                    "Match": f"{c['match_ratio']:.0%}",
-                }
-                for c in candidate["criteria"]
-            ]
-        ),
-        use_container_width=True,
-        hide_index=True,
+    for criterion in candidate["criteria"]:
+        criterion_block(criterion, candidate)
+
+    decision_form(candidate, run_id)
+
+
+EVIDENCE_BADGE = {
+    "verified": "✓ verified",
+    "partial": "⚠ partially matched",
+    "unverified": "⚠ not found in the résumé",
+    "not_applicable": "",
+}
+
+
+def criterion_block(criterion: dict[str, Any], candidate: dict[str, Any]) -> None:
+    """One criterion, its quote in context, and any disagreement about it (15.5)."""
+    must = " · **MUST-HAVE**" if criterion["must_have"] else ""
+    badge = EVIDENCE_BADGE.get(criterion["evidence_status"], "")
+    st.markdown(
+        f"**{criterion['id']}** {criterion['text']} — `{criterion['verdict'].upper()}` "
+        f"w{criterion['weight']}{must} &nbsp; {badge}"
     )
 
-    override_form(candidate, run_id)
+    if criterion["evidence"]:
+        # The quote inside its surrounding paragraph, not alone: a bare quote can
+        # be cherry-picked from a sentence that said the opposite (15.3).
+        st.markdown(
+            highlighted(candidate.get("resume_text", ""), criterion["highlights"])
+            or f"> {criterion['evidence']}",
+            unsafe_allow_html=True,
+        )
+
+    if criterion.get("negation_suspected"):
+        st.caption("⚠ A negation appears just before this quote — read the full sentence.")
+
+    verifier = criterion.get("verifier")
+    if verifier:
+        # "A second model disagrees — you decide", never "the correct answer is".
+        # Presented as an answer, reviewers defer to it, and automated
+        # decision-making returns through the interface (15.5).
+        suggested = (verifier.get("suggested_verdict") or "—").upper()
+        st.info(
+            f"**A second model disagrees — you decide.** It suggests `{suggested}`.\n\n"
+            f"{verifier.get('rationale') or ''}"
+            + (
+                f"\n\nIt located: “{verifier['found_evidence']}”"
+                if verifier.get("found_evidence")
+                else ""
+            )
+        )
 
 
-def override_form(candidate: dict[str, Any], run_id: str) -> None:
-    with st.expander("Record a decision"):
+CONTEXT_CHARS = 240
+
+
+def highlighted(resume_text: str, highlights: list[dict[str, int]]) -> str:
+    """The matched span marked inside the surrounding text of `resume_text`.
+
+    Offsets arrive already translated out of `sent_text` by the read layer, so
+    this only has to slice. Doing the translation here would put it downstream of
+    the boundary that owns it and inside the one process with no tests.
+    """
+    if not resume_text or not highlights:
+        return ""
+
+    start = min(h["start"] for h in highlights)
+    end = max(h["end"] for h in highlights)
+    left = max(0, start - CONTEXT_CHARS)
+    right = min(len(resume_text), end + CONTEXT_CHARS)
+
+    before = escape(resume_text[left:start])
+    matched = escape(resume_text[start:end])
+    after = escape(resume_text[end:right])
+    ellipsis_l = "…" if left > 0 else ""
+    ellipsis_r = "…" if right < len(resume_text) else ""
+    return f"<blockquote>{ellipsis_l}{before}<mark>{matched}</mark>{after}{ellipsis_r}</blockquote>"
+
+
+def decision_form(candidate: dict[str, Any], run_id: str) -> None:
+    current = candidate.get("decision", "undecided")
+    label = "Record a decision" if current == "undecided" else f"Decision: {current} — change it"
+    with st.expander(label, expanded=current == "undecided"):
         st.caption(
             "Your decision is recorded against your name with the reason, and "
             "cannot be edited afterwards."
         )
-        with st.form(f"override-{run_id}-{candidate['file_sha256']}"):
+        with st.form(f"decide-{run_id}-{candidate['file_sha256']}"):
             decision = st.radio("Decision", ["advance", "reject", "hold"], horizontal=True)
             reason = st.text_area("Reason", help="Required. This is the record.")
-            candidate_id = st.number_input("Candidate id", min_value=1, step=1)
             if st.form_submit_button("Record"):
                 if not reason.strip():
                     st.error("A reason is required.")
-                elif call(get_client().override, int(candidate_id), decision, reason) is None:
+                elif call(get_client().decide, int(candidate["id"]), decision, reason) is None:
                     st.success("Recorded.")
 
 
 def sign_off_section(client: ApiClient, run_id: str, result: dict[str, Any]) -> None:
     st.divider()
-    outstanding = len(result["needs_review"])
+    # Mirrors the server's precondition rather than counting the section, so the
+    # warning and the refusal agree. A screen that says "ready" and a button that
+    # returns 400 teaches reviewers to distrust the screen.
+    outstanding = [
+        c
+        for group in ("needs_review", "meets_must_haves", "missing_must_have")
+        for c in result[group]
+        if c.get("decision", "undecided") == "undecided"
+        and (c["review_required"] or c.get("verification_status") == "pending")
+    ]
     if outstanding:
         st.warning(
-            f"{outstanding} candidate(s) still need a decision. Signing off with "
-            "an unread queue is the failure this screen is designed to make visible."
+            f"{len(outstanding)} candidate(s) still need a decision. Sign-off is "
+            "blocked until each one is advanced, held, or rejected — signing off "
+            "with an unread queue is the failure this screen exists to prevent."
         )
-    if st.button("Sign off this run", type="primary"):
+    if st.button("Sign off this run", type="primary", disabled=bool(outstanding)):
         if call(client.sign_off, run_id) is None:
             st.success("Signed off. Recorded against your name.")
 
@@ -542,6 +682,12 @@ def _to_csv(candidates: list[dict[str, Any]]) -> str:
                 "must_haves_met": c["must_haves_met"],
                 "scoreable": c["scoreable"],
                 "review_required": c["review_required"],
+                # 15.6: the outcome and who owns it, not only the ranking.
+                "decision": c.get("decision", "undecided"),
+                "decided_by": c.get("decided_by") or "",
+                "decided_at": c.get("decided_at") or "",
+                "verification_status": c.get("verification_status", ""),
+                "escalation_reasons": "|".join(c.get("escalation_reasons", [])),
                 "flags": "|".join(c["flags"]),
                 "scored_at": c["scored_at"],
             }

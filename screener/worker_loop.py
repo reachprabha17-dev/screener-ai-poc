@@ -41,7 +41,7 @@ from config.settings import settings
 from screener.clients.ollama_client import SchemaInvalidError
 from screener.logging import bind_job, clear_context, get_logger, write_failure
 from screener.models import Candidate, Rubric, Run
-from screener.pipeline import Deps, file_sha256, screen_one
+from screener.pipeline import Deps, file_sha256, judge_one, verify_one
 from screener.ports import CacheKey, Job
 from screener.service import ScreenerService
 from screener.storage.connection import require_current_schema
@@ -85,7 +85,24 @@ class Worker:
         database of candidate decisions is an integrity incident (12.1).
         """
         require_current_schema()
+        self._warn_if_no_escalation_budget()
         return self.service.reclaim_orphaned(self.worker_id)
+
+    def _warn_if_no_escalation_budget(self) -> None:
+        """Nag on every start while `escalation_budget` is unset (19.2).
+
+        The escalation rate is the constraint that decides whether human
+        oversight is real: past roughly 10% of a run, reviewers click through and
+        the control fails silently while still appearing to work. The number can
+        only come from a real run, and without something saying so on every
+        start, "measure it later" becomes "never".
+        """
+        if settings.escalation_budget is None:
+            self._log.warning(
+                "escalation_budget_unset",
+                stage="startup",
+                msg="Measure the rate on this run and record escalation_budget_source_run",
+            )
 
     # --- the loop ------------------------------------------------------------
 
@@ -109,14 +126,28 @@ class Worker:
             self._sleep_interruptibly(self.poll_interval_s)
             return False
 
-        job = self.service.claim_next_job(self.worker_id)
+        active = self.service.next_active_phase()
+        if active is None:
+            return False
+        run, phase = active
+
+        # **Once per phase, not once per résumé.** 12 GB of VRAM holds one of the
+        # two models, and swapping per candidate costs a 10–20 s load every time:
+        # two loads across a 1,000-CV run against two thousand (17.4).
+        self._ensure_model_for(phase)
+
+        job = self.service.claim_next_job(self.worker_id, phase)
         if job is None:
+            # The phase has drained. Advancing here rather than on a timer means
+            # the transition happens the moment the last job lands.
+            self.service.advance_phase_if_complete(run.id)
+            self.service.finish_run_if_complete(run.id)
             return False
 
         bind_job(job.run_id, job.id, self.worker_id)
         started = time.monotonic()
         try:
-            candidate = self._process(job)
+            candidate = self._verify(job) if job.phase == "verify" else self._process(job)
             self._log.info(
                 "screened",
                 stage="complete",
@@ -128,7 +159,7 @@ class Worker:
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
         except Exception as exc:  # noqa: BLE001 — the loop must outlive any single resume
-            # `screen_one` turns document problems into flagged candidates, so
+            # `judge_one` turns document problems into flagged candidates, so
             # reaching here means infrastructure: the database, the model, or a
             # bug. Retryable, capped by `job_max_attempts` so a job that reliably
             # kills the worker cannot loop forever.
@@ -140,10 +171,34 @@ class Worker:
             )
             self.service.fail_job(job, f"{type(exc).__name__}: {exc}"[:2000], retryable=True)
         finally:
+            self.service.advance_phase_if_complete(job.run_id)
             self.service.finish_run_if_complete(job.run_id)
             clear_context()
 
         return True
+
+    def _ensure_model_for(self, phase: str) -> None:
+        model = settings.verifier_model if phase == "verify" else settings.judge_model
+        self.deps.llm.ensure_loaded(model)
+
+    def _verify(self, job: Job) -> Candidate:
+        """Phase 2 for one already-judged candidate.
+
+        A missing candidate is a completed job, not a failure: the row was
+        purged between enqueue and claim, and retrying would fail identically
+        until the attempt cap gave up and marked the job failed for a reason
+        that has nothing to do with the run.
+        """
+        if job.candidate_id is None:
+            raise ValueError(f"verify job {job.id} has no candidate")
+
+        rubric, _run = self._rubric_for(job.run_id)
+        candidate = self.service.get_candidate(job.candidate_id)
+
+        verified = verify_one(candidate, rubric, self.deps)
+        self.service.save_verification(job.candidate_id, verified)
+        self.service.complete_verify_job(job)
+        return verified
 
     def _process(self, job: Job) -> Candidate:
         rubric, run = self._rubric_for(job.run_id)
@@ -157,7 +212,7 @@ class Worker:
             self._log.info("cache_hit", stage="cache", file_sha256=sha)
         else:
             try:
-                candidate = screen_one(
+                candidate = judge_one(
                     path, rubric, self.deps, run_id=job.run_id, root=Path(run.folder)
                 )
             except SchemaInvalidError as exc:

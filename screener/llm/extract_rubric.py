@@ -21,6 +21,7 @@ validating the model against itself.
 
 from dataclasses import dataclass
 
+from config.settings import settings
 from screener.clients.ollama_client import parse_or_raise
 from screener.llm import load_prompt_with_hash
 from screener.models import Criterion, ExtractedRubric
@@ -48,6 +49,7 @@ def assign_ids(extracted: ExtractedRubric) -> list[Criterion]:
         Criterion(
             id=f"C{index}",
             text=item.text.strip(),
+            claim=item.claim.strip(),
             must_have=item.must_have,
             weight=item.weight,
         )
@@ -76,7 +78,7 @@ def extract_rubric(client: LLMClient, jd_text: str) -> ExtractionResult:
     system, digest = load_prompt_with_hash(PROMPT_NAME)
     schema = ExtractedRubric.model_json_schema()
 
-    payload = client.chat_json(system, build_user_message(jd_text), schema)
+    payload = client.chat_json(settings.judge_model, system, build_user_message(jd_text), schema)
     extracted = parse_or_raise(ExtractedRubric, payload)
 
     return ExtractionResult(criteria=assign_ids(extracted), prompt_hash=digest)

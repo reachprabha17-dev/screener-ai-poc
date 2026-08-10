@@ -17,6 +17,7 @@ import re
 
 import pytest
 
+from config.settings import settings
 from screener.clients.ollama_client import OllamaClient
 from screener.core.validate_verdicts import validate_verdicts
 from screener.llm.extract_rubric import extract_rubric
@@ -107,7 +108,9 @@ def test_verdict_set_compliance_meets_the_budget(llm: LLMClient) -> None:
     compliant = 0
     failures: list[str] = []
     for _ in range(COMPLIANCE_SAMPLES):
-        output = JudgeOutput.model_validate(llm.chat_json(system, user, schema))
+        output = JudgeOutput.model_validate(
+            llm.chat_json(settings.judge_model, system, user, schema)
+        )
         check = validate_verdicts(output, RUBRIC)
         if check.ok:
             compliant += 1

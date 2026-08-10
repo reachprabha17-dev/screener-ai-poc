@@ -60,5 +60,11 @@ def save_rubric(
     actor: Actor = Depends(get_actor),
     service: ScreenerService = Depends(get_service),
 ) -> RubricResponse:
-    """201, not 200: this creates a new version rather than replacing one."""
-    return to_rubric(service.save_rubric(position_id, request.criteria, actor))
+    """201, not 200: this creates a new version rather than replacing one.
+
+    A stale `base_version` raises `ConflictError` → 409, so the second of two
+    people editing the same rubric is told rather than silently winning.
+    """
+    return to_rubric(
+        service.save_rubric(position_id, request.criteria, actor, request.base_version)
+    )

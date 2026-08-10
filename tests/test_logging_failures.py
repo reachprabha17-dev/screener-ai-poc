@@ -49,7 +49,13 @@ SENT_TEXT = RESUME_TEXT.replace("asha.nair@example.com", "[EMAIL]")
 
 
 class FakeLLM:
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        if "support_checks" in schema.get("properties", {}):
+            # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
+            # agreed with everything and found nothing for the `none` criteria.
+            return {"support_checks": [], "absence_checks": []}
         return {
             "criteria": [
                 {"text": "5+ years backend engineering", "must_have": True, "weight": 5},
@@ -59,18 +65,23 @@ class FakeLLM:
             ]
         }
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         return len(text) // 4
 
-    def count_prompt_tokens(self, system: str, user: str) -> int:
+    def count_prompt_tokens(self, model: str, system: str, user: str) -> int:
         return 900
 
     def health(self) -> bool:
         return True
 
-    @property
-    def model_digest(self) -> str:
+    def digest(self, model: str) -> str:
         return "sha256:aaa"
+
+    def ensure_loaded(self, model: str) -> None:
+        self.loaded = model
+
+    def unload(self, model: str) -> None:
+        self.loaded = None
 
 
 @pytest.fixture

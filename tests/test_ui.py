@@ -156,7 +156,7 @@ def test_the_ui_holds_no_worker_state() -> None:
 
     assert "threading" not in source
     assert "subprocess" not in source
-    assert "screen_one" not in source
+    assert "judge_one" not in source
 
 
 # --- the actor reaches the audit trail --------------------------------------

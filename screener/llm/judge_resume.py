@@ -20,6 +20,7 @@ check rather than the model grading its own paperwork.
 
 from dataclasses import dataclass
 
+from config.settings import settings
 from screener.clients.ollama_client import SchemaInvalidError, parse_or_raise
 from screener.core.validate_verdicts import (
     VerdictSetCheck,
@@ -100,7 +101,7 @@ def judge_resume(client: LLMClient, resume_text: str, rubric: Rubric) -> JudgeRe
 
     for attempt in range(2):
         attempts = attempt + 1
-        payload = client.chat_json(system, user, schema)
+        payload = client.chat_json(settings.judge_model, system, user, schema)
         output = parse_or_raise(JudgeOutput, payload)
         check = validate_verdicts(output, rubric)
 

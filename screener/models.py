@@ -309,6 +309,11 @@ class ExtractedCriterion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str
+    # The criterion restated as an assertion the phase-2 support check can test
+    # (9.1, 10.6 A). Written here, once per rubric, rather than derived per
+    # résumé: a hypothesis re-invented 1,000 times is 1,000 chances to drift, and
+    # the verifier's answer is only as sharp as the question.
+    claim: str = ""
     must_have: bool = False
     weight: int = Field(default=1, ge=1, le=5)
 
@@ -414,6 +419,11 @@ class ScoredCriterion(BaseModel):
     verifier_rationale: str = ""
     absence_confirmed: bool | None = None
     absence_evidence: str = ""
+    # Rubric facts, re-attached on read rather than stored per verdict — a second
+    # copy would be a second source of truth for the scoring arithmetic and for
+    # what the criterion actually said. `text` defaults empty because it is only
+    # needed by the read layer; nothing in scoring reads it.
+    text: str = ""
     weight: int
     must_have: bool
 
@@ -513,11 +523,23 @@ class RunStatus(BaseModel):
 
     run_id: str
     status: str
+    # `total` and the counts below are the **judge** phase: one job per
+    # candidate, which is what everyone means by the size of a run. Counting
+    # both phases would report a 6-file run as 12 the moment verification was
+    # switched on.
     total: int
     pending: int
     claimed: int
     done: int
     failed: int
+    # Which pass is running, and how far through it. "judging 340/1000" and
+    # "verifying 120/1000" are different facts and a reviewer needs to know
+    # which one they are looking at (15.4).
+    phase: Literal["judge", "verify", "done"] = "judge"
+    phase_done: int = 0
+    phase_total: int = 0
+    escalation_breakdown: dict[EscalationReason, int] = Field(default_factory=dict)
+    undecided_count: int = 0
     queue_depth_ahead: int = 0
     eta_seconds: float = 0.0
     escalation_rate: float = 0.0

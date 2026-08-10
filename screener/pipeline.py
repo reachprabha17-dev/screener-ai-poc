@@ -34,15 +34,21 @@ from config.settings import settings
 from screener.core.budget import check_budget
 from screener.core.compute_score import compute_score
 from screener.core.detect_injection import detect_injection
+from screener.core.detect_negation import detect_negation
 from screener.core.rank import assign_band
+from screener.core.reconcile_judge import escalation_reasons_for, reconcile_judge
 from screener.core.redact_pii import identity_map, redact_pii
 from screener.core.screen_freetext import screen_freetext
 from screener.core.verify_evidence import verify_evidence
 from screener.intake.sanitize_text import sanitize
 from screener.intake.validate_file import validate_file
 from screener.llm import load_prompt
+from screener.llm.confirm_absence import confirm_absence
+from screener.llm.confirm_absence import targets as absence_targets
 from screener.llm.judge_resume import PROMPT_NAME, build_user_message, judge_resume
-from screener.models import Candidate, Flag, Rubric, ScoredCriterion, now
+from screener.llm.verify_support import targets as support_targets
+from screener.llm.verify_support import verify_support
+from screener.models import Candidate, Flag, Rubric, ScoredCriterion, VerifyOutput, now
 from screener.ports import LLMClient, ResumeParser
 
 _HASH_CHUNK = 1024 * 1024
@@ -124,11 +130,16 @@ def _unscoreable(
         summary=summary,
         scoreable=False,
         review_required=True,
+        # Computed here too, not only on the happy path: an unprocessable
+        # candidate is the one most likely to be lost at the bottom of a list,
+        # and the review queue groups by reason (15.4). A candidate in the queue
+        # with no reason is one nobody knows why they are looking at.
+        escalation_reasons=escalation_reasons_for(acc.flags, criteria or []),
         scored_at=now(),
     )
 
 
-def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing them would hide the order
+def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing them would hide the order
     path: Path,
     rubric: Rubric,
     deps: Deps,
@@ -136,7 +147,14 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
     run_id: str,
     root: Path,
 ) -> Candidate:
-    """Screen one resume. Returns a `Candidate` in every case; never raises.
+    """Phase 1: judge one résumé. Returns a `Candidate` in every case; never raises.
+
+    Everything a candidate needs to be *ranked* happens here, and nothing that
+    needs the verifier. The split is not organisational: 12 GB of VRAM cannot
+    hold both models, so the two phases run as separate passes over the whole
+    run and this function has to leave behind everything phase 2 will need —
+    which is why `sent_text` and the span map are stored rather than recomputed
+    (17.4, 12.6).
 
     `root` is the run folder, used to confirm the file has not escaped it. It is
     a parameter rather than a setting because it varies per run, and resolving it
@@ -194,7 +212,7 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
     # --- 10.1 budget, against the assembled prompt --------------------------
     system = load_prompt(PROMPT_NAME)
     user = build_user_message(sent, rubric)
-    budget = check_budget(deps.llm.count_prompt_tokens(system, user))
+    budget = check_budget(deps.llm.count_prompt_tokens(settings.judge_model, system, user))
     if not budget.fits:
         # Never truncated and judged — that reintroduces at our own boundary the
         # silent overflow this check exists to prevent.
@@ -239,8 +257,17 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
             criteria=verified.criteria,
         )
 
-    # --- 10.4 arithmetic ----------------------------------------------------
-    scored = compute_score(verified.criteria, rubric)
+    # --- 10.5 C negation, over the blocks stage B just aligned ---------------
+    #
+    # After B because it reads the window before each verified block, and those
+    # offsets only exist once the alignment has run. Flags only: a keyword window
+    # is a heuristic, and the cost of being wrong in the downgrading direction is
+    # an adverse outcome for a person produced by a word list.
+    negation = detect_negation(verified.criteria, sent)
+    acc.add(*negation.flags, review=negation.review_required)
+
+    # --- 10.7 arithmetic ----------------------------------------------------
+    scored = compute_score(negation.criteria, rubric)
     acc.add(*scored.flags, review=scored.review_required)
 
     return Candidate(
@@ -253,15 +280,60 @@ def screen_one(  # noqa: PLR0911 — one return per terminal stage; collapsing t
         score=scored.score,
         band=assign_band(scored.score),
         must_haves_met=scored.must_haves_met,
-        criteria=verified.criteria,
+        criteria=negation.criteria,
         notable_strengths=screened.output.notable_strengths,
         red_flags=screened.output.red_flags,
         summary=screened.output.summary,
         flags=acc.flags,
         scoreable=True,
         review_required=acc.review_required,
+        escalation_reasons=escalation_reasons_for(acc.flags, negation.criteria),
         scored_at=now(),
     )
+
+
+def verify_one(candidate: Candidate, rubric: Rubric, deps: Deps) -> Candidate:
+    """Phase 2: a second model's opinion on what phase 1 concluded (10.6).
+
+    Reads `sent_text` from the candidate rather than re-parsing the file — that
+    is what makes this pass cheap, and it guarantees the verifier is looking at
+    the exact string the judge was given rather than a re-derivation of it.
+
+    **Two calls, both batched**, and both bounded by what they are allowed to
+    change: nothing. `reconcile_judge` is pure and asserts that.
+
+    An unscoreable candidate is skipped outright. Stage B already failed for
+    them, they are already in the review queue, and 10.4 is explicit that D is
+    skipped once B has failed — a second opinion on a quote we could not find is
+    an invitation to confirm one that was never there.
+    """
+    if not candidate.scoreable:
+        return candidate.model_copy(update={"verification_status": "skipped"})
+
+    support = verify_support(
+        deps.llm, support_targets(candidate.criteria), rubric, candidate.sent_text
+    )
+    absence = confirm_absence(
+        deps.llm, absence_targets(candidate.criteria), rubric, candidate.sent_text
+    )
+
+    verified = reconcile_judge(
+        candidate, VerifyOutput(support_checks=support, absence_checks=absence.checks)
+    )
+
+    if absence.skipped_over_budget:
+        # The résumé plus its `none` criteria did not fit `verifier_num_ctx`.
+        # Flagged rather than truncated: Ollama truncates without an error, and a
+        # confirmed absence from half a document is worse than no answer (10.1).
+        flags = sorted({*verified.flags, Flag.BUDGET_EXCEEDED})
+        return verified.model_copy(
+            update={
+                "flags": flags,
+                "review_required": True,
+                "escalation_reasons": escalation_reasons_for(flags, verified.criteria),
+            }
+        )
+    return verified
 
 
 def screen_batch(
@@ -282,4 +354,4 @@ def screen_batch(
     owns those. This exists so a batch can be run with the API and database in an
     unknown state, which is exactly when the queue is not available to lean on.
     """
-    return [screen_one(path, rubric, deps, run_id=run_id, root=root) for path in paths]
+    return [judge_one(path, rubric, deps, run_id=run_id, root=root) for path in paths]

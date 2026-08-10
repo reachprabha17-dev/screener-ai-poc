@@ -26,11 +26,13 @@ it, because it would be reported as done.
 
 import hashlib
 import json
+from datetime import datetime
 from typing import Any
 
 from screener.models import (
     Band,
     Candidate,
+    Decision,
     EscalationReason,
     Flag,
     RedFlag,
@@ -193,6 +195,45 @@ def save_verification(tx: Tx, candidate_id: int, candidate: Candidate) -> None:
             for c in candidate.criteria
         ],
     )
+
+
+def save_decision(
+    tx: Tx, candidate_id: int, decision: Decision, actor_id: str, at: datetime
+) -> None:
+    """Write the current decision. History goes to `overrides` (12.8).
+
+    Two places, deliberately. `candidates.decision` answers "where does this
+    person stand" in one index probe, which is what every list screen and the
+    sign-off precondition ask; `overrides` answers "who changed it, from what,
+    and why". Deriving the former from the latter would make the common query a
+    correlated subquery over an ever-growing history, and deriving the latter
+    from the former is impossible — an in-place update keeps no past.
+    """
+    tx.execute(
+        "UPDATE candidates SET decision = ?, decided_by = ?, decided_at = ? WHERE id = ?",
+        (decision, actor_id, at.isoformat(), candidate_id),
+    )
+
+
+def mark_unverified_as_skipped(tx: Tx, run_id: str) -> int:
+    """Close out candidates that no phase-2 job will ever reach.
+
+    Called when a run goes to `done` without a verify phase — verification is
+    off for the run, or nothing in it was scoreable. Left alone, those rows keep
+    `verification_status='pending'` forever, and `pending` means "not verified
+    *yet*": every consumer that treats it as outstanding — the provisional badge,
+    the bulk exclusion, the sign-off precondition — would block on work that is
+    never going to happen.
+
+    `skipped` is the honest value. It says verification did not run, which is
+    exactly true, and is distinguishable from `done` for anyone auditing later.
+    """
+    cursor = tx.execute(
+        "UPDATE candidates SET verification_status = 'skipped' "
+        "WHERE run_id = ? AND verification_status = 'pending'",
+        (run_id,),
+    )
+    return int(cursor.rowcount or 0)
 
 
 def _verifier_digest_of(tx: Tx, candidate_id: int) -> str | None:

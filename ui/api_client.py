@@ -133,12 +133,32 @@ class ApiClient:
 
     # --- candidates ----------------------------------------------------------
 
-    def override(self, candidate_id: int, decision: str, reason: str) -> None:
+    def decide(self, candidate_id: int, decision: str, reason: str) -> None:
         self._request(
             "POST",
-            f"/candidates/{candidate_id}/override",
+            f"/candidates/{candidate_id}/decision",
             json={"decision": decision, "reason": reason},
         )
+
+    def decide_bulk(
+        self, candidate_ids: list[int], decision: str, reason: str
+    ) -> dict[str, list[int]]:
+        return dict(
+            self._request(
+                "POST",
+                "/candidates/decisions",
+                json={"candidate_ids": candidate_ids, "decision": decision, "reason": reason},
+            )
+        )
+
+    def file_url(self, candidate_id: int) -> str:
+        """A URL for the browser to follow, not a body for this process to hold.
+
+        The original document is served as a stream; pulling it through here to
+        hand to Streamlit would put every 5 MB PDF a reviewer opens into the UI
+        process's memory for no purpose.
+        """
+        return f"{self.base_url.rstrip('/')}/candidates/{candidate_id}/file"
 
     def purge(self, file_sha256: str) -> int:
         return int(self._request("DELETE", f"/candidates/{file_sha256}")["count"])

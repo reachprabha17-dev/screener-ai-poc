@@ -23,6 +23,8 @@ from screener.clients.ollama_client import (
 )
 from screener.models import JudgeOutput
 
+MODEL = settings.judge_model
+
 SCHEMA: dict[str, Any] = JudgeOutput.model_json_schema()
 GOOD = '{"criteria": [{"id": "C1", "verdict": "strong", "evidence": "7 years backend"}]}'
 
@@ -96,7 +98,7 @@ def client(*responses: dict[str, Any] | Exception) -> tuple[OllamaClient, FakeOl
 def test_structured_call_returns_parsed_json() -> None:
     llm, _ = client(chat_payload())
 
-    result = llm.chat_structured("system", "resume", SCHEMA)
+    result = llm.chat_structured(MODEL, "system", "resume", SCHEMA)
 
     assert result.content["criteria"][0]["verdict"] == "strong"
     assert result.prompt_tokens == 500
@@ -109,7 +111,7 @@ def test_decoding_options_are_fixed_by_settings() -> None:
     every stored comparison across the boundary.
     """
     llm, fake = client(chat_payload())
-    llm.chat_json("system", "resume", SCHEMA)
+    llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
     options = fake.calls[0]["options"]
     assert options["temperature"] == settings.temperature
@@ -121,7 +123,7 @@ def test_decoding_options_are_fixed_by_settings() -> None:
 
 def test_the_schema_is_sent_as_a_grammar_constraint() -> None:
     llm, fake = client(chat_payload())
-    llm.chat_json("system", "resume", SCHEMA)
+    llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
     assert fake.calls[0]["format"] == SCHEMA
 
@@ -137,7 +139,7 @@ def test_transient_failure_retries_then_raises() -> None:
     )
 
     with pytest.raises(LLMError):
-        llm.chat_json("system", "resume", SCHEMA)
+        llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
     assert len(fake.calls) == settings.max_retries + 1
 
@@ -145,14 +147,14 @@ def test_transient_failure_retries_then_raises() -> None:
 def test_transient_failure_recovers_on_retry() -> None:
     llm, _ = client(TimeoutError("blip"), chat_payload())
 
-    assert llm.chat_json("system", "resume", SCHEMA)["criteria"]
+    assert llm.chat_json(MODEL, "system", "resume", SCHEMA)["criteria"]
 
 
 def test_malformed_output_retries_once_then_raises() -> None:
     llm, fake = client(chat_payload("{not json"), chat_payload("{still not json"))
 
     with pytest.raises(SchemaInvalidError):
-        llm.chat_json("system", "resume", SCHEMA)
+        llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
     assert len(fake.calls) == 2  # once, not to max_retries
 
@@ -168,7 +170,7 @@ def test_truncated_output_is_not_retried_blindly() -> None:
     )
 
     with pytest.raises(SchemaInvalidError) as excinfo:
-        llm.chat_json("system", "resume", SCHEMA)
+        llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
     assert excinfo.value.truncated is True
     assert "num_predict" in str(excinfo.value)
@@ -184,14 +186,14 @@ def test_prompt_over_the_context_limit_is_a_budget_bug() -> None:
     llm, _ = client(chat_payload(prompt_tokens=settings.num_ctx))
 
     with pytest.raises(BudgetBugError):
-        llm.chat_json("system", "resume", SCHEMA)
+        llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
 
 def test_non_object_json_is_rejected() -> None:
     llm, _ = client(chat_payload("[1, 2, 3]"))
 
     with pytest.raises(SchemaInvalidError):
-        llm.chat_json("system", "resume", SCHEMA)
+        llm.chat_json(MODEL, "system", "resume", SCHEMA)
 
 
 # --- provenance --------------------------------------------------------------
@@ -205,15 +207,15 @@ def test_digest_is_read_from_the_listing_and_cached() -> None:
     """
     llm, fake = client()
 
-    assert llm.model_digest == "sha256:abc123"
-    assert llm.model_digest == "sha256:abc123"
+    assert llm.digest(MODEL) == "sha256:abc123"
+    assert llm.digest(MODEL) == "sha256:abc123"
     assert sum(1 for c in fake.calls if c["kind"] == "list") == 1
 
 
 def test_digest_matches_the_configured_model_not_the_first_entry() -> None:
     llm, _ = client()
 
-    assert llm.model_digest != "sha256:wrong"
+    assert llm.digest(MODEL) != "sha256:wrong"
 
 
 def test_digest_pin_mismatch_is_reported_not_raised(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,14 +223,14 @@ def test_digest_pin_mismatch_is_reported_not_raised(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(settings, "judge_digest_pin", "sha256:different")
     llm, _ = client()
 
-    assert llm.check_digest_pin() is False
+    assert llm.check_digest_pin(MODEL, settings.judge_digest_pin) is False
 
 
 def test_no_pin_configured_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "judge_digest_pin", None)
     llm, _ = client()
 
-    assert llm.check_digest_pin() is True
+    assert llm.check_digest_pin(MODEL, settings.judge_digest_pin) is True
 
 
 def test_health_is_true_when_the_server_answers() -> None:
@@ -260,14 +262,14 @@ def test_count_tokens_uses_num_predict_one() -> None:
     """
     llm, fake = client({"prompt_eval_count": 823})
 
-    assert llm.count_tokens("resume text") == 823
+    assert llm.count_tokens(MODEL, "resume text") == 823
     assert fake.calls[0]["options"]["num_predict"] == 1
 
 
 def test_empty_text_costs_no_call() -> None:
     llm, fake = client()
 
-    assert llm.count_tokens("") == 0
+    assert llm.count_tokens(MODEL, "") == 0
     assert fake.calls == []
 
 
@@ -275,7 +277,7 @@ def test_missing_count_is_a_transient_error() -> None:
     llm, _ = client({"prompt_eval_count": None})
 
     with pytest.raises(LLMError):
-        llm.count_tokens("resume text")
+        llm.count_tokens(MODEL, "resume text")
 
 
 def test_prompt_count_measures_the_real_two_message_shape() -> None:
@@ -288,7 +290,7 @@ def test_prompt_count_measures_the_real_two_message_shape() -> None:
     """
     llm, fake = client({"prompt_eval_count": 4028})
 
-    assert llm.count_prompt_tokens("system", "resume") == 4028
+    assert llm.count_prompt_tokens(MODEL, "system", "resume") == 4028
     assert fake.calls[0]["kind"] == "chat"
     assert fake.calls[0]["messages"][0]["role"] == "system"
     assert fake.calls[0]["options"]["num_predict"] == 1
@@ -297,7 +299,7 @@ def test_prompt_count_measures_the_real_two_message_shape() -> None:
 def test_prompt_count_costs_a_single_call() -> None:
     llm, fake = client({"prompt_eval_count": 4028})
 
-    llm.count_prompt_tokens("system", "resume")
+    llm.count_prompt_tokens(MODEL, "system", "resume")
 
     assert len(fake.calls) == 1
 
@@ -308,7 +310,7 @@ def test_estimate_is_used_when_exact_counting_is_disabled(
     monkeypatch.setattr(settings, "exact_token_count", False)
     llm, fake = client()
 
-    assert llm.count_tokens("x" * 3500) > 0
+    assert llm.count_tokens(MODEL, "x" * 3500) > 0
     assert fake.calls == []
 
 

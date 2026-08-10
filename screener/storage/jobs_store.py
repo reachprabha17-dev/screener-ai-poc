@@ -354,10 +354,18 @@ def reclaim_if_unchanged(tx: Tx, job_id: int, observed_seq: int) -> bool:
 # --- progress ----------------------------------------------------------------
 
 
-def progress(tx: Tx, run_id: str) -> RunProgress:
+def progress(tx: Tx, run_id: str, phase: str = "judge") -> RunProgress:
+    """Job counts for one phase of a run.
+
+    **Phase-scoped, defaulting to `judge`.** Counting both phases together would
+    double every total the moment verification was enabled — a 6-file run
+    reporting 12 — and would make "340 of 1000" mean nothing in particular. The
+    judge phase has exactly one job per candidate, which is what everyone means
+    by the size of a run.
+    """
     rows = tx.execute(
-        "SELECT status, COUNT(*) AS n FROM jobs WHERE run_id = ? GROUP BY status",
-        (run_id,),
+        "SELECT status, COUNT(*) AS n FROM jobs WHERE run_id = ? AND phase = ? GROUP BY status",
+        (run_id, phase),
     ).fetchall()
     counts = {row["status"]: int(row["n"]) for row in rows}
     return RunProgress(

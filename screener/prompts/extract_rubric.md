@@ -22,6 +22,16 @@ Set `must_have` to true only where the job description states a hard requirement
 
 When in doubt, false. A criterion wrongly marked must-have moves qualified candidates into the unqualified partition, and the reviewer approving this rubric may not notice.
 
+# claim
+
+Alongside each criterion, write a `claim`: the same requirement restated as a single assertion about the candidate, in the form a second reader could mark supported or unsupported against a resume.
+
+- "5+ years backend engineering" → "The candidate has at least 5 years of backend engineering experience."
+- "Production Python experience" → "The candidate has used Python in production."
+- "Kubernetes / orchestration" → "The candidate has run container orchestration in production."
+
+Write it as a statement, not a question, and keep it to one sentence. Carry over every qualifier the criterion has — a threshold, "production", "led" — because the claim is what the second reader is given instead of the criterion, and a qualifier dropped here is a requirement silently relaxed.
+
 # weight
 
 1 to 5, reflecting how central the requirement is to the job description's own emphasis. Use the range: if everything is a 3, the weighting carries no information. Weight and `must_have` are independent — a must-have can be low-weight, and a heavily weighted criterion need not be mandatory.

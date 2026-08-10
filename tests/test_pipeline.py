@@ -21,7 +21,7 @@ from conftest import make_rubric
 
 from config.settings import settings
 from screener.models import Flag, ParsedResume, ParseResult, RedFlag
-from screener.pipeline import Deps, file_sha256, screen_batch, screen_one
+from screener.pipeline import Deps, file_sha256, judge_one, screen_batch
 
 RUBRIC = make_rubric(
     ("C1", True, 3, "Backend engineering experience"),
@@ -65,22 +65,33 @@ class FakeLLM:
         self._prompt_tokens = prompt_tokens
         self.seen: list[tuple[str, str]] = []
 
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        if "support_checks" in schema.get("properties", {}):
+            # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
+            # agreed with everything and found nothing for the `none` criteria.
+            return {"support_checks": [], "absence_checks": []}
         self.seen.append((system, user))
         return self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         return len(text) // 4
 
-    def count_prompt_tokens(self, system: str, user: str) -> int:
+    def count_prompt_tokens(self, model: str, system: str, user: str) -> int:
         return self._prompt_tokens
 
     def health(self) -> bool:
         return True
 
-    @property
-    def model_digest(self) -> str:
+    def digest(self, model: str) -> str:
         return "sha256:fake"
+
+    def ensure_loaded(self, model: str) -> None:
+        self.loaded = model
+
+    def unload(self, model: str) -> None:
+        self.loaded = None
 
     @property
     def last_user_message(self) -> str:
@@ -128,7 +139,7 @@ def pdf(root: Path, name: str = "asha.pdf") -> Path:
 
 
 def run(root: Path, parser: FakeParser, llm: FakeLLM, **kwargs: Any):  # noqa: ANN201
-    return screen_one(
+    return judge_one(
         kwargs.pop("path", pdf(root)),
         RUBRIC,
         Deps(parser=parser, llm=llm, **kwargs),

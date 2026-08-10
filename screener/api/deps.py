@@ -10,10 +10,10 @@ authentication itself is a day's work.
 admin, which is why the API binds to loopback and why `auth_mode` must be moved
 off `stub` before an external listener exists.
 
-The mappers are here rather than on the models because they enforce 15.4's
-outward boundary in one place: `model_verdict` is dropped when a `ScoredCriterion`
-becomes a `CriterionResponse`, and there is no other path from a domain object to
-an HTTP body.
+The mappers are here rather than on the models because they enforce 15.2's
+outward boundary in one place: a `Candidate` becomes a response only by passing
+through `to_candidate`, which picks the recruiter or auditor view from the
+actor's roles. There is no other path from a domain object to an HTTP body.
 """
 
 from functools import lru_cache
@@ -34,28 +34,41 @@ from screener.models import (
 )
 from screener.schemas import (
     CandidateResponse,
-    CriterionResponse,
     HealthResponse,
     PositionResponse,
     RankedResponse,
     RubricResponse,
     RunResponse,
     RunStatusResponse,
+    candidate_response,
 )
 from screener.service import ScreenerService
 
 
-def get_actor(x_actor: str | None = Header(default=None)) -> Actor:
+def get_actor(
+    x_actor: str | None = Header(default=None),
+    x_actor_roles: str | None = Header(default=None),
+) -> Actor:
     """Who is making this request.
 
     Stubbed today. The `X-Actor` header is honoured so a PoC can demonstrate two
     different people approving and signing off — separation of duties is the
     thing an audit trail exists to record, and a hardcoded single identity would
     make it untestable.
+
+    `X-Actor-Roles` exists for the same reason applied to 15.2: role-scoped field
+    exposure that cannot be exercised is a control nobody can show works. It is a
+    trusted header, which is acceptable only while the port is on loopback and
+    `auth_mode` is `stub` — the same assumption the identity header already makes.
     """
     if settings.auth_mode == "stub":
         actor_id = x_actor or settings.dev_actor_id
-        return Actor(id=actor_id, display_name=actor_id, roles=frozenset({"admin"}))
+        roles = (
+            frozenset(r.strip() for r in x_actor_roles.split(",") if r.strip())
+            if x_actor_roles
+            else frozenset({"admin"})
+        )
+        return Actor(id=actor_id, display_name=actor_id, roles=roles)
     # LDAP / argon2 lands here — one function, no call-site changes.
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -121,42 +134,21 @@ def to_run_status(status_: RunStatus) -> RunStatusResponse:
     return RunStatusResponse(**status_.model_dump())
 
 
-def to_candidate(candidate: Candidate) -> CandidateResponse:
-    """The 15.4 boundary. `model_verdict` is dropped here and nowhere else."""
-    return CandidateResponse(
-        filename=candidate.filename,
-        file_sha256=candidate.file_sha256,
-        score=candidate.score,
-        band=candidate.band,
-        must_haves_met=candidate.must_haves_met,
-        criteria=[
-            CriterionResponse(
-                id=c.id,
-                verdict=c.verdict,
-                evidence=c.evidence,
-                verified=c.verified,
-                match_ratio=c.match_ratio,
-                longest_span=c.longest_span,
-                weight=c.weight,
-                must_have=c.must_have,
-            )
-            for c in candidate.criteria
-        ],
-        notable_strengths=candidate.notable_strengths,
-        red_flags=candidate.red_flags,
-        summary=candidate.summary,
-        flags=[f.value for f in candidate.flags],
-        scoreable=candidate.scoreable,
-        review_required=candidate.review_required,
-        scored_at=candidate.scored_at,
-    )
+def to_candidate(candidate: Candidate, actor: Actor) -> CandidateResponse:
+    """The 15.2 boundary. Which fields leave depends on who is asking.
+
+    A thin forward to `schemas.candidate_response`, kept so every route reaches
+    the boundary through the same name it always has. The role check itself lives
+    beside the view types, next to the table it implements.
+    """
+    return candidate_response(candidate, actor)
 
 
-def to_ranked(result: RankedResult) -> RankedResponse:
+def to_ranked(result: RankedResult, actor: Actor) -> RankedResponse:
     return RankedResponse(
-        meets_must_haves=[to_candidate(c) for c in result.meets_must_haves],
-        missing_must_have=[to_candidate(c) for c in result.missing_must_have],
-        needs_review=[to_candidate(c) for c in result.needs_review],
+        meets_must_haves=[to_candidate(c, actor) for c in result.meets_must_haves],
+        missing_must_have=[to_candidate(c, actor) for c in result.missing_must_have],
+        needs_review=[to_candidate(c, actor) for c in result.needs_review],
         escalation_rate=result.escalation_rate,
     )
 

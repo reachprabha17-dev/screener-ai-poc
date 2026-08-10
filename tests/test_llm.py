@@ -36,19 +36,30 @@ class FakeLLM:
         self._payloads = list(payloads)
         self.calls: list[tuple[str, str]] = []
 
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        if "support_checks" in schema.get("properties", {}):
+            # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
+            # agreed with everything and found nothing for the `none` criteria.
+            return {"support_checks": [], "absence_checks": []}
         self.calls.append((system, user))
         return self._payloads.pop(0) if self._payloads else {"criteria": []}
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         return len(text) // 4
 
     def health(self) -> bool:
         return True
 
-    @property
-    def model_digest(self) -> str:
+    def digest(self, model: str) -> str:
         return "sha256:test"
+
+    def ensure_loaded(self, model: str) -> None:
+        self.loaded = model
+
+    def unload(self, model: str) -> None:
+        self.loaded = None
 
 
 def verdicts(*ids: str) -> dict[str, Any]:

@@ -69,17 +69,25 @@ class Job(BaseModel):
 
 @runtime_checkable
 class LLMClient(Protocol):
-    """A chat model that can be constrained to a JSON schema."""
+    """Chat models that can be constrained to a JSON schema.
 
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    **Every method names its model.** v6 runs two — a judge and a deliberately
+    different verifier — and a client with an implicit default would make it
+    impossible to tell from a call site which weights produced a result, which is
+    the one thing the provenance record exists to answer.
+    """
+
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
         """Run one completion constrained to ``schema`` and return parsed JSON."""
         ...
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         """Exact prompt token count for a bare string."""
         ...
 
-    def count_prompt_tokens(self, system: str, user: str) -> int:
+    def count_prompt_tokens(self, model: str, system: str, user: str) -> int:
         """Exact size of the assembled two-message prompt, for the 10.1 pre-check.
 
         Separate from ``count_tokens`` because the chat template adds framing the
@@ -90,10 +98,19 @@ class LLMClient(Protocol):
 
     def health(self) -> bool: ...
 
-    @property
-    def model_digest(self) -> str:
-        """Digest of the loaded weights — recorded per decision for provenance."""
+    def digest(self, model: str) -> str:
+        """Digest of a model's weights — recorded per decision for provenance."""
         ...
+
+    def ensure_loaded(self, model: str) -> None:
+        """Make this model resident, unloading the other (17.4).
+
+        Called once per phase. 12 GB of VRAM does not hold both, and swapping per
+        résumé costs a 10–20 s load on every candidate.
+        """
+        ...
+
+    def unload(self, model: str) -> None: ...
 
 
 @runtime_checkable

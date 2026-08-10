@@ -267,7 +267,7 @@ def sign_off(
 
 @app.command()
 def work(
-    limit: Annotated[int, typer.Option("--limit", help="Stop after this many resumes")] = 0,
+    limit: Annotated[int, typer.Option("--limit", help="Stop after this many jobs")] = 0,
     worker_id: Annotated[str, typer.Option("--worker-id")] = "",
 ) -> None:
     """Screen the queue **in the foreground**, without the daemon or the API.
@@ -293,11 +293,14 @@ def work(
     processed = 0
     while worker.run_once():
         processed += 1
-        typer.echo(f"  screened {processed}")
+        typer.echo(f"  processed {processed}")
         if limit and processed >= limit:
             break
 
-    typer.secho(f"Done. {processed} resume(s) screened.", fg=typer.colors.GREEN)
+    # Jobs, not résumés. A run is two passes over the same candidates (17.4),
+    # so "6 resumes screened" for a folder of 3 would be wrong in the direction
+    # that makes an operator think the queue contained something it did not.
+    typer.secho(f"Done. {processed} job(s) processed.", fg=typer.colors.GREEN)
 
 
 # --- results -----------------------------------------------------------------
@@ -344,14 +347,14 @@ def purge(
 
 
 @app.command()
-def override(
+def decide(
     candidate_id: Annotated[int, typer.Argument()],
     decision: Annotated[str, typer.Option("--decision", help="advance | reject | hold")],
     reason: Annotated[str, typer.Option("--reason")],
     actor: ActorOption = settings.dev_actor_id,
 ) -> None:
     """Record a human decision. The reason is required — it is the record."""
-    _service().record_override(candidate_id, decision, reason, _actor(actor))
+    _service().record_decision(candidate_id, decision, reason, _actor(actor))
     typer.secho("Recorded.", fg=typer.colors.GREEN)
 
 
@@ -399,6 +402,14 @@ def _to_csv(result: Any) -> str:  # noqa: ANN401 — RankedResult, imported lazi
             "must_haves_met",
             "scoreable",
             "review_required",
+            # The decision and who owns it (15.6). An export that carries the
+            # ranking but not the outcome cannot answer the only question an
+            # adverse-action review actually asks.
+            "decision",
+            "decided_by",
+            "decided_at",
+            "verification_status",
+            "escalation_reasons",
             "flags",
             "scored_at",
         ]
@@ -419,6 +430,11 @@ def _to_csv(result: Any) -> str:  # noqa: ANN401 — RankedResult, imported lazi
                     c.must_haves_met,
                     c.scoreable,
                     c.review_required,
+                    c.decision,
+                    c.decided_by or "",
+                    c.decided_at or "",
+                    c.verification_status,
+                    "|".join(r.value for r in c.escalation_reasons),
                     "|".join(f.value for f in c.flags),
                     c.scored_at,
                 ]

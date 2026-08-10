@@ -72,12 +72,13 @@ def run_status(
     return to_run_status(service.run_status(run_id))
 
 
-@router.get("/runs/{run_id}/candidates", response_model=RankedResponse)
+@router.get("/runs/{run_id}/candidates", response_model=None)
 def list_candidates(
     run_id: str,
+    actor: Actor = Depends(get_actor),
     service: ScreenerService = Depends(get_service),
 ) -> RankedResponse:
-    return to_ranked(service.list_candidates(run_id))
+    return to_ranked(service.list_candidates(run_id), actor)
 
 
 @router.post("/runs/{run_id}/sign-off", status_code=204)

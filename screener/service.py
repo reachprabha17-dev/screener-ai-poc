@@ -30,8 +30,9 @@ stores rather than a forwarding call.
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from config.settings import settings
 from screener.core.rank import rank
@@ -42,6 +43,8 @@ from screener.models import (
     Actor,
     Candidate,
     Criterion,
+    Decision,
+    EscalationReason,
     HealthReport,
     Position,
     RankedResult,
@@ -71,6 +74,10 @@ class NotFoundError(ServiceError):
     pass
 
 
+class ConflictError(ServiceError):
+    """Someone else changed the thing you were editing. Maps to HTTP 409."""
+
+
 class RubricNotApprovedError(ServiceError):
     """A run may not be created against an unapproved rubric.
 
@@ -79,6 +86,41 @@ class RubricNotApprovedError(ServiceError):
     lacks something the job never asked for — across the whole run, leaving no
     trace in any individual result.
     """
+
+
+def _mark_stale_claims(criteria: list[Criterion], previous: Rubric | None) -> list[Criterion]:
+    """Flag every criterion whose text moved while its claim stood still (23.1.8).
+
+    Computed here rather than trusted from the request. The client that forgets
+    to set the flag is precisely the client this protects against, and the
+    failure is silent: phase 2 goes on verifying a hypothesis the rubric no
+    longer makes, agreeing confidently with the wrong question.
+
+    An **absent** claim is not stale. Rubrics written before v6 have none, and
+    `verify_support` falls back to the criterion text for them; treating empty as
+    stale would block approval of every one of those on a claim that was never
+    written rather than one that went out of date.
+    """
+    if previous is None:
+        return criteria
+    before = {c.id: c for c in previous.criteria}
+    return [
+        c.model_copy(update={"claim_stale": True})
+        if (old := before.get(c.id)) is not None
+        and c.claim != ""
+        and c.text != old.text
+        and c.claim == old.claim
+        else c
+        for c in criteria
+    ]
+
+
+@dataclass(frozen=True)
+class BulkDecisionResult:
+    """What a bulk action actually did, not what it was asked to do."""
+
+    decided: list[int] = field(default_factory=list)
+    skipped: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -172,28 +214,48 @@ class ScreenerService:
                     "position_id": position_id,
                     "criteria": len(rubric.criteria),
                     "prompt_hash": extraction.prompt_hash,
-                    "model_digest": self.llm.model_digest,
+                    "judge_digest": self.llm.digest(settings.judge_model),
                 },
             )
         return rubric
 
-    def save_rubric(self, position_id: str, criteria: list[Criterion], actor: Actor) -> Rubric:
+    def save_rubric(
+        self,
+        position_id: str,
+        criteria: list[Criterion],
+        actor: Actor,
+        base_version: int | None = None,
+    ) -> Rubric:
         """Store a reviewer's edited rubric as a **new version**.
 
         Never an in-place edit. A run records the `rubric_id` it used and
         candidates carry the `rubric_hash`; rewriting a rubric already scored
         against would make those stored decisions unexplainable, showing a
         reviewer verdicts against criteria that no longer exist.
+
+        `base_version` is the version the editor was looking at (23.1.7). Two
+        recruiters tuning the same rubric in adjacent tabs is the ordinary case,
+        not the exotic one, and without this the second save silently supersedes
+        the first — no conflict, no error, just one person's edits gone and a
+        higher version number to suggest everything worked. `None` skips the
+        check, for callers with no prior version to be stale about.
         """
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
             if positions_store.get(tx, position_id) is None:
                 raise NotFoundError(f"position {position_id}")
+            latest = rubrics_store.latest_version(tx, position_id)
+            if base_version is not None and base_version != latest:
+                raise ConflictError(
+                    f"rubric was edited by someone else: you started from version "
+                    f"{base_version}, current is {latest}"
+                )
+            previous = rubrics_store.latest_for_position(tx, position_id)
             rubric = Rubric(
                 id=f"rub-{uuid.uuid4().hex[:12]}",
                 position_id=position_id,
                 version=rubrics_store.next_version(tx, position_id),
-                criteria=criteria,
+                criteria=_mark_stale_claims(criteria, previous),
                 created_by=actor.id,
             )
             rubrics_store.create(tx, rubric)
@@ -208,12 +270,25 @@ class ScreenerService:
         return rubric
 
     def approve_rubric(self, rubric_id: str, actor: Actor) -> Rubric:
-        """The human gate. Recorded with who and when, because it is a decision."""
+        """The human gate. Recorded with who and when, because it is a decision.
+
+        **Blocked while any claim is stale** (23.1.8). The claim is what phase 2
+        verifies against (10.6 A); editing a criterion's text without regenerating
+        it leaves the verifier checking a hypothesis the rubric no longer makes —
+        silently, and in the direction that produces confident agreement with the
+        wrong question.
+        """
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
             rubric = rubrics_store.get(tx, rubric_id)
             if rubric is None:
                 raise NotFoundError(f"rubric {rubric_id}")
+            stale = [c.id for c in rubric.criteria if c.claim_stale]
+            if stale:
+                raise ServiceError(
+                    f"criteria {', '.join(stale)} were edited after their claim was written; "
+                    "regenerate the claims before approving"
+                )
             rubrics_store.approve(tx, rubric_id, actor)
             audit_store.append_for(
                 tx,
@@ -243,7 +318,11 @@ class ScreenerService:
 
         # Outside the transaction: reaching Ollama for the digest is a network
         # call, and the write lock is not held across one.
-        judge_digest = self.llm.model_digest
+        judge_digest = self.llm.digest(settings.judge_model)
+        # Recorded even when verification is off for this run, so a later
+        # question — "which verifier would this run have used?" — is answerable
+        # from the row rather than from whatever the config says today.
+        verifier_digest = self.llm.digest(settings.verifier_model)
         prompt_hash = judge_prompt_hash()
 
         with self.uow_factory() as tx:
@@ -269,6 +348,9 @@ class ScreenerService:
                 created_by=actor.id,
                 judge_model=settings.judge_model,
                 judge_digest=judge_digest,
+                verifier_model=settings.verifier_model,
+                verifier_digest=verifier_digest,
+                verification_enabled=settings.verification_enabled,
                 prompt_hash=prompt_hash,
                 redaction_on=settings.redact_pii,
                 num_ctx=settings.num_ctx,
@@ -277,6 +359,13 @@ class ScreenerService:
                 app_version=settings.app_version,
             )
             queued = jobs_store.snapshot_folder(tx, run_id, folder)
+            if queued == 0:
+                # Distinct from `completed` (17.6). A run over an empty folder
+                # otherwise reaches sign-off as a blank results screen that is
+                # indistinguishable from "we screened everyone and nobody
+                # qualified" — the one outcome a reviewer must not confuse with a
+                # mistyped path.
+                runs_store.set_status(tx, run_id, "empty")
             audit_store.append_for(
                 tx,
                 actor,
@@ -301,6 +390,13 @@ class ScreenerService:
             if run is None:
                 raise NotFoundError(f"run {run_id}")
             added = jobs_store.snapshot_folder(tx, run_id, Path(run.folder))
+            if added and run.phase == "done":
+                # New files are phase-1 work, so a finished run re-enters phase 1.
+                # Without this the jobs sit in a queue nothing is draining: the
+                # worker picks its phase from the run, and a run left at `done`
+                # is invisible to it. The symptom is a rescan that reports "1
+                # added" and then never screens anybody.
+                runs_store.set_phase(tx, run_id, "judge")
             audit_store.append_for(tx, actor, "rescan_run", "run", run_id, {"added": added})
         return added
 
@@ -345,10 +441,23 @@ class ScreenerService:
             if run is None:
                 raise NotFoundError(f"run {run_id}")
             progress = jobs_store.progress(tx, run_id)
+            active = run.phase if run.phase in ("judge", "verify") else "judge"
+            current = progress if active == "judge" else jobs_store.progress(tx, run_id, active)
             ahead = jobs_store.queue_depth_ahead(tx, run_id)
             scored = results_store.list_for_run(tx, run_id)
 
-        escalated = sum(1 for c in scored if c.review_required or not c.scoreable)
+        escalated = [c for c in scored if c.review_required or not c.scoreable]
+        breakdown: dict[EscalationReason, int] = {}
+        for candidate in escalated:
+            for reason in candidate.escalation_reasons:
+                breakdown[reason] = breakdown.get(reason, 0) + 1
+
+        # Both phases still to run for anything not yet judged, one for anything
+        # judged but unverified. A single-phase ETA understates a two-phase run
+        # by half, and an ETA people plan around is worse wrong than absent.
+        remaining = progress.pending + progress.claimed + ahead
+        per_resume = settings.seconds_per_resume * (2 if run.verification_enabled else 1)
+
         return RunStatus(
             run_id=run_id,
             status=run.status,
@@ -357,17 +466,45 @@ class ScreenerService:
             claimed=progress.claimed,
             done=progress.done,
             failed=progress.failed,
+            phase=run.phase,
+            phase_done=current.finished,
+            phase_total=current.total,
+            escalation_breakdown=breakdown,
+            undecided_count=sum(1 for c in scored if c.decision == "undecided"),
             queue_depth_ahead=ahead,
-            eta_seconds=(progress.pending + progress.claimed + ahead) * settings.seconds_per_resume,
-            escalation_rate=round(escalated / len(scored), 4) if scored else 0.0,
+            eta_seconds=remaining * per_resume,
+            escalation_rate=round(len(escalated) / len(scored), 4) if scored else 0.0,
         )
 
     def sign_off_run(self, run_id: str, actor: Actor) -> None:
-        """A named human accepting the results. The end of the 23 flow."""
+        """A named human accepting the results. The end of the flow.
+
+        **Refuses while any escalated candidate is still undecided** (23.1.6).
+        Sign-off is the artefact that says a human reviewed this run; signing one
+        with 23 untouched escalations would make that artefact false at exactly
+        the moment it starts being relied on. The system escalated because it
+        could not decide — accepting the run without answering those is the
+        oversight becoming theatre.
+
+        A candidate still `pending` verification counts as outstanding for the
+        same reason (17.6): partial verification must never look like completed
+        verification, and phase 2 may yet raise an escalation nobody has seen.
+        """
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
             if runs_store.get(tx, run_id) is None:
                 raise NotFoundError(f"run {run_id}")
+            outstanding = [
+                c
+                for c in results_store.list_for_run(tx, run_id)
+                if c.decision == "undecided"
+                and (c.review_required or c.verification_status == "pending")
+            ]
+            if outstanding:
+                raise ServiceError(
+                    f"{len(outstanding)} candidate(s) need review and have no decision; "
+                    "sign-off is blocked until each one is advanced, held, or rejected"
+                )
             runs_store.sign_off(tx, run_id, actor.id)
             audit_store.append_for(tx, actor, "sign_off_run", "run", run_id)
 
@@ -416,6 +553,7 @@ class ScreenerService:
                 "criteria": [
                     v.model_copy(
                         update={
+                            "text": by_id[v.id].text,
                             "weight": by_id[v.id].weight,
                             "must_have": by_id[v.id].must_have,
                         }
@@ -427,44 +565,113 @@ class ScreenerService:
             }
         )
 
-    def record_override(self, candidate_id: int, decision: str, reason: str, actor: Actor) -> None:
-        """A human overruling the system. Override and audit land together.
+    def candidate_file_path(self, candidate_id: int) -> Path | None:
+        """The original document on disk, or `None` if it is not under the run.
 
-        The atomicity is the point: without it you eventually hold an override
-        with no audit trail — a decision about a person with no record of who
-        made it. `reason` is required by the schema for the same reason.
+        Resolved and confined to the run's folder. The stored filename came from
+        a directory scan rather than from a request, so this is not defending
+        against today's input — it is making the confinement a property of the
+        read path, so it stays true when someone later adds a way to write one.
+        """
+        with self.uow_factory() as tx:
+            candidate = results_store.get(tx, candidate_id)
+            if candidate is None:
+                raise NotFoundError(f"candidate {candidate_id}")
+            run = runs_store.get(tx, candidate.run_id)
+        if run is None:
+            return None
+
+        folder = Path(run.folder).resolve()
+        path = (folder / candidate.filename).resolve()
+        return path if path.is_relative_to(folder) else None
+
+    def record_decision(self, candidate_id: int, decision: str, reason: str, actor: Actor) -> None:
+        """A named human deciding about a named person (12.8, 15.5).
+
+        Three writes, one transaction: the decision on the candidate, the history
+        row on `overrides`, the audit entry. Splitting them eventually leaves a
+        decision nobody can attribute — and this is the record that has to answer
+        an adverse-action question months later, when the only thing left is what
+        was written down.
+
+        `reason` is required by the schema rather than by convention. A rejection
+        with no stated ground is not reviewable by anyone, including the reviewer
+        who made it.
         """
         if decision not in ("advance", "reject", "hold"):
             raise ServiceError(f"unknown decision {decision!r}")
         if not reason.strip():
-            raise ServiceError("an override requires a reason")
+            raise ServiceError("a decision requires a reason")
 
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
             candidate = results_store.get(tx, candidate_id)
             if candidate is None:
                 raise NotFoundError(f"candidate {candidate_id}")
+            decided_at = now()
             tx.execute(
                 "INSERT INTO overrides (candidate_id, actor_id, old_score, old_band, "
-                "new_decision, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "old_decision, new_decision, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     candidate_id,
                     actor.id,
                     candidate.score,
                     candidate.band,
+                    candidate.decision,
                     decision,
                     reason,
-                    now().isoformat(),
+                    decided_at.isoformat(),
                 ),
+            )
+            results_store.save_decision(
+                tx, candidate_id, cast(Decision, decision), actor.id, decided_at
             )
             audit_store.append_for(
                 tx,
                 actor,
-                "override",
+                "decision",
                 "candidate",
                 str(candidate_id),
-                {"decision": decision, "old_score": candidate.score, "reason": reason},
+                {
+                    "decision": decision,
+                    "from": candidate.decision,
+                    "old_score": candidate.score,
+                    "reason": reason,
+                },
             )
+
+    def record_bulk_decision(
+        self, candidate_ids: list[int], decision: str, reason: str, actor: Actor
+    ) -> BulkDecisionResult:
+        """The same decision across many candidates, **skipping `review_required`**.
+
+        Bulk actions exist because a reviewer working 400 clear rejections one
+        modal at a time will stop reading them. The exclusion exists because the
+        escalated ones are precisely those where the system said *a human has to
+        look at this* — sweeping them into a shared reason would answer that
+        request with a rubber stamp, and the escalation would have bought nothing.
+
+        Skipped ids are returned rather than silently dropped: a caller that
+        asked for 400 and got 377 needs to know which 23 still need opening.
+        """
+        skipped: list[int] = []
+        applied: list[int] = []
+        for candidate_id in candidate_ids:
+            with self.uow_factory() as tx:
+                candidate = results_store.get(tx, candidate_id)
+            if candidate is None:
+                raise NotFoundError(f"candidate {candidate_id}")
+            if candidate.review_required or candidate.verification_status == "pending":
+                # `pending` is excluded for the same reason: verification has not
+                # finished, so the escalation that would have flagged this one may
+                # simply not have happened yet (17.6).
+                skipped.append(candidate_id)
+                continue
+            applied.append(candidate_id)
+
+        for candidate_id in applied:
+            self.record_decision(candidate_id, decision, reason, actor)
+        return BulkDecisionResult(decided=applied, skipped=skipped)
 
     def purge_candidate(self, file_sha256: str, actor: Actor) -> int:
         """Erase a candidate everywhere. Returns how many files were removed.
@@ -532,7 +739,7 @@ class ScreenerService:
                 )
         return recovered
 
-    def claim_next_job(self, worker_id: str) -> Job | None:
+    def claim_next_job(self, worker_id: str, phase: str = "judge") -> Job | None:
         """Take one job and mark its run running, in a single transaction.
 
         The status move belongs here rather than in the worker: a claim that
@@ -540,7 +747,7 @@ class ScreenerService:
         demonstrably executing but reports as not started.
         """
         with self.uow_factory() as tx:
-            job = jobs_store.claim_next(tx, worker_id)
+            job = jobs_store.claim_next(tx, worker_id, phase)
             if job is not None:
                 run = runs_store.get(tx, job.run_id)
                 if run is not None and run.status == "pending":
@@ -562,6 +769,16 @@ class ScreenerService:
         with self.uow_factory() as tx:
             results_store.save(tx, job.run_id, candidate, key)
             jobs_store.complete(tx, job.id, key.file_sha256)
+
+    def complete_verify_job(self, job: Job) -> None:
+        """Close a phase-2 job. The candidate was written by `save_verification`.
+
+        Separate from `complete_job`, which also saves a candidate and a cache
+        key — neither of which exists here, because phase 2 updates a row rather
+        than creating one.
+        """
+        with self.uow_factory() as tx:
+            jobs_store.complete(tx, job.id)
 
     def fail_job(self, job: Job, error: str, *, retryable: bool) -> None:
         with self.uow_factory() as tx:
@@ -593,17 +810,80 @@ class ScreenerService:
         return rubric, run
 
     def cache_key_for(self, run: Run, rubric: Rubric, file_sha256: str) -> CacheKey:
-        """All eight fields that change the output (6)."""
+        """All nine fields that change the output (6)."""
         return CacheKey(
             file_sha256=file_sha256,
             position_id=run.position_id,
             rubric_hash=rubric.content_hash,
             judge_digest=run.judge_digest,
+            verifier_digest=run.verifier_digest or "",
             prompt_hash=run.prompt_hash,
             redaction_on=run.redaction_on,
             num_ctx=run.num_ctx,
             app_version=run.app_version,
         )
+
+    def next_active_phase(self) -> tuple[Run, str] | None:
+        """The run the worker should be working on, and which pass (17.4).
+
+        FIFO across runs, and a run's own phase decides the model. Returning the
+        phase alongside the run is what lets the worker load a model **once** and
+        drain a whole queue against it, rather than discovering per job which
+        weights it needs.
+        """
+        with self.uow_factory() as tx:
+            for run in runs_store.list_active(tx):
+                if run.phase in ("judge", "verify"):
+                    return run, run.phase
+        return None
+
+    def save_verification(self, candidate_id: int, candidate: Candidate) -> None:
+        """Persist what phase 2 concluded. Never score, band or verdict."""
+        with self.uow_factory() as tx:
+            results_store.save_verification(tx, candidate_id, candidate)
+
+    def advance_phase_if_complete(self, run_id: str) -> str | None:
+        """Move a run to its next phase once the current one has drained.
+
+        Returns the new phase, or None if there was nothing to do.
+
+        **Enqueueing phase 2 and setting the phase happen in one transaction.**
+        Split, a crash between them leaves a run in `verify` with an empty queue,
+        which drains instantly and completes having verified nobody — a failure
+        that looks exactly like success.
+
+        A run with verification disabled, or with no scoreable candidates to
+        verify, goes straight to `done`. There is no empty middle phase.
+        """
+        with self.uow_factory() as tx:
+            run = runs_store.get(tx, run_id)
+            if run is None:
+                return None
+
+            if run.phase == "judge":
+                if not jobs_store.no_pending(tx, run_id, "judge"):
+                    return None
+                enqueued = (
+                    jobs_store.enqueue_verify_jobs(tx, run_id) if run.verification_enabled else 0
+                )
+                phase = "verify" if enqueued else "done"
+                runs_store.set_phase(tx, run_id, phase)
+                if phase == "done":
+                    # Nothing will ever verify these, so they must not be left
+                    # reading as "not verified yet" — that blocks sign-off on
+                    # work that is never going to happen.
+                    results_store.mark_unverified_as_skipped(tx, run_id)
+                audit_store.append(
+                    tx, None, "advance_phase", "run", run_id, {"phase": phase, "queued": enqueued}
+                )
+                return phase
+
+            if run.phase == "verify" and jobs_store.no_pending(tx, run_id, "verify"):
+                runs_store.set_phase(tx, run_id, "done")
+                audit_store.append(tx, None, "advance_phase", "run", run_id, {"phase": "done"})
+                return "done"
+
+        return None
 
     def finish_run_if_complete(self, run_id: str) -> bool:
         """Close a run once nothing is pending or in flight (16.4).
@@ -618,6 +898,11 @@ class ScreenerService:
                 return False
             run = runs_store.get(tx, run_id)
             if run is None or run.status in ("completed", "aborted", "failed"):
+                return False
+            if run.phase != "done":
+                # Phase 1 draining is not the run finishing. Completing here
+                # would mark a run reviewable before a single candidate had been
+                # verified, and every one of them would still read `pending`.
                 return False
 
             scored = results_store.list_for_run(tx, run_id)
@@ -652,13 +937,20 @@ class ScreenerService:
             llm_reachable = False
             detail["llm"] = str(exc)[:200]
 
+        # Both models are checked. A drifted verifier changes who lands in the
+        # review queue rather than who scores what, but a run whose escalations
+        # came from weights nobody can name is not one an auditor can defend.
         digest_ok = True
-        if llm_reachable and settings.judge_digest_pin:
-            digest_ok = self.llm.model_digest == settings.judge_digest_pin
-            if not digest_ok:
-                # Not fatal, but every decision stored under the old weights has
-                # stopped being reproducible and the operator must know.
-                detail["model_digest"] = "loaded weights differ from the configured pin"
+        if llm_reachable:
+            for label, model, pin in (
+                ("judge_digest", settings.judge_model, settings.judge_digest_pin),
+                ("verifier_digest", settings.verifier_model, settings.verifier_digest_pin),
+            ):
+                if pin and self.llm.digest(model) != pin:
+                    # Not fatal, but every decision stored under the old weights
+                    # has stopped being reproducible and the operator must know.
+                    digest_ok = False
+                    detail[label] = f"{model}: loaded weights differ from the configured pin"
 
         try:
             outstanding = pending_migrations()
@@ -672,7 +964,8 @@ class ScreenerService:
         free_gb = _free_disk_gb(Path(settings.db_path).parent)
         disk_ok = free_gb >= settings.min_free_disk_gb
         if not disk_ok:
-            # Traces grow fast; the worker stops claiming below this (17).
+            # Stored résumé text grows the database fast; the worker stops
+            # claiming below this (18).
             detail["disk"] = f"{free_gb:.1f} GB free, below {settings.min_free_disk_gb} GB"
 
         return HealthReport(

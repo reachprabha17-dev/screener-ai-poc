@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from config.settings import settings
-from screener.models import Actor, Flag, ParsedResume, ParseResult
+from screener.models import Actor, EscalationReason, Flag, ParsedResume, ParseResult
 from screener.pipeline import Deps
 from screener.service import ScreenerService
 from screener.storage import jobs_store, results_store
@@ -60,8 +60,18 @@ class FakeLLM:
     def __init__(self, *, digest: str = "sha256:aaa") -> None:
         self._digest = digest
         self.judged = 0
+        self.verified = 0
+        self.loads: list[str] = []
+        self.verify_reply: dict[str, Any] | None = None
 
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        if "support_checks" in schema.get("properties", {}):
+            # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
+            # agreed with everything and found nothing for the `none` criteria.
+            self.verified += 1
+            return self.verify_reply or {"support_checks": [], "absence_checks": []}
         if "CRITERIA:" not in user:  # the rubric-extraction call
             return {
                 "criteria": [
@@ -82,18 +92,27 @@ class FakeLLM:
             "red_flags": [],
         }
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         return len(text) // 4
 
-    def count_prompt_tokens(self, system: str, user: str) -> int:
+    def count_prompt_tokens(self, model: str, system: str, user: str) -> int:
         return 900
 
     def health(self) -> bool:
         return True
 
-    @property
-    def model_digest(self) -> str:
+    def digest(self, model: str) -> str:
         return self._digest
+
+    def ensure_loaded(self, model: str) -> None:
+        # Recorded, not just stored: the two-phase gate is about how *many*
+        # times a model is loaded, not which one is resident.
+        if not self.loads or self.loads[-1] != model:
+            self.loads.append(model)
+        self.loaded = model
+
+    def unload(self, model: str) -> None:
+        self.loaded = None
 
 
 class FakeParser:
@@ -182,13 +201,20 @@ def drain(worker: Worker, limit: int = 100) -> int:
 
 
 def test_a_batch_screens_end_to_end(worker: Worker, service: ScreenerService, llm: FakeLLM) -> None:
+    """Two passes over four résumés: four judge jobs, then four verify jobs (17.4).
+
+    `drain` counts units of work, so eight is the two-phase shape. `llm.judged`
+    counting four is the part that matters — each candidate is judged once, and
+    the second pass is a different model asking a different question.
+    """
     run_id = seed_run(service, count=4)
 
-    assert drain(worker) == 4
+    assert drain(worker) == 8
 
     status = service.run_status(run_id)
     assert status.status == "completed"
-    assert status.done == 4
+    assert status.phase == "done"
+    assert status.done == 4, "`total` and `done` count candidates, not jobs"
     assert status.failed == 0
     assert llm.judged == 4
 
@@ -345,7 +371,9 @@ def test_files_added_mid_run_are_picked_up_by_rescan(
     # A completed run stops being claimable, so the operator restarts it. That is
     # deliberate: work is never silently resumed under a run reported as done.
     service.start_run(run_id, ACTOR)
-    assert drain(worker) == 1
+    # One judge job for the new file, then one verify job for the candidate it
+    # produced. The two already-verified candidates are not re-verified (12.9).
+    assert drain(worker) == 2
     assert service.run_status(run_id).total == 3
 
 
@@ -360,7 +388,7 @@ def test_an_infrastructure_failure_returns_the_job_for_retry(
     def explode(*args: object, **kwargs: object) -> None:
         raise ConnectionError("ollama went away")
 
-    monkeypatch.setattr("screener.worker_loop.screen_one", explode)
+    monkeypatch.setattr("screener.worker_loop.judge_one", explode)
     worker.run_once()
 
     assert service.run_status(run_id).pending == 1  # back in the queue
@@ -372,7 +400,7 @@ def test_a_persistently_failing_job_stops_at_the_attempt_cap(
     """A file that reliably kills the worker must not loop forever (16.5)."""
     run_id = seed_run(service, count=1)
     monkeypatch.setattr(
-        "screener.worker_loop.screen_one",
+        "screener.worker_loop.judge_one",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
@@ -533,3 +561,98 @@ def _only_run(service: ScreenerService) -> str:
         runs = tx.execute("SELECT id FROM runs ORDER BY created_at").fetchall()
     assert runs_store is not None
     return str(runs[0]["id"])
+
+
+# --- gate: two-phase execution (17.4) ----------------------------------------
+
+
+def test_a_run_loads_two_models_not_two_thousand(
+    worker: Worker, service: ScreenerService, llm: FakeLLM
+) -> None:
+    """**The gate.** Two loads per run, not two per résumé.
+
+    12 GB of VRAM does not hold `granite4.1:8b` and `gemma4:12b` together, so the
+    two passes are phased over the whole run. Swapping per candidate would cost a
+    10–20 s model load on every one of them — the difference between two loads
+    and two thousand on a 1,000-CV batch, which is hours.
+    """
+    seed_run(service, count=5)
+
+    drain(worker)
+
+    assert llm.judged == 5
+    assert llm.verified == 5
+    assert llm.loads == [settings.judge_model, settings.verifier_model], llm.loads
+
+
+def test_the_verifier_records_a_disagreement_without_moving_the_score(
+    worker: Worker, service: ScreenerService, llm: FakeLLM
+) -> None:
+    """1.9 end to end: the second model escalates and proposes, never overrules."""
+    run_id = seed_run(service, count=1)
+    llm.verify_reply = {
+        "support_checks": [
+            {
+                "id": "C1",
+                "support": "insufficient",
+                "suggested_verdict": "partial",
+                "rationale": "Skills-section mention only; no production context.",
+            }
+        ],
+        "absence_checks": [],
+    }
+
+    drain(worker)
+
+    result = service.list_candidates(run_id)
+    candidate = (result.meets_must_haves + result.needs_review)[0]
+    c1 = next(c for c in candidate.criteria if c.id == "C1")
+
+    assert c1.verdict == "strong", "the verifier is not allowed to move a verdict"
+    assert c1.support == "insufficient"
+    assert c1.suggested_verdict == "partial"
+    assert Flag.JUDGE_DISAGREES in candidate.flags
+    assert EscalationReason.JUDGE_DISAGREEMENT in candidate.escalation_reasons
+    assert candidate.review_required is True
+    assert candidate.verification_status == "done"
+
+
+def test_a_run_is_not_complete_until_both_phases_are(
+    worker: Worker, service: ScreenerService
+) -> None:
+    """Completing after phase 1 would mark a run reviewable with nothing verified.
+
+    Every candidate would still read `pending`, which 17.6 says must display as
+    provisional — so a run reported complete would be one nobody should sign off.
+    """
+    run_id = seed_run(service, count=2)
+
+    # Judge both, and stop before the verify pass drains.
+    worker.run_once()
+    worker.run_once()
+
+    status = service.run_status(run_id)
+    assert status.phase == "verify"
+    assert status.status != "completed"
+
+    drain(worker)
+
+    assert service.run_status(run_id).status == "completed"
+    assert service.run_status(run_id).phase == "done"
+
+
+def test_an_unscoreable_candidate_is_never_verified(
+    worker: Worker, service: ScreenerService, llm: FakeLLM
+) -> None:
+    """Already escalating for a stronger reason; ~5 s of GPU would change nothing."""
+    seed_run(service, count=1)
+    settings_backup = settings.evidence_match_ratio
+    try:
+        # Force stage B to fail: nothing can match at a ratio above 1.0.
+        settings.evidence_match_ratio = 1.5
+        drain(worker)
+    finally:
+        settings.evidence_match_ratio = settings_backup
+
+    assert llm.judged == 1
+    assert llm.verified == 0, "an unscoreable candidate reached the verifier"

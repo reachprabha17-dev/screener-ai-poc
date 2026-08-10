@@ -28,6 +28,7 @@ import ollama
 from pydantic import ValidationError
 
 from config.settings import settings
+from screener.logging import get_logger
 
 
 class LLMError(RuntimeError):
@@ -75,12 +76,14 @@ class ChatResult:
 
 
 class OllamaClient:
-    """One model, one host, one set of decoding options.
+    """Two models, one host, one set of decoding options.
 
-    The options are fixed at construction rather than passed per call. They are
-    part of the cache key and the reproducibility claim (10.8), so a caller that
-    could vary `temperature` per request could silently invalidate every stored
-    comparison.
+    The decoding options are fixed rather than passed per call. They are part of
+    the cache key and the reproducibility claim (10.9), so a caller that could
+    vary `temperature` per request could silently invalidate every stored
+    comparison. The **model** is a per-call argument, because v6 runs two of them
+    and an implicit default would make it impossible to tell from a call site
+    which weights produced a result.
     """
 
     def __init__(self, client: ollama.Client | None = None) -> None:
@@ -88,13 +91,13 @@ class OllamaClient:
             host=settings.ollama_host,
             timeout=settings.request_timeout_s,
         )
-        self._digest: str | None = None
+        self._digests: dict[str, str] = {}
+        self._loaded: str | None = None
 
     # --- provenance ---------------------------------------------------------
 
-    @property
-    def model_digest(self) -> str:
-        """Digest of the loaded weights, recorded against every decision.
+    def digest(self, model: str) -> str:
+        """Digest of a model's weights, recorded against every decision.
 
         Model tags are mutable: re-pulling `granite4.1:8b` can change the weights
         underneath decisions already stored, which breaks both reproducibility
@@ -105,11 +108,11 @@ class OllamaClient:
         — an attribute lookup there returns empty and the provenance column
         silently fills with blanks.
         """
-        if self._digest is None:
-            self._digest = self._lookup_digest()
-        return self._digest
+        if model not in self._digests:
+            self._digests[model] = self._lookup_digest(model)
+        return self._digests[model]
 
-    def _lookup_digest(self) -> str:
+    def _lookup_digest(self, model: str) -> str:
         listing = self._client.list()
         models = getattr(listing, "models", None)
         if models is None and isinstance(listing, dict):
@@ -118,22 +121,56 @@ class OllamaClient:
             name = getattr(entry, "model", None) or (
                 entry.get("model") if isinstance(entry, dict) else None
             )
-            if name == settings.judge_model:
-                digest = getattr(entry, "digest", None) or (
+            if name == model:
+                found = getattr(entry, "digest", None) or (
                     entry.get("digest") if isinstance(entry, dict) else None
                 )
-                return str(digest or "")
+                return str(found or "")
         return ""
 
-    def check_digest_pin(self) -> bool:
-        """True when the loaded weights match the pin, or no pin is configured.
+    def check_digest_pin(self, model: str, pin: str | None) -> bool:
+        """True when a model's weights match its pin, or no pin is configured.
 
         Deliberately not an exception. Refusing to start would be defensible, but
         the operator needs the run's stored decisions marked non-reproducible
         more than they need the process dead.
         """
-        pin = settings.judge_digest_pin
-        return not pin or self.model_digest == pin
+        return not pin or self.digest(model) == pin
+
+    # --- phase switching (17.4) ---------------------------------------------
+
+    def ensure_loaded(self, model: str) -> None:
+        """Make `model` the resident one, unloading the other.
+
+        **Called once per phase, never per résumé.** 12 GB of VRAM does not hold
+        `granite4.1:8b` (~5–6 GB) and `gemma4:12b` (~8 GB) at once, and swapping
+        per candidate costs a 10–20 s load each time — 2,000 loads on a 1,000-CV
+        run instead of two.
+
+        Failures to unload are not fatal: Ollama evicts under memory pressure on
+        its own, so the worst case is the load that follows being slower.
+        """
+        if self._loaded == model:
+            return
+        if self._loaded is not None:
+            self.unload(self._loaded)
+        try:
+            self._client.generate(model=model, prompt="", keep_alive=settings.keep_alive)
+        except Exception as exc:  # noqa: BLE001 — the ollama client raises a wide range
+            raise LLMError(f"could not load {model}: {exc}") from exc
+        self._loaded = model
+
+    def unload(self, model: str) -> None:
+        """Evict a model by asking for it with `keep_alive=0`."""
+        try:
+            self._client.generate(model=model, prompt="", keep_alive=0)
+        except Exception as exc:  # noqa: BLE001 — eviction is best-effort
+            # Ollama evicts under memory pressure anyway, so a failed unload
+            # costs a slower load next, not a broken run. Logged rather than
+            # raised: killing a phase transition over a hint is worse.
+            get_logger(__name__).warning("unload_failed", model=model, error=str(exc)[:200])
+        if self._loaded == model:
+            self._loaded = None
 
     def health(self) -> bool:
         try:
@@ -144,7 +181,7 @@ class OllamaClient:
 
     # --- token counting -----------------------------------------------------
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         """Exact prompt tokens, from the weights that will do the judging.
 
         **Correction to 10.1, measured on Ollama 0.32.4.** The spec's recipe
@@ -165,9 +202,9 @@ class OllamaClient:
 
         try:
             response = self._client.generate(
-                model=settings.judge_model,
+                model=model,
                 prompt=text,
-                options={"num_predict": 1, "num_ctx": settings.num_ctx, "temperature": 0},
+                options={"num_predict": 1, "num_ctx": self._context_for(model), "temperature": 0},
                 keep_alive=settings.keep_alive,
             )
         except Exception as exc:  # noqa: BLE001 — every client failure is transient here
@@ -185,7 +222,7 @@ class OllamaClient:
 
         return estimate_tokens(text)
 
-    def count_prompt_tokens(self, system: str, user: str) -> int:
+    def count_prompt_tokens(self, model: str, system: str, user: str) -> int:
         """Exact size of the assembled chat prompt, for the 10.1 pre-flight check.
 
         Counts the **real two-message shape**, not the concatenated strings plus a
@@ -200,12 +237,12 @@ class OllamaClient:
         costs the same one prompt-eval and cannot drift.
         """
         response = self._client.chat(
-            model=settings.judge_model,
+            model=model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            options={"num_predict": 1, "num_ctx": settings.num_ctx, "temperature": 0},
+            options={"num_predict": 1, "num_ctx": self._context_for(model), "temperature": 0},
             keep_alive=settings.keep_alive,
         )
         count = response.model_dump().get("prompt_eval_count")
@@ -233,20 +270,35 @@ class OllamaClient:
         """
         return {"think": False} if settings.disable_thinking else {}
 
-    def _options(self) -> dict[str, Any]:
+    @staticmethod
+    def _context_for(model: str) -> int:
+        """The verifier reads a whole résumé plus every `none` criterion (10.6 B).
+
+        Keyed on the model rather than passed by the caller: the context size is
+        a property of what that model is asked to do, and a caller free to vary
+        it could put a résumé through a window it does not fit, which Ollama
+        truncates silently.
+        """
+        return settings.verifier_num_ctx if model == settings.verifier_model else settings.num_ctx
+
+    def _options(self, model: str) -> dict[str, Any]:
         return {
             "temperature": settings.temperature,
             "top_k": settings.top_k,
             "seed": settings.seed,
-            "num_ctx": settings.num_ctx,
+            "num_ctx": self._context_for(model),
             "num_predict": settings.num_predict,
         }
 
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
         """Protocol entry point. Returns parsed JSON or raises."""
-        return self.chat_structured(system, user, schema).content
+        return self.chat_structured(model, system, user, schema).content
 
-    def chat_structured(self, system: str, user: str, schema: dict[str, Any]) -> ChatResult:
+    def chat_structured(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> ChatResult:
         """One grammar-constrained completion, with the 11 retry policy.
 
         Timeouts and connection errors retry with backoff to `max_retries`; a
@@ -260,13 +312,13 @@ class OllamaClient:
             started = time.monotonic()
             try:
                 response = self._client.chat(
-                    model=settings.judge_model,
+                    model=model,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
                     ],
                     format=schema,
-                    options=self._options(),
+                    options=self._options(model),
                     keep_alive=settings.keep_alive,
                     **self._thinking(),
                 )
@@ -283,7 +335,7 @@ class OllamaClient:
             # 10.1: reconcile against the pre-check. Raised rather than logged
             # because a candidate judged on a truncated prompt must not be
             # scored — the model returns a confident verdict either way.
-            limit = settings.num_ctx - settings.num_predict
+            limit = self._context_for(model) - settings.num_predict
             if prompt_tokens > limit:
                 raise BudgetBugError(
                     f"prompt_eval_count {prompt_tokens} exceeds num_ctx - num_predict ({limit})"
@@ -315,7 +367,7 @@ class OllamaClient:
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 duration_s=duration,
-                model_digest=self.model_digest,
+                model_digest=self.digest(model),
             )
 
         raise last or LLMError("chat failed with no recorded cause")

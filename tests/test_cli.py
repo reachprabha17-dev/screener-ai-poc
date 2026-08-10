@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 
 from config.settings import settings
 from screener.cli import app
-from screener.storage import audit_store
+from screener.storage import audit_store, results_store
 from screener.storage.connection import close_connection
 from screener.storage.uow import unit_of_work
 
@@ -46,7 +46,13 @@ EVIDENCE = "Senior Backend Engineer, 7 years"
 class FakeLLM:
     """Stands in for Ollama so the CLI flow runs without a GPU."""
 
-    def chat_json(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        if "support_checks" in schema.get("properties", {}):
+            # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
+            # agreed with everything and found nothing for the `none` criteria.
+            return {"support_checks": [], "absence_checks": []}
         if "CRITERIA:" not in user:
             return {
                 "criteria": [
@@ -70,18 +76,23 @@ class FakeLLM:
             "red_flags": [],
         }
 
-    def count_tokens(self, text: str) -> int:
+    def count_tokens(self, model: str, text: str) -> int:
         return len(text) // 4
 
-    def count_prompt_tokens(self, system: str, user: str) -> int:
+    def count_prompt_tokens(self, model: str, system: str, user: str) -> int:
         return 900
 
     def health(self) -> bool:
         return True
 
-    @property
-    def model_digest(self) -> str:
+    def digest(self, model: str) -> str:
         return "sha256:aaa"
+
+    def ensure_loaded(self, model: str) -> None:
+        self.loaded = model
+
+    def unload(self, model: str) -> None:
+        self.loaded = None
 
 
 class FakeParser:
@@ -141,6 +152,11 @@ def resumes(count: int = 2, reference: str = "REQ-1") -> Path:
 def audit_actions() -> list[tuple[str, str | None]]:
     with unit_of_work() as tx:
         return [(e["action"], e["actor_id"]) for e in audit_store.recent(tx, 100)]
+
+
+def candidate_ids(run_id: str) -> list[int]:
+    with unit_of_work() as tx:
+        return [c.id for c in results_store.list_for_run(tx, run_id) if c.id is not None]
 
 
 def only_id(table: str) -> str:
@@ -358,7 +374,9 @@ def test_a_whole_batch_runs_with_no_api_and_no_daemon(runner: CliRunner, workspa
     invoke(runner, "run", "start", run_id, "--actor", "ops-oncall")
 
     screened = invoke(runner, "work")
-    assert "3 resume(s) screened" in screened.output
+    # Three résumés, two passes each: the break-glass path drives the same
+    # two-phase worker the daemon does (17.4).
+    assert "6 job(s) processed" in screened.output
 
     status = invoke(runner, "run", "status", run_id, "--json")
     parsed = json.loads(status.output)
@@ -379,6 +397,30 @@ def test_a_whole_batch_runs_with_no_api_and_no_daemon(runner: CliRunner, workspa
     actions = dict(audit_actions())
     for expected in ("create_position", "approve_rubric", "create_run", "start_run"):
         assert expected in actions
+
+    # Sign-off is refused while anything still needs a human (23.1.6). This is
+    # the break-glass path, so it is exactly where the shortcut would be taken:
+    # an operator with the API down still cannot mark a run reviewed without
+    # having reviewed it.
+    blocked = runner.invoke(app, ["run", "sign-off", run_id, "--actor", "manager-dana"])
+    assert blocked.exit_code == 1
+    # Read off the exception rather than stdout: the CLI has no error handler, so
+    # a `ServiceError` surfaces as a traceback. Pre-existing and true of every
+    # command, not something this precondition introduced.
+    assert "need review and have no decision" in str(blocked.exception)
+
+    for candidate_id in candidate_ids(run_id):
+        invoke(
+            runner,
+            "decide",
+            str(candidate_id),
+            "--decision",
+            "hold",
+            "--reason",
+            "reviewed by hand during the outage",
+            "--actor",
+            "manager-dana",
+        )
 
     invoke(runner, "run", "sign-off", run_id, "--actor", "manager-dana")
     assert dict(audit_actions())["sign_off_run"] == "manager-dana"
