@@ -120,8 +120,12 @@ class ApiClient:
 
     # --- runs ----------------------------------------------------------------
 
+    def list_runs(self) -> list[dict[str, Any]]:
+
+        return list(self._request("GET", "/runs"))
 
     def create_run(self, position_id: str, rubric_id: str) -> dict[str, Any]:
+
         return dict(
             self._request(
                 "POST", "/runs", json={"position_id": position_id, "rubric_id": rubric_id}

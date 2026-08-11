@@ -407,6 +407,12 @@ class RunResponse(BaseModel):
     judge_digest: str
     prompt_hash: str
     app_version: str
+    created_at: datetime
+    created_by: str
+    file_count: int = 0
+    escalation_rate: float | None = None
+
+
 
 
 class RunStatusResponse(BaseModel):

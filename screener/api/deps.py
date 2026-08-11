@@ -127,7 +127,13 @@ def to_run(run: Run) -> RunResponse:
         judge_digest=run.judge_digest,
         prompt_hash=run.prompt_hash,
         app_version=run.app_version,
+        created_at=run.created_at,
+        created_by=run.created_by,
+        file_count=run.file_count,
+        escalation_rate=run.escalation_rate,
     )
+
+
 
 
 def to_run_status(status_: RunStatus) -> RunStatusResponse:

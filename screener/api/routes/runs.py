@@ -36,6 +36,15 @@ def create_run(
     return to_run(service.create_run(request.position_id, request.rubric_id, actor))
 
 
+@router.get("/runs", response_model=list[RunResponse])
+def list_runs(
+    service: ScreenerService = Depends(get_service),
+) -> list[RunResponse]:
+    """Returns all historic screening runs ordered by creation date descending."""
+    return [to_run(r) for r in service.list_runs()]
+
+
+
 @router.post("/runs/{run_id}/start", response_model=CountResponse)
 def start_run(
     run_id: str,

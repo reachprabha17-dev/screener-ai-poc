@@ -205,6 +205,27 @@ def test_get_latest_and_approved_rubric_routes(client: TestClient) -> None:
     assert res_app3.json()["id"] == rubric["id"]
 
 
+def test_list_runs_route(client: TestClient) -> None:
+    position_id = make_position(client, "REQ-RUNS-ROUTE")
+    rubric = client.post(f"/positions/{position_id}/rubric/extract").json()
+    client.post(f"/rubrics/{rubric['id']}/approve")
+
+    run_res = client.post("/runs", json={"position_id": position_id, "rubric_id": rubric["id"]})
+    assert run_res.status_code == 201
+
+    runs_res = client.get("/runs")
+    assert runs_res.status_code == 200
+    data = runs_res.json()
+    assert len(data) >= 1
+    target = next(r for r in data if r["id"] == run_res.json()["id"])
+    assert "created_at" in target
+    assert "created_by" in target
+    assert "file_count" in target
+    assert "escalation_rate" in target
+
+
+
+
 
 def test_a_run_against_an_unapproved_rubric_is_409(client: TestClient) -> None:
     """Well-formed request, forbidden state — not a 400."""

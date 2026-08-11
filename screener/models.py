@@ -508,6 +508,8 @@ class Run(BaseModel):
     app_version: str
     file_count: int = 0
     escalation_rate: float | None = None
+    created_at: datetime = Field(default_factory=now)
+    created_by: str
     reproducibility_rate: float | None = None
 
 

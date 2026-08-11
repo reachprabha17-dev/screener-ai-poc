@@ -303,8 +303,9 @@ class ScreenerService:
         return approved
 
     def get_latest_rubric(self, position_id: str) -> Rubric | None:
-        """The latest rubric (draft or approved) for a position, or None when no rubric exists yet."""
+        """The latest rubric for a position, or None when no rubric exists yet."""
         with self.uow_factory() as tx:
+
             return rubrics_store.latest_for_position(tx, position_id)
 
     def get_approved_rubric(self, position_id: str) -> Rubric | None:
@@ -411,7 +412,13 @@ class ScreenerService:
             audit_store.append_for(tx, actor, "rescan_run", "run", run_id, {"added": added})
         return added
 
+    def list_runs(self) -> list[Run]:
+        """All screening runs ordered by creation date descending."""
+        with self.uow_factory() as tx:
+            return runs_store.list_all(tx)
+
     def start_run(self, run_id: str, actor: Actor) -> int:
+
         """Mark a run ready. **Enqueues only** — the worker executes (15.3).
 
         Screening never runs in a request lifecycle: a 78-minute batch tied to

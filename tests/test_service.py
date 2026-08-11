@@ -603,6 +603,21 @@ def test_get_latest_and_approved_rubric(service: ScreenerService) -> None:
     assert approved_fetched.id == approved.id
 
 
+def test_list_runs(service: ScreenerService) -> None:
+    pos = service.create_position(reference="REQ-LIST", title="t", jd_text=JD, actor=ACTOR)
+    rubric = service.extract_rubric(pos.id, ACTOR)
+    approved = service.approve_rubric(rubric.id, ACTOR)
+
+    run1 = service.create_run(pos.id, approved.id, ACTOR)
+    run2 = service.create_run(pos.id, approved.id, ACTOR)
+
+    runs = service.list_runs()
+    assert len(runs) >= 2
+    run_ids = [r.id for r in runs]
+    assert run_ids.index(run2.id) < run_ids.index(run1.id)
+
+
+
 
 def test_editing_a_rubric_creates_a_new_version(service: ScreenerService) -> None:
     """Never in place. A run already scored against v1 must stay explainable."""

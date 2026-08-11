@@ -304,10 +304,18 @@ def runs_page() -> None:
 
     approved_rubric = call(client.get_approved_rubric, chosen_pos_id)
     if approved_rubric:
+        r_ver = approved_rubric["version"]
+        r_hash = approved_rubric["rubric_hash"][:12]
+        r_crit = len(approved_rubric["criteria"])
+        r_by = approved_rubric["approved_by"]
         st.success(
-            f"Approved Rubric v{approved_rubric['version']} (`{approved_rubric['rubric_hash'][:12]}`) "
-            f"· {len(approved_rubric['criteria'])} criteria · Approved by {approved_rubric['approved_by']}"
+            f"Approved Rubric v{r_ver} (`{r_hash}`) · {r_crit} criteria · Approved by {r_by}"
         )
+
+
+
+
+
         if st.button("Create a run over the folder"):
             run = call(client.create_run, chosen_pos_id, approved_rubric["id"])
             if run:
@@ -418,14 +426,75 @@ def review_page() -> None:
     st.header("Review")
     client = get_client()
 
-    run_id = st.session_state.get("run_id", "")
-    if not run_id:
-        st.info("Enter a run id in the sidebar.")
+    runs = call(client.list_runs) or []
+    positions = call(client.list_positions) or []
+    pos_map = {p["id"]: f"{p['reference']} — {p['title']}" for p in positions}
+
+    if not runs:
+        st.info("No screening runs found yet. Create and start a run on the Runs tab.")
         return
+
+    st.subheader("Historic Runs")
+    table_data = []
+    for r in runs:
+        rate = r.get("escalation_rate")
+        rate_str = f"{rate:.0%}" if rate is not None else "N/A"
+        created = r.get("created_at")
+        if isinstance(created, str):
+            created_str = created[:10] if created else "N/A"
+        elif hasattr(created, "strftime"):
+            created_str = created.strftime("%Y-%m-%d")
+        else:
+            created_str = "N/A"
+        pos_title = pos_map.get(r["position_id"], r["position_id"])
+        table_data.append(
+            {
+                "Run ID": r["id"],
+                "Position": pos_title,
+                "Status": r["status"],
+                "Created At": created_str,
+                "Created By": r.get("created_by", "N/A"),
+                "Files": r.get("file_count", 0),
+                "Escalation Rate": rate_str,
+            }
+        )
+
+    st.dataframe(table_data, use_container_width=True)
+
+    current_run_id = st.session_state.get("run_id", "")
+    default_index = 0
+    if current_run_id:
+        for idx, r in enumerate(runs):
+            if r["id"] == current_run_id:
+                default_index = idx
+                break
+
+    def _format_run_option(rid: str) -> str:
+        r = next((run for run in runs if run["id"] == rid), None)
+        if not r:
+            return rid
+        title = pos_map.get(r["position_id"], r["position_id"])
+        status = r["status"].capitalize()
+        files = r.get("file_count", 0)
+        return f"{r['id']} — Position: {title} ({status}, {files} files)"
+
+    chosen_run_id = st.selectbox(
+        "Select a run to review",
+        options=[r["id"] for r in runs],
+        index=default_index,
+        format_func=_format_run_option,
+        key="review_run_select",
+    )
+    if chosen_run_id != st.session_state.get("run_id"):
+        st.session_state["pending_run_id"] = chosen_run_id
+        st.rerun()
+    run_id = chosen_run_id
 
     result = call(client.list_candidates, run_id)
     if not result:
         return
+
+
 
     escalation_meter(result["escalation_rate"])
 
@@ -444,10 +513,10 @@ def review_page() -> None:
             "system, not about the candidate."
         )
         escalation_breakdown(review)
-        partition(review, run_id, unranked=True)
+        partition(review, run_id, section="needs-review", unranked=True)
 
     with st.expander(f"Meets all must-haves — {len(qualified)}", expanded=not review):
-        partition(qualified, run_id)
+        partition(qualified, run_id, section="qualified")
 
     with st.expander(f"Missing a must-have — {len(unqualified)}", expanded=False):
         st.caption(
@@ -455,7 +524,7 @@ def review_page() -> None:
             "among themselves, never against the group above — the two are not "
             "comparable."
         )
-        partition(unqualified, run_id)
+        partition(unqualified, run_id, section="unqualified")
 
     sign_off_section(client, run_id, result)
 
@@ -486,7 +555,9 @@ def escalation_breakdown(candidates: list[dict[str, Any]]) -> None:
         st.write(f"**{count}** &nbsp; {ESCALATION_LABELS.get(reason, reason)}")
 
 
-def partition(candidates: list[dict[str, Any]], run_id: str, *, unranked: bool = False) -> None:
+def partition(
+    candidates: list[dict[str, Any]], run_id: str, *, section: str, unranked: bool = False
+) -> None:
     if not candidates:
         st.info("Nobody in this group.")
         return
@@ -509,7 +580,7 @@ def partition(candidates: list[dict[str, Any]], run_id: str, *, unranked: bool =
         "Open",
         options=range(len(candidates)),
         format_func=lambda i: candidates[i]["filename"],
-        key=f"open-{run_id}-{unranked}-{len(candidates)}",
+        key=f"open-{run_id}-{section}",
     )
     if chosen is not None:
         candidate_detail(candidates[chosen], run_id)
@@ -519,15 +590,15 @@ def partition(candidates: list[dict[str, Any]], run_id: str, *, unranked: bool =
         _to_csv(candidates),
         file_name=f"{run_id}-candidates.csv",
         mime="text/csv",
-        key=f"csv-{run_id}-{unranked}-{len(candidates)}",
+        key=f"csv-{run_id}-{section}",
         help="Includes the numeric score for audit. On screen, reviewers see bands.",
     )
 
     if not unranked:
-        bulk_decision_form(candidates, run_id)
+        bulk_decision_form(candidates, run_id, section=section)
 
 
-def bulk_decision_form(candidates: list[dict[str, Any]], run_id: str) -> None:
+def bulk_decision_form(candidates: list[dict[str, Any]], run_id: str, *, section: str) -> None:
     """One decision across a group, with a shared reason.
 
     Offered here and **not** on the needs-review section. A reviewer working 400
@@ -540,7 +611,7 @@ def bulk_decision_form(candidates: list[dict[str, Any]], run_id: str) -> None:
         return
 
     with st.expander(f"Decide on all {len(eligible)} at once"):
-        with st.form(f"bulk-{run_id}-{len(candidates)}"):
+        with st.form(f"bulk-{run_id}-{section}"):
             decision = st.radio("Decision", ["advance", "reject", "hold"], horizontal=True)
             reason = st.text_area("Shared reason", help="Required. Recorded against every one.")
             if st.form_submit_button(f"Record for {len(eligible)}"):

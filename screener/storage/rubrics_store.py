@@ -74,9 +74,11 @@ def latest_for_position(tx: Tx, position_id: str) -> Rubric | None:
 
 def approved_for_position(tx: Tx, position_id: str) -> Rubric | None:
     row = tx.execute(
-        "SELECT * FROM rubrics WHERE position_id = ? AND approved_at IS NOT NULL ORDER BY version DESC LIMIT 1",
+        "SELECT * FROM rubrics WHERE position_id = ? AND approved_at IS NOT NULL "
+        "ORDER BY version DESC LIMIT 1",
         (position_id,),
     ).fetchone()
+
     return _to_rubric(row) if row else None
 
 

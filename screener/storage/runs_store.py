@@ -133,6 +133,11 @@ def list_active(tx: Tx) -> list[Run]:
     return [_to_record(row) for row in rows]
 
 
+def list_all(tx: Tx) -> list[Run]:
+    rows = tx.execute("SELECT * FROM runs ORDER BY created_at DESC").fetchall()
+    return [_to_record(row) for row in rows]
+
+
 def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
     return Run(
         id=row["id"],
@@ -151,5 +156,10 @@ def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
         app_version=row["app_version"],
         file_count=row["file_count"],
         escalation_rate=row["escalation_rate"],
+        created_at=row["created_at"],
+        created_by=row["created_by"],
         reproducibility_rate=row["reproducibility_rate"],
+
+
     )
+
