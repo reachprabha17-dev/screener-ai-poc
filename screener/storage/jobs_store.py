@@ -19,10 +19,11 @@ running or strands work that died. On startup a worker instead reclaims jobs
 `claimed` by *its own* worker_id — those are unambiguously from a previous life,
 because this process has claimed nothing yet. No arithmetic on time at all.
 
-**Scheduling is FIFO with a fast lane.** Round-robin across runs was rejected:
-ranking is only meaningful over a complete run (10.6), so a reviewer holding 60%
-of their results has nothing they can act on. Round-robin makes everyone late in
-exchange for progress nobody can use.
+**Scheduling is strict FIFO.** Round-robin across runs was rejected: ranking is
+only meaningful over a complete run (10.6), so a reviewer holding 60% of their
+results has nothing they can act on, and round-robin makes everyone late in
+exchange for progress nobody can use. The fast lane went the same way (17.3) —
+see `claim_next` for why.
 """
 
 from dataclasses import dataclass

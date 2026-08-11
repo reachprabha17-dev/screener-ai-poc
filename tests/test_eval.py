@@ -12,21 +12,32 @@ real hiring decisions and produce a confident percentage nobody can defend.
 verdict dominates — two labellers who both answer `none` to everything agree
 100% of the time and have demonstrated nothing.
 
+**The verifier comparison cannot be allowed to flatter the shipped
+configuration.** 19.3 decides `verify_scope` and the escalation budget, and a
+comparison whose arithmetic favours "run both models" would settle that question
+by construction rather than by measurement.
+
 The measurement scripts themselves run against fakes here; their real output is
 the `live` runs recorded in 18.2.1 and 10.8.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from eval.accuracy import Result, score
-from eval.corpus import DEFAULT_PATH, CorpusError, agreement_report, cohens_kappa, load
+from eval.compare_verifiers import CONFIGURATIONS, _both_flags, _difflib_flags, _judge_flags
+from eval.compare_verifiers import measure as compare_verifiers
+from eval.corpus import DEFAULT_PATH, Corpus, CorpusError, agreement_report, cohens_kappa, load
 from eval.escalation import measure as measure_escalation
 from eval.run_eval import STABILITY_GATE
 from eval.run_eval import measure as measure_stability
+from screener.models import ScoredCriterion, SupportCheck
+
+_CRITERION_LINE = re.compile(r"^(C\d+):")
 
 
 class FakeLLM:
@@ -43,11 +54,12 @@ class FakeLLM:
             # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
             # agreed with everything and found nothing for the `none` criteria.
             return {"support_checks": [], "absence_checks": []}
-        ids = [
-            line.split(":", 1)[0].strip()
-            for line in user.splitlines()
-            if line.startswith("C") and ":" in line
-        ]
+        # Anchored on `C<digits>:` rather than `startswith("C")`. The loose form
+        # also matched the prompt's own `CRITERIA:` header and returned a verdict
+        # for a criterion named "CRITERIA" — which fails 10.3's set-equality
+        # check, so every judgment made through this fake was rejected and every
+        # test using it was passing on the failure path.
+        ids = [m.group(1) for line in user.splitlines() if (m := _CRITERION_LINE.match(line))]
         return {
             "criteria": [
                 {
@@ -324,3 +336,224 @@ def test_a_missing_must_have_is_not_counted_as_an_escalation() -> None:
 def test_the_shipped_corpus_path_is_where_the_spec_says() -> None:
     assert DEFAULT_PATH.name == "labelled_set.jsonl"
     assert DEFAULT_PATH.parent.name == "eval"
+
+
+# --- verifier comparison (19.3) ----------------------------------------------
+
+
+class ScriptedVerifier(FakeLLM):
+    """Judges as scripted, and answers every support check the same way.
+
+    Records what it was asked about, because *which* criteria reach the second
+    model is half of what 19.3 is measuring — a configuration that quietly sends
+    fewer is cheaper for reasons the table would not otherwise show.
+    """
+
+    def __init__(
+        self,
+        verdict: str = "strong",
+        evidence: str | None = None,
+        support: str = "supported",
+    ) -> None:
+        super().__init__(verdict, evidence)
+        self._support = support
+        self.asked: list[str] = []
+
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        if "support_checks" not in schema.get("properties", {}):
+            return super().chat_json(model, system, user, schema)
+
+        ids = [
+            line.split(":", 1)[1].strip() for line in user.splitlines() if line.startswith("ID:")
+        ]
+        self.asked.extend(ids)
+        return {
+            "support_checks": [
+                {
+                    "id": cid,
+                    "support": self._support,
+                    "suggested_verdict": "none",
+                    "rationale": "",
+                }
+                for cid in ids
+            ],
+            "absence_checks": [],
+        }
+
+
+def criterion(**overrides: Any) -> ScoredCriterion:
+    base: dict[str, Any] = {
+        "id": "C1",
+        "verdict": "strong",
+        "model_verdict": "strong",
+        "evidence": "Owned the Kubernetes platform for 12 services",
+        "verified": True,
+        "match_ratio": 1.0,
+        "longest_span": 6,
+        "weight": 1,
+        "must_have": False,
+    }
+    return ScoredCriterion(**{**base, **overrides})
+
+
+def check(support: str = "supported") -> SupportCheck:
+    return SupportCheck(id="C1", support=support, suggested_verdict="none")  # type: ignore[arg-type]
+
+
+def one_case_corpus(tmp_path: Path, resume: str, evidence_label: str) -> Corpus:
+    """A single labelled criterion, so a scenario can be stated exactly."""
+    path = tmp_path / "one.jsonl"
+    path.write_text(
+        json.dumps({"kind": "provenance", "labellers": ["ana", "ben"], "method": "independent"})
+        + "\n"
+        + json.dumps(
+            {
+                "id": "case-1",
+                "resume": resume,
+                "criteria": [
+                    {"id": f"C{i}", "text": "Kubernetes in production", "weight": 1}
+                    for i in range(1, 5)
+                ],
+                "adjudicated": {f"C{i}": evidence_label for i in range(1, 5)},
+            }
+        )
+    )
+    return load(path)
+
+
+def test_stage_b_reads_the_model_verdict_not_the_corrected_one() -> None:
+    """The self-contradiction branch rewrites `verdict` to `none` (10.5 a).
+
+    Reading the post-verification value would make the rule invisible to itself:
+    a criterion stage B just downgraded would look like an honest `none` and
+    stop being counted as something stage B caught.
+    """
+    contradicted = criterion(model_verdict="strong", verdict="none", verified=False)
+
+    assert _difflib_flags(contradicted) is True
+
+
+def test_stage_b_does_not_flag_an_honest_absence() -> None:
+    assert _difflib_flags(criterion(model_verdict="none", verdict="none", verified=False)) is False
+
+
+def test_the_second_model_is_never_consulted_about_a_quote_stage_b_rejected() -> None:
+    """10.4: D is skipped once B has failed.
+
+    Asking a second model to reason about a quote we could not find in the
+    document is an invitation to confirm one that was never there — and a
+    `supported` answer there would *unflag* a fabrication.
+    """
+    unverified = criterion(verified=False)
+
+    assert _both_flags(unverified, check("supported")) is True
+
+
+def test_the_shipped_configuration_flags_a_superset_of_stage_b() -> None:
+    """The property that makes the comparison honest.
+
+    If `difflib + judge` could ever miss what `difflib only` caught, the table
+    would be measuring two unrelated systems rather than one with an extra
+    stage — and the extra stage would be capable of making things worse.
+    """
+    for verified in (True, False):
+        for support in ("supported", "insufficient", "contradicted"):
+            subject = criterion(verified=verified)
+            if _difflib_flags(subject):
+                assert _both_flags(subject, check(support)) is True
+
+
+def test_the_judge_only_row_ignores_what_stage_b_found() -> None:
+    """Otherwise the row is not 'judge only', it is 'both' under another name."""
+    assert _judge_flags(check("insufficient")) is True
+    assert _judge_flags(check("supported")) is False
+    assert _judge_flags(None) is False
+
+
+def test_a_fabrication_stage_b_catches_is_missed_only_by_the_judge_row(
+    tmp_path: Path,
+) -> None:
+    """The case for keeping difflib.
+
+    The model asserts `strong` and quotes something the résumé does not contain.
+    Stage B cannot find it; the second model, shown a quote and asked whether it
+    supports the claim, says yes. Character matching is the control that works
+    here, and no amount of second-model reasoning replaces it.
+    """
+    corpus = one_case_corpus(tmp_path, "Deployed to Kubernetes using Helm charts.", "none")
+    llm = ScriptedVerifier("strong", evidence="Fluent in Finnish and Estonian")
+
+    result = compare_verifiers(llm, corpus)
+
+    assert result.tallies["difflib only"].missed_fabrications == 0
+    assert result.tallies["judge only"].missed_fabrications > 0
+    assert result.tallies["difflib + judge"].missed_fabrications == 0
+
+
+def test_a_verbatim_but_irrelevant_quote_is_missed_only_by_stage_b(tmp_path: Path) -> None:
+    """The case for keeping the second model (9.3).
+
+    The quote is real, verbatim and correctly copied, so it verifies at ratio
+    1.00 — and it establishes nothing about the criterion. Stage B is right not
+    to care what the words mean; this is the hole that leaves.
+    """
+    resume = "Fluent in Finnish and Estonian, and I write a food blog on weekends."
+    corpus = one_case_corpus(tmp_path, resume, "none")
+    llm = ScriptedVerifier(
+        "strong", evidence="Fluent in Finnish and Estonian", support="insufficient"
+    )
+
+    result = compare_verifiers(llm, corpus)
+
+    assert result.tallies["difflib only"].missed_fabrications > 0
+    assert result.tallies["judge only"].missed_fabrications == 0
+    assert result.tallies["difflib + judge"].missed_fabrications == 0
+
+
+def test_a_correct_verdict_sent_to_a_reviewer_is_counted_as_a_false_escalation(
+    tmp_path: Path,
+) -> None:
+    """The column that keeps the table from recommending 'escalate everything'.
+
+    The model's verdict matches the adjudicated label, and the second model
+    flags it anyway. That is a reviewer paying for work that changes nothing,
+    and it is the cost side of every row.
+    """
+    resume = "Owned the Kubernetes platform for 12 services in production."
+    corpus = one_case_corpus(tmp_path, resume, "strong")
+    llm = ScriptedVerifier("strong", support="insufficient")
+
+    result = compare_verifiers(llm, corpus)
+
+    assert result.tallies["judge only"].false_escalations > 0
+    assert result.tallies["difflib only"].false_escalations == 0
+
+
+def test_the_verifier_is_not_asked_about_criteria_it_cannot_help_with(
+    tmp_path: Path,
+) -> None:
+    """A `none` verdict has no quote to check, so there is nothing to ask."""
+    corpus = one_case_corpus(tmp_path, "A résumé mentioning nothing relevant.", "none")
+    llm = ScriptedVerifier("none")
+
+    compare_verifiers(llm, corpus)
+
+    assert llm.asked == []
+
+
+def test_every_configuration_sees_the_same_judgment(tmp_path: Path) -> None:
+    """One judge call per case, shared across the rows.
+
+    Re-judging per configuration would put judge sampling variance inside a
+    table meant to isolate verification, and the three rows would differ for
+    reasons the columns do not name.
+    """
+    corpus = one_case_corpus(tmp_path, "Deployed to Kubernetes using Helm charts.", "strong")
+    llm = ScriptedVerifier("strong")
+
+    result = compare_verifiers(llm, corpus)
+
+    counts = {result.tallies[c].criteria for c in CONFIGURATIONS}
+    assert len(counts) == 1, "the rows disagree about how many criteria they scored"

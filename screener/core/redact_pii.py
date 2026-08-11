@@ -18,8 +18,8 @@ invisible in the output. So date handling is **label-anchored**: `DOB: 1985` goe
 name in free text needs NER, which is a model, which this module is not — and
 `Candidate.filename` carries the name regardless (5). URLs are not: a GitHub
 profile is often the evidence a technical criterion rests on. Redaction here
-reduces what the model weighs; it is not anonymization, and the audit trail,
-traces, and quarantine all still hold the full text (17).
+reduces what the model weighs; it is not anonymization, and `resume_text`,
+`sent_text` and quarantine all still hold the full text (17).
 """
 
 import re

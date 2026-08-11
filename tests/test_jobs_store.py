@@ -103,11 +103,11 @@ def add_jobs(uow: UnitOfWork, run_id: str, count: int, prefix: str = "cv") -> No
 
 
 def minutes_ago(minutes: float) -> str:
-    """A submission time recent enough not to trip the aging rule.
+    """A submission time relative to now, for ordering two runs against each other.
 
-    Fixed dates in the past silently age into the fast lane once real time moves
-    past `run_aging_hours`, which makes a scheduling test pass or fail depending
-    on the day it is run.
+    Relative rather than a fixed date: `claim_next` orders by `runs.created_at`,
+    and a hardcoded timestamp makes the intended ordering depend on when the
+    suite happens to be run.
     """
     return (now() - timedelta(minutes=minutes)).isoformat()
 

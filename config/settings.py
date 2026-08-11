@@ -168,11 +168,12 @@ class Settings(BaseSettings):
     worker_poll_interval_s: int = 2
     heartbeat_interval_s: int = 15
     job_max_attempts: int = 3
-    fast_lane_max_files: int = 150
-    # Hours a run may wait before it is promoted into the fast lane. Without
-    # aging, a steady trickle of small runs starves a 1,000-CV posting forever
-    # (16.3).
-    run_aging_hours: float = 2.0
+    # `fast_lane_max_files` and `run_aging_hours` were removed with the fast lane
+    # itself (17.3). Scheduling is strict FIFO by run creation: batch duration
+    # was never the constraint, and shortest-job-first bought nothing against
+    # reviewer time while adding the starvation problem that aging existed to
+    # fix. Both settings were unread by any code well before this.
+    #
     # Measured end-to-end judge time at build step 9 (5.39 s), not the spec's
     # original 4.7 s estimate. Drives the ETA, so it should be re-measured
     # whenever the model or num_ctx changes — an ETA quoted from a stale
