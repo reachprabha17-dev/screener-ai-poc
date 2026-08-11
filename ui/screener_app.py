@@ -111,9 +111,14 @@ def call(fn: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         return None
 
 
+
+
 def sidebar() -> None:
     st.sidebar.title("Screener")
     st.sidebar.caption("On-prem. No candidate data leaves this host.")
+
+    if "pending_run_id" in st.session_state:
+        st.session_state["run_id"] = st.session_state.pop("pending_run_id")
 
     st.session_state.setdefault("api_url", DEFAULT_API)
     st.session_state.setdefault("actor", "poc-operator")
@@ -130,6 +135,7 @@ def sidebar() -> None:
     # in the sidebar is also the truer model: it is the context every tab is
     # working within, not a field belonging to any one of them.
     st.sidebar.text_input("Run id", key="run_id")
+
 
     health = None
     try:
@@ -289,7 +295,8 @@ def runs_page() -> None:
         options=[p["id"] for p in positions],
         index=default_index,
         format_func=lambda pid: next(
-            f"{p['reference']} — {p['title']}" for p in positions if p["id"] == pid
+            (f"{p['reference']} — {p['title']}" for p in positions if p["id"] == pid),
+            pid,
         ),
         key="runs_position_select",
     )
@@ -304,9 +311,12 @@ def runs_page() -> None:
         if st.button("Create a run over the folder"):
             run = call(client.create_run, chosen_pos_id, approved_rubric["id"])
             if run:
-                st.session_state["run_id"] = run["id"]
+                st.session_state["pending_run_id"] = run["id"]
                 st.success(f"Snapshotted the folder into run {run['id']}")
                 st.rerun()
+
+
+
     else:
         st.info(
             "No approved rubric found for this position. "

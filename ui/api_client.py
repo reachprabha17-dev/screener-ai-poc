@@ -65,6 +65,12 @@ class ApiClient:
             raise ApiError(
                 f"The API did not respond within {timeout:.0f}s. It may be busy loading the model."
             ) from exc
+        except httpx.RequestError as exc:
+            raise ApiError(
+                f"Cannot reach the screener API at {self.base_url}. Is the API service running?"
+            ) from exc
+
+
 
         if response.status_code >= 400:
             raise ApiError(_explain(response))
