@@ -585,6 +585,25 @@ def test_a_rubric_from_another_position_is_refused(service: ScreenerService) -> 
         service.create_run(first, other_rubric, ACTOR)
 
 
+def test_get_latest_and_approved_rubric(service: ScreenerService) -> None:
+    position = service.create_position(reference="REQ-LATEST", title="t", jd_text=JD, actor=ACTOR)
+
+    assert service.get_latest_rubric(position.id) is None
+    assert service.get_approved_rubric(position.id) is None
+
+    rubric = service.extract_rubric(position.id, ACTOR)
+    latest = service.get_latest_rubric(position.id)
+    assert latest is not None
+    assert latest.id == rubric.id
+    assert service.get_approved_rubric(position.id) is None
+
+    approved = service.approve_rubric(rubric.id, ACTOR)
+    approved_fetched = service.get_approved_rubric(position.id)
+    assert approved_fetched is not None
+    assert approved_fetched.id == approved.id
+
+
+
 def test_editing_a_rubric_creates_a_new_version(service: ScreenerService) -> None:
     """Never in place. A run already scored against v1 must stay explainable."""
     position = service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)

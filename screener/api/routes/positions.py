@@ -68,3 +68,22 @@ def save_rubric(
     return to_rubric(
         service.save_rubric(position_id, request.criteria, actor, request.base_version)
     )
+
+
+@router.get("/positions/{position_id}/rubric", response_model=RubricResponse | None)
+def get_latest_rubric(
+    position_id: str,
+    service: ScreenerService = Depends(get_service),
+) -> RubricResponse | None:
+    rubric = service.get_latest_rubric(position_id)
+    return to_rubric(rubric) if rubric else None
+
+
+@router.get("/positions/{position_id}/rubric/approved", response_model=RubricResponse | None)
+def get_approved_rubric(
+    position_id: str,
+    service: ScreenerService = Depends(get_service),
+) -> RubricResponse | None:
+    rubric = service.get_approved_rubric(position_id)
+    return to_rubric(rubric) if rubric else None
+

@@ -216,6 +216,12 @@ def rubric_section(position_id: str) -> None:
 
     rubric = st.session_state.get("rubric")
     if not rubric or rubric.get("position_id") != position_id:
+        fetched = call(client.get_latest_rubric, position_id)
+        if fetched:
+            st.session_state["rubric"] = fetched
+            rubric = fetched
+
+    if not rubric or rubric.get("position_id") != position_id:
         st.info("No draft yet.")
         return
 
@@ -265,23 +271,53 @@ def runs_page() -> None:
     st.header("Runs")
     client = get_client()
 
-    position_id = st.session_state.get("position_id")
-    rubric = st.session_state.get("rubric")
+    positions = call(client.list_positions) or []
+    if not positions:
+        st.info("No open requisitions yet.")
+        return
 
-    if position_id and rubric and rubric.get("approved_at"):
+    current_pos_id = st.session_state.get("position_id")
+    default_index = 0
+    if current_pos_id:
+        for idx, p in enumerate(positions):
+            if p["id"] == current_pos_id:
+                default_index = idx
+                break
+
+    chosen_pos_id = st.selectbox(
+        "Position for run",
+        options=[p["id"] for p in positions],
+        index=default_index,
+        format_func=lambda pid: next(
+            f"{p['reference']} — {p['title']}" for p in positions if p["id"] == pid
+        ),
+        key="runs_position_select",
+    )
+    st.session_state["position_id"] = chosen_pos_id
+
+    approved_rubric = call(client.get_approved_rubric, chosen_pos_id)
+    if approved_rubric:
+        st.success(
+            f"Approved Rubric v{approved_rubric['version']} (`{approved_rubric['rubric_hash'][:12]}`) "
+            f"· {len(approved_rubric['criteria'])} criteria · Approved by {approved_rubric['approved_by']}"
+        )
         if st.button("Create a run over the folder"):
-            run = call(client.create_run, position_id, rubric["id"])
+            run = call(client.create_run, chosen_pos_id, approved_rubric["id"])
             if run:
                 st.session_state["run_id"] = run["id"]
                 st.success(f"Snapshotted the folder into run {run['id']}")
                 st.rerun()
     else:
-        st.info("Approve a rubric on the Requisitions tab to create a run.")
+        st.info(
+            "No approved rubric found for this position. "
+            "Please approve a rubric on the Requisitions tab before creating a run."
+        )
 
     run_id = st.session_state.get("run_id", "")
     if not run_id:
         st.info("Create a run above, or enter a run id in the sidebar.")
         return
+
 
     controls(client, run_id)
     live_status(run_id)

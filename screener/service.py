@@ -302,7 +302,18 @@ class ScreenerService:
         assert approved is not None  # noqa: S101 — just written in this transaction
         return approved
 
+    def get_latest_rubric(self, position_id: str) -> Rubric | None:
+        """The latest rubric (draft or approved) for a position, or None when no rubric exists yet."""
+        with self.uow_factory() as tx:
+            return rubrics_store.latest_for_position(tx, position_id)
+
+    def get_approved_rubric(self, position_id: str) -> Rubric | None:
+        """The active approved rubric for a position, or None when none is approved yet."""
+        with self.uow_factory() as tx:
+            return rubrics_store.approved_for_position(tx, position_id)
+
     # --- runs ----------------------------------------------------------------
+
 
     def create_run(self, position_id: str, rubric_id: str, actor: Actor) -> Run:
         """Create a run and **snapshot** the position's folder into jobs.

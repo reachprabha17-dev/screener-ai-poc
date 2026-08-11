@@ -104,7 +104,16 @@ class ApiClient:
     def approve_rubric(self, rubric_id: str) -> dict[str, Any]:
         return dict(self._request("POST", f"/rubrics/{rubric_id}/approve"))
 
+    def get_latest_rubric(self, position_id: str) -> dict[str, Any] | None:
+        res = self._request("GET", f"/positions/{position_id}/rubric")
+        return dict(res) if res else None
+
+    def get_approved_rubric(self, position_id: str) -> dict[str, Any] | None:
+        res = self._request("GET", f"/positions/{position_id}/rubric/approved")
+        return dict(res) if res else None
+
     # --- runs ----------------------------------------------------------------
+
 
     def create_run(self, position_id: str, rubric_id: str) -> dict[str, Any]:
         return dict(

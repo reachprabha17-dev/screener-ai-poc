@@ -177,6 +177,35 @@ def test_the_whole_control_plane_flow(client: TestClient) -> None:
     assert status["eta_seconds"] > 0
 
 
+def test_get_latest_and_approved_rubric_routes(client: TestClient) -> None:
+    position_id = make_position(client, "REQ-ROUTE-TEST")
+
+    res_latest = client.get(f"/positions/{position_id}/rubric")
+    assert res_latest.status_code == 200
+    assert res_latest.json() is None
+
+    res_app = client.get(f"/positions/{position_id}/rubric/approved")
+    assert res_app.status_code == 200
+    assert res_app.json() is None
+
+    rubric = client.post(f"/positions/{position_id}/rubric/extract").json()
+
+    res_latest2 = client.get(f"/positions/{position_id}/rubric")
+    assert res_latest2.status_code == 200
+    assert res_latest2.json()["id"] == rubric["id"]
+
+    res_app2 = client.get(f"/positions/{position_id}/rubric/approved")
+    assert res_app2.status_code == 200
+    assert res_app2.json() is None
+
+    client.post(f"/rubrics/{rubric['id']}/approve")
+
+    res_app3 = client.get(f"/positions/{position_id}/rubric/approved")
+    assert res_app3.status_code == 200
+    assert res_app3.json()["id"] == rubric["id"]
+
+
+
 def test_a_run_against_an_unapproved_rubric_is_409(client: TestClient) -> None:
     """Well-formed request, forbidden state — not a 400."""
     position_id = make_position(client)
