@@ -114,8 +114,9 @@ def call(fn: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
 
 
 def sidebar() -> None:
-    st.sidebar.title("Screener")
-    st.sidebar.caption("On-prem. No candidate data leaves this host.")
+    st.sidebar.title("Enterprise Talent Screener")
+    st.sidebar.caption("ETS · On-premise. No candidate data leaves this host.")
+
 
     if "pending_run_id" in st.session_state:
         st.session_state["run_id"] = st.session_state.pop("pending_run_id")
@@ -569,6 +570,7 @@ def partition(
                 # Band, not score. The decimal implies a precision three verdict
                 # levels cannot support (10.6).
                 "Band": c["band"] or "—",
+                "Verified": VERIFICATION_BADGE.get(c.get("verification_status", ""), "—"),
                 "Flags": ", ".join(c["flags"]) or "",
             }
             for c in candidates
@@ -680,6 +682,15 @@ EVIDENCE_BADGE = {
     "partial": "⚠ partially matched",
     "unverified": "⚠ not found in the résumé",
     "not_applicable": "",
+}
+
+# `pending` means phase 2 has not checked this candidate yet — not that it
+# never will. `skipped` means it never will (unscoreable, or verification is
+# off for this run), which is why it gets its own badge rather than "done".
+VERIFICATION_BADGE = {
+    "done": "✓ verified",
+    "pending": "⏳ provisional",
+    "skipped": "— not verified",
 }
 
 
@@ -817,7 +828,8 @@ def _to_csv(candidates: list[dict[str, Any]]) -> str:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Screener", page_icon="📄", layout="wide")
+    st.set_page_config(page_title="Enterprise Talent Screener (ETS)", page_icon="📄", layout="wide")
+
     sidebar()
 
     requisitions, runs, review = st.tabs(["Requisitions", "Runs", "Review"])
