@@ -109,11 +109,16 @@ see the "escalates, never overrules" invariant actually asserted.
     screener/worker_loop.py     (290)   claim, heartbeat, reclaim, phase switch
     screener/storage/uow.py      (89)
     screener/storage/jobs_store.py (437)
+    screener/storage/resumes_store.py   résumé share folder discovery
+    screener/core/resume_paths.py      folder reference validation & containment
 
 `service.py` is the biggest file and mostly rhythm: open a unit of work, call
 stores, append an audit row, commit. The rule that shapes it is that **stores
 never open a transaction** — they receive one. And `service.py` may not import
 `pipeline.py`: it enqueues, the worker executes.
+
+Résumé intake reads from `RESUMES_DIR` (which may point at a local directory or IT-mounted network share). `resumes_store.list_folders()` lists available folders for UI selection, and `core/resume_paths.py` enforces reference validation and path containment.
+
 
 The parts of `service.py` that are not rhythm are worth finding by name:
 `record_decision` (three writes, one transaction), `save_rubric` (optimistic

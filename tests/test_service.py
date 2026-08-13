@@ -617,6 +617,59 @@ def test_list_runs(service: ScreenerService) -> None:
     assert run_ids.index(run2.id) < run_ids.index(run1.id)
 
 
+def test_create_position_unsafe_reference_raises_service_error(service: ScreenerService) -> None:
+    with pytest.raises(ServiceError, match="Invalid reference"):
+        service.create_position(reference="../../etc", title="t", jd_text=JD, actor=ACTOR)
+    positions = service.list_positions()
+    assert not any(p.reference == "../../etc" for p in positions)
+
+
+def test_list_resume_folders_reflects_configured_directory(
+    service: ScreenerService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumes_dir = tmp_path / "resumes"
+    resumes_dir.mkdir()
+    (resumes_dir / "folder_x").mkdir()
+    (resumes_dir / "folder_x" / "cv.pdf").write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    folders, total = service.list_resume_folders()
+    assert total == 1
+    assert len(folders) == 1
+    assert folders[0].name == "folder_x"
+    assert folders[0].file_count == 1
+
+
+def test_the_folder_count_shown_is_the_count_that_gets_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The picker's count is a promise about the run it is about to create.
+
+    macOS drops an AppleDouble sidecar (`._alice.pdf`) beside every file copied
+    onto an SMB/NFS share, and those carry a `.pdf` suffix. Counted one way and
+    queued another, a folder labelled "2 CV(s)" produces a four-job run whose
+    two junk files land in the review queue as unscoreable escalations.
+    """
+    from screener.storage.jobs_store import _eligible_files
+    from screener.storage.resumes_store import list_folders
+
+    resumes_dir = tmp_path / "resumes"
+    folder = resumes_dir / "reqA"
+    folder.mkdir(parents=True)
+    (folder / "alice.pdf").write_bytes(b"%PDF-1.4 real")
+    (folder / "bob.pdf").write_bytes(b"%PDF-1.4 real")
+    (folder / "._alice.pdf").write_bytes(b"junk")
+    (folder / "._bob.pdf").write_bytes(b"junk")
+    (folder / ".DS_Store").write_bytes(b"junk")
+
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    listed, _ = list_folders()
+    shown = next(f.file_count for f in listed if f.name == "reqA")
+    queued = _eligible_files(folder)
+    assert shown == len(queued) == 2
+    assert {p.name for p in queued} == {"alice.pdf", "bob.pdf"}
 
 
 def test_editing_a_rubric_creates_a_new_version(service: ScreenerService) -> None:

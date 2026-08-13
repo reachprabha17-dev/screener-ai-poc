@@ -133,11 +133,25 @@ class Actor(BaseModel):
 # --- Position / Rubric ------------------------------------------------------
 
 
+class FolderInfo(BaseModel):
+    """One folder on the résumé share, as the picker sees it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    # Relative to `settings.resumes_dir`, `/`-separated. This is what becomes a
+    # position's `reference`, so the picker never handles an absolute path.
+    path: str
+    file_count: int
+    # Whether descending is worth offering. Cheaper than making the UI probe.
+    has_subfolders: bool = False
+
+
 class Position(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    reference: str  # folder name under data/resumes/
+    reference: str  # folder name under settings.resumes_dir
     title: str
     jd_text: str  # provenance for the rubric derived from it
     created_by: str

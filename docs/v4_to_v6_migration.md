@@ -32,6 +32,7 @@ before anything depends on it.
 
 PURE. No I/O. See spec §12.6.
 """
+
 from screener.models import MatchBlock, Span
 
 
@@ -45,14 +46,15 @@ def translate_offset(dst: int, span_map: list[Span]) -> int:
     for s in span_map:
         if s.dst_start <= dst < s.dst_end:
             return s.src_start + (dst - s.dst_start)
-        if dst < s.dst_start:                 # inside a placeholder before this segment
+        if dst < s.dst_start:  # inside a placeholder before this segment
             return s.src_start
     return span_map[-1].src_end if span_map else dst
 
 
 def translate_block(b: MatchBlock, span_map: list[Span]) -> MatchBlock:
     return MatchBlock(
-        ev_start=b.ev_start, ev_end=b.ev_end,
+        ev_start=b.ev_start,
+        ev_end=b.ev_end,
         doc_start=translate_offset(b.doc_start, span_map),
         doc_end=translate_offset(b.doc_end - 1, span_map) + 1,
     )
@@ -85,24 +87,38 @@ provenance, not meaning.
 
 ```python
 """Negation detection over verified evidence spans. PURE. Spec §10.5(C)."""
+
 import re
 
-NEGATION_MARKERS = frozenset({
-    "no", "not", "never", "without", "lacking", "lacks", "minimal",
-    "limited", "none", "excluding", "besides", "unfamiliar",
-})
+NEGATION_MARKERS = frozenset(
+    {
+        "no",
+        "not",
+        "never",
+        "without",
+        "lacking",
+        "lacks",
+        "minimal",
+        "limited",
+        "none",
+        "excluding",
+        "besides",
+        "unfamiliar",
+    }
+)
 WEAK_MARKERS = frozenset({"familiar", "exposure", "basic", "beginner", "learning"})
 
 
-def detect_negation(scored: list[ScoredCriterion], sent_text: str,
-                    window: int = 6) -> list[ScoredCriterion]:
+def detect_negation(
+    scored: list[ScoredCriterion], sent_text: str, window: int = 6
+) -> list[ScoredCriterion]:
     doc_tokens, offsets = tokenize_with_offsets(sent_text)
     for c in scored:
         if not c.verified or not c.match_blocks:
             continue
         first = min(b.doc_start for b in c.match_blocks)
         idx = bisect_token_index(offsets, first)
-        preceding = {t.lower() for t in doc_tokens[max(0, idx - window):idx]}
+        preceding = {t.lower() for t in doc_tokens[max(0, idx - window) : idx]}
         if preceding & NEGATION_MARKERS or preceding & WEAK_MARKERS:
             c.negation_suspected = True
     return scored
@@ -118,6 +134,7 @@ def detect_negation(scored: list[ScoredCriterion], sent_text: str,
 ```python
 # BEFORE
 def redact_pii(text: str) -> str: ...
+
 
 # AFTER
 def redact_pii(text: str) -> tuple[str, list[Span]]:
@@ -145,19 +162,22 @@ matched = sum(b.size for b in blocks)
 match_ratio = matched / len(ev_tokens)
 
 # AFTER — same alignment, plus offset capture
-ev_tokens, ev_off  = tokenize_with_offsets(evidence)
+ev_tokens, ev_off = tokenize_with_offsets(evidence)
 doc_tokens, doc_off = tokenize_with_offsets(sent_text)
 m = difflib.SequenceMatcher(None, ev_tokens, doc_tokens, autojunk=False)
 blocks = [b for b in m.get_matching_blocks() if b.size >= MIN_BLOCK]
 
-matched      = sum(b.size for b in blocks)
-match_ratio  = matched / len(ev_tokens)
+matched = sum(b.size for b in blocks)
+match_ratio = matched / len(ev_tokens)
 longest_span = max((b.size for b in blocks), default=0)
 match_blocks = [
     MatchBlock(
-        ev_start=ev_off[b.a][0],  ev_end=ev_off[b.a + b.size - 1][1],
-        doc_start=doc_off[b.b][0], doc_end=doc_off[b.b + b.size - 1][1],
-    ) for b in blocks
+        ev_start=ev_off[b.a][0],
+        ev_end=ev_off[b.a + b.size - 1][1],
+        doc_start=doc_off[b.b][0],
+        doc_end=doc_off[b.b + b.size - 1][1],
+    )
+    for b in blocks
 ]
 ```
 
@@ -170,47 +190,59 @@ words approaches ratio 1.0 against any resume.
 Additions, in dependency order:
 
 ```python
-Support  = Literal["supported", "insufficient", "contradicted"]
+Support = Literal["supported", "insufficient", "contradicted"]
 Decision = Literal["undecided", "advance", "hold", "reject"]
 
+
 class Flag(StrEnum):
-    ...                                     # keep all v4 members
-    NEGATION_SUSPECTED   = "NEGATION_SUSPECTED"
-    JUDGE_DISAGREES      = "JUDGE_DISAGREES"
-    UNVERIFIED_ABSENCE   = "UNVERIFIED_ABSENCE"
+    ...  # keep all v4 members
+    NEGATION_SUSPECTED = "NEGATION_SUSPECTED"
+    JUDGE_DISAGREES = "JUDGE_DISAGREES"
+    UNVERIFIED_ABSENCE = "UNVERIFIED_ABSENCE"
+
 
 class EscalationReason(StrEnum):
     """A queue of 23 is unworkable without knowing why. Spec §15.4."""
+
     UNVERIFIED_EVIDENCE = "UNVERIFIED_EVIDENCE"
-    JUDGE_DISAGREEMENT  = "JUDGE_DISAGREEMENT"
-    ABSENCE_FOUND       = "ABSENCE_FOUND"
-    NEGATION            = "NEGATION"
-    PARTIAL_MUST_HAVE   = "PARTIAL_MUST_HAVE"
-    UNPROCESSABLE       = "UNPROCESSABLE"
+    JUDGE_DISAGREEMENT = "JUDGE_DISAGREEMENT"
+    ABSENCE_FOUND = "ABSENCE_FOUND"
+    NEGATION = "NEGATION"
+    PARTIAL_MUST_HAVE = "PARTIAL_MUST_HAVE"
+    UNPROCESSABLE = "UNPROCESSABLE"
     SUSPECTED_INJECTION = "SUSPECTED_INJECTION"
+
 
 class Span(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    src_start: int; src_end: int      # into resume_text
-    dst_start: int; dst_end: int      # into sent_text
+    src_start: int
+    src_end: int  # into resume_text
+    dst_start: int
+    dst_end: int  # into sent_text
+
 
 class MatchBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    ev_start: int; ev_end: int
-    doc_start: int; doc_end: int
+    ev_start: int
+    ev_end: int
+    doc_start: int
+    doc_end: int
+
 
 class SupportCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     support: Support
-    suggested_verdict: Verdict          # ALWAYS stated, even on agreement
+    suggested_verdict: Verdict  # ALWAYS stated, even on agreement
     rationale: str = Field(max_length=200)
+
 
 class AbsenceCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     confirmed_absent: bool
     found_evidence: str = Field(default="", max_length=300)
+
 
 class VerifyOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -223,7 +255,7 @@ class VerifyOutput(BaseModel):
 ```python
 class Criterion(BaseModel):
     ...
-    claim: str            # criterion restated as an assertion — consumed by the verifier
+    claim: str  # criterion restated as an assertion — consumed by the verifier
     claim_stale: bool = False
 ```
 
@@ -247,15 +279,15 @@ the claim, and the verifier would then check against something that no longer ma
 `Candidate` gains:
 
 ```python
-    id: int | None = None
-    resume_text: str = ""                 # sanitized, names intact — HR reads this
-    sent_text: str = ""                   # + redacted — what the model saw
-    redaction_map: list[Span] = Field(default_factory=list)
-    escalation_reasons: list[EscalationReason] = Field(default_factory=list)
-    verification_status: Literal["pending", "done", "skipped"] = "pending"
-    decision: Decision = "undecided"
-    decided_by: str | None = None
-    decided_at: datetime | None = None
+id: int | None = None
+resume_text: str = ""  # sanitized, names intact — HR reads this
+sent_text: str = ""  # + redacted — what the model saw
+redaction_map: list[Span] = Field(default_factory=list)
+escalation_reasons: list[EscalationReason] = Field(default_factory=list)
+verification_status: Literal["pending", "done", "skipped"] = "pending"
+decision: Decision = "undecided"
+decided_by: str | None = None
+decided_at: datetime | None = None
 ```
 
 `RankedResult` gains `escalation_breakdown: dict[EscalationReason, int]` and `undecided_count: int`.
@@ -272,6 +304,8 @@ is also where the "never overrules" rule is enforced in code rather than by conv
 
 INVARIANT: never mutates verdict or score. Asserted by property test.
 """
+
+
 def reconcile_judge(cand: Candidate, out: VerifyOutput) -> Candidate:
     by_id = {c.id: c for c in cand.criteria}
 
@@ -312,19 +346,19 @@ another.
 # --- REPLACE ---
 # chat_model: str = "granite4.1:8b"
 # model_digest_pin: str | None = None
-judge_model:    str = "granite4.1:8b"
+judge_model: str = "granite4.1:8b"
 verifier_model: str = "gemma4:12b"
-judge_digest_pin:    str | None = None
+judge_digest_pin: str | None = None
 verifier_digest_pin: str | None = None
-verifier_num_ctx: int = 16384           # §10.6 B sends the full resume
-request_timeout_s: int = 300            # was 180
+verifier_num_ctx: int = 16384  # §10.6 B sends the full resume
+request_timeout_s: int = 300  # was 180
 
 # --- ADD ---
 verification_enabled: bool = True
 verify_scope: Literal["all", "must_have_and_borderline"] = "all"
 borderline_ratio_max: float = 0.75
 negation_window_tokens: int = 6
-escalation_budget: float | None = None          # was 0.03 — now measured, not guessed
+escalation_budget: float | None = None  # was 0.03 — now measured, not guessed
 escalation_budget_source_run: str | None = None
 bulk_decision_enabled: bool = True
 bulk_excludes_review_required: bool = True
@@ -414,8 +448,8 @@ Persist and hydrate the new columns. Three things that are easy to get wrong:
 
 ```python
 # JSON round-tripping goes through the store, never the caller
-redaction_map_json      = json.dumps([s.model_dump() for s in cand.redaction_map])
-match_blocks_json       = json.dumps([b.model_dump() for b in sc.match_blocks])
+redaction_map_json = json.dumps([s.model_dump() for s in cand.redaction_map])
+match_blocks_json = json.dumps([b.model_dump() for b in sc.match_blocks])
 escalation_reasons_json = json.dumps([r.value for r in cand.escalation_reasons])
 ```
 
@@ -483,7 +517,7 @@ Split `screen_one` into two functions.
 def judge_one(path: Path, rubric: Rubric, deps: Deps) -> Candidate:
     validate_file(path)
     parsed = deps.parser.parse(path)
-    resume_text, stripped = sanitize(parsed.text)              # §8.6
+    resume_text, stripped = sanitize(parsed.text)  # §8.6
     detect_injection(resume_text)
     if settings.redact_pii:
         sent, span_map = redact_pii(resume_text)
@@ -494,8 +528,8 @@ def judge_one(path: Path, rubric: Rubric, deps: Deps) -> Candidate:
     out = deps.llm.judge(settings.judge_model, sent, rubric)
     validate_verdicts(out, rubric)
     out = screen_freetext(out)
-    scored = verify_evidence(out, sent)                        # A + B
-    scored = detect_negation(scored, sent)                     # C  ← NEW
+    scored = verify_evidence(out, sent)  # A + B
+    scored = detect_negation(scored, sent)  # C  ← NEW
     cand = compute_score(scored, rubric)
     cand.resume_text, cand.sent_text, cand.redaction_map = resume_text, sent, span_map
     return cand
@@ -506,7 +540,7 @@ def verify_one(cand: Candidate, rubric: Rubric, deps: Deps) -> Candidate:
         cand.verification_status = "skipped"
         return cand
     out = deps.llm.verify(settings.verifier_model, cand, rubric)
-    return reconcile_judge(cand, out)                          # pure
+    return reconcile_judge(cand, out)  # pure
 ```
 
 **`verify_evidence` matches against `sent`, never `resume_text`.** Matching anything else fails on
@@ -520,19 +554,21 @@ per resume costs a 10–20 s model load on every candidate; phasing costs two lo
 ```python
 def main() -> None:
     reclaim_orphaned(settings.worker_id)
-    warn_if_no_escalation_budget()               # §19.2 — see C4
+    warn_if_no_escalation_budget()  # §19.2 — see C4
     while not stopping:
         run, phase = next_active_phase()
         if run is None:
-            sleep(settings.worker_poll_interval_s); continue
+            sleep(settings.worker_poll_interval_s)
+            continue
 
         model = settings.judge_model if phase == "judge" else settings.verifier_model
-        deps.llm.ensure_loaded(model)            # unloads the other
+        deps.llm.ensure_loaded(model)  # unloads the other
 
         job = claim_next(settings.worker_id, phase)
         if job is None:
             advance_phase_if_complete(run)
-            sleep(settings.worker_poll_interval_s); continue
+            sleep(settings.worker_poll_interval_s)
+            continue
 
         if phase == "judge":
             cand = pipeline.judge_one(job.path, rubric_for(run), deps)
@@ -570,12 +606,13 @@ def chat_json(self, model: str, system: str, user: str, schema: dict) -> dict: .
 def count_tokens(self, model: str, text: str) -> int: ...
 def digest(self, model: str) -> str: ...
 
+
 def ensure_loaded(self, model: str) -> None:
     """Load `model`, unloading the other. Called once per phase, not per resume."""
     if self._loaded == model:
         return
     if self._loaded:
-        self._client.generate(model=self._loaded, prompt="", keep_alive=0)   # unload
+        self._client.generate(model=self._loaded, prompt="", keep_alive=0)  # unload
     self._client.generate(model=model, prompt="", keep_alive=settings.keep_alive)
     self._loaded = model
 ```
@@ -597,8 +634,10 @@ still PII — `0700`, and `purge_candidate` clears matching files.
 ```python
 def warn_if_no_escalation_budget() -> None:
     if settings.escalation_budget is None:
-        logger.warning("escalation_budget_unset",
-                       msg="Measure on this run and record escalation_budget_source_run")
+        logger.warning(
+            "escalation_budget_unset",
+            msg="Measure on this run and record escalation_budget_source_run",
+        )
 ```
 
 Without this, "measure it later" quietly becomes "never", and the escalation rate is the constraint
@@ -668,8 +707,7 @@ def verify(client: LLMClient, model: str, cand: Candidate, rubric: Rubric) -> Ve
 def in_scope(c: ScoredCriterion) -> bool:
     if settings.verify_scope == "all":
         return True
-    return (c.must_have
-            or (c.verified and c.match_ratio <= settings.borderline_ratio_max))
+    return c.must_have or (c.verified and c.match_ratio <= settings.borderline_ratio_max)
 ```
 
 Absence checking is **never** skipped by scope — it is the only check on `none`, and `none` on a
@@ -700,8 +738,10 @@ unambiguous grounds.
 
 ```python
 class HighlightSpan(BaseModel):
-    start: int; end: int                # into resume_text
-    matched: bool                       # False = part of the quote that did NOT match
+    start: int
+    end: int  # into resume_text
+    matched: bool  # False = part of the quote that did NOT match
+
 
 class VerifierView(BaseModel):
     disagrees: bool
@@ -710,8 +750,12 @@ class VerifierView(BaseModel):
     found_evidence: str = ""
     found_highlights: list[HighlightSpan] = []
 
-class CriterionView(BaseModel):         # recruiter / hiring_manager
-    id: str; text: str; weight: int; must_have: bool
+
+class CriterionView(BaseModel):  # recruiter / hiring_manager
+    id: str
+    text: str
+    weight: int
+    must_have: bool
     verdict: Verdict
     evidence: str
     evidence_status: Literal["verified", "partial", "unverified", "not_applicable"]
@@ -719,7 +763,8 @@ class CriterionView(BaseModel):         # recruiter / hiring_manager
     negation_suspected: bool
     verifier: VerifierView | None
 
-class CriterionAuditView(CriterionView):    # auditor only
+
+class CriterionAuditView(CriterionView):  # auditor only
     model_verdict: Verdict
     match_ratio: float
     longest_span: int
@@ -744,9 +789,10 @@ answer the question the number provokes.
 def record_decision(self, candidate_id, decision, reason, actor) -> None:
     with self._uow() as tx:
         old = self._results.get_decision(tx, candidate_id)
-        self._results.set_decision(tx, candidate_id, decision, actor)   # candidates
+        self._results.set_decision(tx, candidate_id, decision, actor)  # candidates
         self._results.append_override(tx, candidate_id, old, decision, reason, actor)
         self._audit.append(tx, actor.id, "decision", "candidate", str(candidate_id))
+
 
 def bulk_decision(self, run_id, ids, decision, reason, actor) -> int: ...
 def export_run(self, run_id, actor) -> bytes: ...
@@ -764,13 +810,16 @@ def save_rubric(self, position_id, criteria, base_version, actor) -> Rubric:
         if c.text != previous(c).text and c.claim == previous(c).claim:
             c.claim_stale = True
 
+
 def approve_rubric(self, rubric_id, actor) -> Rubric:
     if any(c.claim_stale for c in rubric.criteria):
         raise ValidationError("Regenerate claims for edited criteria before approval")
 
+
 def create_run(self, position_id, rubric_id, actor) -> Run:
     n = snapshot_folder(...)
-    status = "empty" if n == 0 else "pending"      # not a blank `completed` screen
+    status = "empty" if n == 0 else "pending"  # not a blank `completed` screen
+
 
 def sign_off_run(self, run_id, actor) -> None:
     pending = count_review_required_undecided(run_id)
@@ -827,8 +876,8 @@ something else. Isolating dialect differences now makes the cutover a config cha
 ```python
 class Dialect(Protocol):
     def claim_job_sql(self, phase: str) -> str: ...
-    def text_type(self) -> str: ...            # TEXT | NVARCHAR(MAX)
-    def bool_type(self) -> str: ...            # INTEGER | BIT
+    def text_type(self) -> str: ...  # TEXT | NVARCHAR(MAX)
+    def bool_type(self) -> str: ...  # INTEGER | BIT
     def append_only_trigger(self, table: str) -> str: ...
 ```
 

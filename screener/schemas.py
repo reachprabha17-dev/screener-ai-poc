@@ -19,9 +19,10 @@ fields — fails silently the first time someone adds a field to `Candidate`.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, field_validator
 
 from screener.core.offsets import translate_block
+from screener.core.resume_paths import is_safe_reference
 from screener.core.verify_evidence import align
 from screener.models import (
     Actor,
@@ -48,6 +49,35 @@ class CreatePositionRequest(BaseModel):
     reference: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=200)
     jd_text: str = Field(min_length=1)
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, v: str) -> str:
+        if not is_safe_reference(v):
+            raise ValueError("must contain only letters, numbers, spaces, hyphens, and underscores")
+        return v
+
+
+class FolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    path: str
+    file_count: int
+    has_subfolders: bool = False
+
+
+class FolderPageResponse(BaseModel):
+    """One page of the folder picker, plus the total it was drawn from.
+
+    `total` is what lets the UI say "16–30 of 214" and disable the last page;
+    without it a client cannot tell a full page from the final one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    folders: list[FolderResponse]
+    total: int
 
 
 class SaveRubricRequest(BaseModel):
@@ -411,8 +441,6 @@ class RunResponse(BaseModel):
     created_by: str
     file_count: int = 0
     escalation_rate: float | None = None
-
-
 
 
 class RunStatusResponse(BaseModel):

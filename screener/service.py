@@ -36,6 +36,7 @@ from typing import cast
 
 from config.settings import settings
 from screener.core.rank import rank
+from screener.core.resume_paths import folder_for, is_safe_reference
 from screener.llm.extract_rubric import extract_rubric as run_extraction
 from screener.llm.judge_resume import judge_prompt_hash
 from screener.logging import failure_paths_for
@@ -45,6 +46,7 @@ from screener.models import (
     Criterion,
     Decision,
     EscalationReason,
+    FolderInfo,
     HealthReport,
     Position,
     RankedResult,
@@ -59,6 +61,7 @@ from screener.storage import (
     jobs_store,
     positions_store,
     results_store,
+    resumes_store,
     rubrics_store,
     runs_store,
 )
@@ -154,6 +157,12 @@ class ScreenerService:
     def create_position(
         self, *, reference: str, title: str, jd_text: str, actor: Actor
     ) -> Position:
+        if not is_safe_reference(reference):
+            raise ServiceError(
+                f"Invalid reference '{reference}': "
+                "letters, numbers, spaces, hyphens, and underscores only"
+            )
+
         position = Position(
             id=f"pos-{uuid.uuid4().hex[:12]}",
             reference=reference,
@@ -173,6 +182,21 @@ class ScreenerService:
     def list_positions(self) -> list[Position]:
         with self.uow_factory() as tx:
             return positions_store.list_open(tx)
+
+    def list_resume_folders(
+        self, subpath: str = "", query: str = "", offset: int = 0, limit: int = 15
+    ) -> tuple[list[FolderInfo], int]:
+        """One page of subfolders of the résumé share, and the total matching.
+
+        Touches no database, so no transaction. `subpath` is validated inside
+        the store; an unsafe or missing path lists as empty rather than raising,
+        because an unmounted share is an ordinary state of this screen.
+
+        Paged because counting a folder's résumés is a recursive walk: a large
+        share on a network mount would otherwise spend seconds per render, and
+        Streamlit renders on every click.
+        """
+        return resumes_store.list_folders(subpath, query, offset, limit)
 
     # --- rubrics -------------------------------------------------------------
 
@@ -305,7 +329,6 @@ class ScreenerService:
     def get_latest_rubric(self, position_id: str) -> Rubric | None:
         """The latest rubric for a position, or None when no rubric exists yet."""
         with self.uow_factory() as tx:
-
             return rubrics_store.latest_for_position(tx, position_id)
 
     def get_approved_rubric(self, position_id: str) -> Rubric | None:
@@ -314,7 +337,6 @@ class ScreenerService:
             return rubrics_store.approved_for_position(tx, position_id)
 
     # --- runs ----------------------------------------------------------------
-
 
     def create_run(self, position_id: str, rubric_id: str, actor: Actor) -> Run:
         """Create a run and **snapshot** the position's folder into jobs.
@@ -350,7 +372,11 @@ class ScreenerService:
             if not rubrics_store.is_approved(tx, rubric_id):
                 raise RubricNotApprovedError(rubric_id)
 
-            folder = Path(settings.resumes_dir) / position.reference
+            try:
+                folder = folder_for(position.reference)
+            except ValueError as err:
+                raise ServiceError(str(err)) from err
+
             runs_store.create(
                 tx,
                 run_id=run_id,
@@ -418,7 +444,6 @@ class ScreenerService:
             return runs_store.list_all(tx)
 
     def start_run(self, run_id: str, actor: Actor) -> int:
-
         """Mark a run ready. **Enqueues only** — the worker executes (15.3).
 
         Screening never runs in a request lifecycle: a 78-minute batch tied to

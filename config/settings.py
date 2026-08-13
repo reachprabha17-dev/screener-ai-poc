@@ -187,6 +187,10 @@ class Settings(BaseSettings):
     # migration is silently skipped rather than failing loudly.
     db_backend: Literal["sqlite", "mssql"] = "sqlite"
     db_path: str = "data/screener.db"
+    # Override per deployment via RESUMES_DIR in `.env` — point it at the mount
+    # when the share is available. **Prefer an absolute path there:** a relative
+    # one resolves against each process's working directory, so `./resumes`
+    # means `<cwd>/resumes`, not "next to the repo".
     resumes_dir: str = "data/resumes"
     quarantine_dir: str = "data/quarantine"
     # 18 — raw model output, captured **only** on a schema failure. Removing

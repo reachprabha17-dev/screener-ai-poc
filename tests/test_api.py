@@ -224,9 +224,6 @@ def test_list_runs_route(client: TestClient) -> None:
     assert "escalation_rate" in target
 
 
-
-
-
 def test_a_run_against_an_unapproved_rubric_is_409(client: TestClient) -> None:
     """Well-formed request, forbidden state — not a 400."""
     position_id = make_position(client)
@@ -263,15 +260,164 @@ def test_malformed_input_is_rejected_by_the_schema(client: TestClient) -> None:
         client.post("/positions", json={"reference": "", "title": "t", "jd_text": "j"}).status_code
         == 422
     )
+    assert (
+        client.post(
+            "/positions", json={"reference": "../../etc", "title": "t", "jd_text": "j"}
+        ).status_code
+        == 422
+    )
     assert client.post("/positions", json={"reference": "r", "title": "t"}).status_code == 422
     # extra="forbid" — an unexpected field is a caller bug worth surfacing.
     assert (
         client.post(
             "/positions",
-            json={"reference": "r", "title": "t", "jd_text": "j", "surprise": 1},
+            json={"reference": "r", "title": "t", "jd_text": "j", "extra": "x"},
         ).status_code
         == 422
     )
+
+
+def test_list_resume_folders_route(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resumes_dir = tmp_path / "resumes"
+    resumes_dir.mkdir()
+    (resumes_dir / "folder_a").mkdir()
+    (resumes_dir / "folder_a" / "cv1.pdf").write_bytes(b"%PDF-1.4 test")
+    (resumes_dir / "folder_a" / "cv2.pdf").write_bytes(b"%PDF-1.4 test")
+    (resumes_dir / "folder_b").mkdir()
+
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    res = client.get("/positions/folders")
+    assert res.status_code == 200
+    data = res.json()["folders"]
+    assert len(data) == 2
+    assert data[0] == {
+        "name": "folder_a",
+        "path": "folder_a",
+        "file_count": 2,
+        "has_subfolders": False,
+    }
+    assert data[1] == {
+        "name": "folder_b",
+        "path": "folder_b",
+        "file_count": 0,
+        "has_subfolders": False,
+    }
+
+
+def test_list_resume_folders_route_nonexistent_dir(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "nonexistent"))
+    res = client.get("/positions/folders")
+    assert res.status_code == 200
+    assert res.json() == {"folders": [], "total": 0}
+
+
+def test_the_folder_browser_descends_one_level_at_a_time(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`?path=` walks the share so a nested folder can be reached and screened."""
+    resumes_dir = tmp_path / "resumes"
+    nested = resumes_dir / "2026" / "engineering"
+    nested.mkdir(parents=True)
+    (nested / "cv.pdf").write_bytes(b"%PDF-1.4 test")
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    top = client.get("/positions/folders").json()["folders"]
+    assert top == [
+        {"name": "2026", "path": "2026", "file_count": 1, "has_subfolders": True},
+    ]
+
+    inner = client.get("/positions/folders", params={"path": "2026"}).json()["folders"]
+    assert inner == [
+        {
+            "name": "engineering",
+            "path": "2026/engineering",
+            "file_count": 1,
+            "has_subfolders": False,
+        },
+    ]
+
+    # And the nested path is accepted as a reference, so the browse result is usable.
+    created = client.post(
+        "/positions",
+        json={"reference": "2026/engineering", "title": "t", "jd_text": "j"},
+    )
+    assert created.status_code == 201
+
+
+def test_the_folder_browser_pages_and_filters_a_large_share(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A share with hundreds of folders must not render as one flat list.
+
+    Counting a folder's résumés is a recursive walk, so an unpaged listing costs
+    thousands of filesystem operations per render — seconds on a network mount,
+    repeated on every Streamlit interaction.
+    """
+    resumes_dir = tmp_path / "resumes"
+    for i in range(40):
+        team = "engineering" if i % 2 else "finance"
+        (resumes_dir / f"req-{i:03d}-{team}").mkdir(parents=True)
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    first = client.get("/positions/folders", params={"limit": 15}).json()
+    assert first["total"] == 40
+    assert len(first["folders"]) == 15
+    assert first["folders"][0]["name"] == "req-000-finance"
+
+    second = client.get("/positions/folders", params={"limit": 15, "offset": 15}).json()
+    assert second["total"] == 40
+    assert [f["name"] for f in second["folders"]] != [f["name"] for f in first["folders"]]
+
+    # The tail page is short, and `total` is what tells a client it is the last.
+    last = client.get("/positions/folders", params={"limit": 15, "offset": 30}).json()
+    assert len(last["folders"]) == 10
+
+    # Filtering narrows `total`, not just the page — otherwise paging is wrong.
+    filtered = client.get("/positions/folders", params={"q": "engineering"}).json()
+    assert filtered["total"] == 20
+    assert all("engineering" in f["name"] for f in filtered["folders"])
+
+    # Case-insensitive, because a recruiter typing a folder name will not match case.
+    assert client.get("/positions/folders", params={"q": "ENGINEERING"}).json()["total"] == 20
+
+
+def test_the_folder_browser_caps_the_page_size(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller cannot ask for the whole share and reintroduce the cost."""
+    resumes_dir = tmp_path / "resumes"
+    for i in range(120):
+        (resumes_dir / f"req-{i:03d}").mkdir(parents=True)
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    page = client.get("/positions/folders", params={"limit": 10_000}).json()
+    assert page["total"] == 120
+    assert len(page["folders"]) == 100
+
+
+def test_the_folder_browser_refuses_to_leave_the_share(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The picker constrains choices; the API accepts whatever is posted to it.
+
+    A traversal must list as empty rather than exposing the host filesystem to
+    anything that can reach the port.
+    """
+    resumes_dir = tmp_path / "resumes"
+    (resumes_dir / "real").mkdir(parents=True)
+    (tmp_path / "secret").mkdir()
+    (tmp_path / "secret" / "private.pdf").write_bytes(b"%PDF-1.4 secret")
+    monkeypatch.setattr(settings, "resumes_dir", str(resumes_dir))
+
+    for attempt in ["../secret", "..", "/etc", "real/../../secret", "..\\secret"]:
+        res = client.get("/positions/folders", params={"path": attempt})
+        assert res.status_code == 200, attempt
+        assert res.json() == {"folders": [], "total": 0}, attempt
 
 
 # --- gate: model_verdict never leaves the building (15.4) -------------------

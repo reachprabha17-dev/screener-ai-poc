@@ -136,6 +136,15 @@ def _eligible_files(folder: Path) -> list[Path]:
 
     Paths that resolve outside the folder are dropped rather than queued: a
     symlinked directory could otherwise pull an unrelated tree into a run.
+
+    **Dot-prefixed files are skipped, extension notwithstanding.** macOS writes
+    an AppleDouble sidecar (`._alice.pdf`) beside every file it copies onto an
+    SMB or NFS share, and those carry the `.pdf` suffix that would otherwise
+    admit them. They are not résumés: `validate_file` rejects them on magic
+    bytes and each one becomes an unscoreable candidate a human has to clear.
+    On a share written to from a Mac that doubles the review queue with junk.
+    `resumes_store.list_folders` applies the same rule, so the count shown when
+    a folder is picked is the count that gets queued.
     """
     if not folder.is_dir():
         return []
@@ -146,6 +155,8 @@ def _eligible_files(folder: Path) -> list[Path]:
 
     for path in sorted(folder.rglob("*")):
         if path.is_symlink() or not path.is_file():
+            continue
+        if path.name.startswith("."):
             continue
         if path.suffix.casefold() not in allowed:
             continue

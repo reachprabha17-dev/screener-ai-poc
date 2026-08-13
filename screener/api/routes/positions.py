@@ -8,10 +8,11 @@ something slower than the sync version while looking more sophisticated (15.3).
 
 from fastapi import APIRouter, Depends
 
-from screener.api.deps import get_actor, get_service, to_position, to_rubric
+from screener.api.deps import get_actor, get_service, to_folder, to_position, to_rubric
 from screener.models import Actor
 from screener.schemas import (
     CreatePositionRequest,
+    FolderPageResponse,
     PositionResponse,
     RubricResponse,
     SaveRubricRequest,
@@ -38,6 +39,29 @@ def list_positions(
     service: ScreenerService = Depends(get_service),
 ) -> list[PositionResponse]:
     return [to_position(p) for p in service.list_positions()]
+
+
+@router.get("/positions/folders", response_model=FolderPageResponse)
+def list_resume_folders(
+    path: str = "",
+    q: str = "",
+    offset: int = 0,
+    limit: int = 15,
+    service: ScreenerService = Depends(get_service),
+) -> FolderPageResponse:
+    """One page of subfolders of `path` on the résumé share, for the picker.
+
+    Paged and filtered server-side: counting a folder's résumés is a recursive
+    walk, so an unbounded listing costs thousands of filesystem operations on a
+    large share — seconds per render over a network mount, repeated on every
+    Streamlit interaction.
+
+    Declared above the `/positions/{position_id}` routes so the literal segment
+    is matched first — a parameterised route added later would otherwise read
+    "folders" as an id and shadow this silently.
+    """
+    folders, total = service.list_resume_folders(path, q, offset, min(limit, 100))
+    return FolderPageResponse(folders=[to_folder(f) for f in folders], total=total)
 
 
 @router.post("/positions/{position_id}/rubric/extract", response_model=RubricResponse)
@@ -86,4 +110,3 @@ def get_approved_rubric(
 ) -> RubricResponse | None:
     rubric = service.get_approved_rubric(position_id)
     return to_rubric(rubric) if rubric else None
-

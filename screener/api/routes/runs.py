@@ -44,7 +44,6 @@ def list_runs(
     return [to_run(r) for r in service.list_runs()]
 
 
-
 @router.post("/runs/{run_id}/start", response_model=CountResponse)
 def start_run(
     run_id: str,

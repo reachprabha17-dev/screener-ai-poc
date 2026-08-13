@@ -82,7 +82,6 @@ def approved_for_position(tx: Tx, position_id: str) -> Rubric | None:
     return _to_rubric(row) if row else None
 
 
-
 def approve(tx: Tx, rubric_id: str, actor: Actor) -> None:
     tx.execute(
         "UPDATE rubrics SET approved_by = ?, approved_at = ? WHERE id = ?",

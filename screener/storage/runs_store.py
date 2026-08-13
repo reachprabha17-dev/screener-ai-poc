@@ -159,7 +159,4 @@ def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
         created_at=row["created_at"],
         created_by=row["created_by"],
         reproducibility_rate=row["reproducibility_rate"],
-
-
     )
-

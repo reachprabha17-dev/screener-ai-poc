@@ -263,80 +263,91 @@ from enum import StrEnum
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
-Verdict  = Literal["strong", "partial", "none"]
-Band     = Literal["A", "B", "C", "D"]
-Support  = Literal["supported", "insufficient", "contradicted"]
+Verdict = Literal["strong", "partial", "none"]
+Band = Literal["A", "B", "C", "D"]
+Support = Literal["supported", "insufficient", "contradicted"]
 Decision = Literal["undecided", "advance", "hold", "reject"]
+
 
 class Flag(StrEnum):
     # deterministic — cacheable (§12.9)
-    INPUT_REJECTED        = "INPUT_REJECTED"
-    EXTRACTION_FAILED     = "EXTRACTION_FAILED"
-    BUDGET_EXCEEDED       = "BUDGET_EXCEEDED"
-    SUSPECTED_INJECTION   = "SUSPECTED_INJECTION"
-    SANITIZED_TEXT        = "SANITIZED_TEXT"
-    EVIDENCE_UNVERIFIED   = "EVIDENCE_UNVERIFIED"   # difflib failed → review
-    EVIDENCE_CONTRADICTS  = "EVIDENCE_CONTRADICTS"  # self-contradiction → forced none
-    NEGATION_SUSPECTED    = "NEGATION_SUSPECTED"    # §10.5 C
-    JUDGE_DISAGREES       = "JUDGE_DISAGREES"       # §10.6 A
-    UNVERIFIED_ABSENCE    = "UNVERIFIED_ABSENCE"    # §10.6 B
-    VERDICT_SET_MISMATCH  = "VERDICT_SET_MISMATCH"
-    FREETEXT_SCREENED     = "FREETEXT_SCREENED"
-    MISSING_MUST_HAVE     = "MISSING_MUST_HAVE"
-    POSSIBLE_DUPLICATE    = "POSSIBLE_DUPLICATE"
+    INPUT_REJECTED = "INPUT_REJECTED"
+    EXTRACTION_FAILED = "EXTRACTION_FAILED"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    SUSPECTED_INJECTION = "SUSPECTED_INJECTION"
+    SANITIZED_TEXT = "SANITIZED_TEXT"
+    EVIDENCE_UNVERIFIED = "EVIDENCE_UNVERIFIED"  # difflib failed → review
+    EVIDENCE_CONTRADICTS = "EVIDENCE_CONTRADICTS"  # self-contradiction → forced none
+    NEGATION_SUSPECTED = "NEGATION_SUSPECTED"  # §10.5 C
+    JUDGE_DISAGREES = "JUDGE_DISAGREES"  # §10.6 A
+    UNVERIFIED_ABSENCE = "UNVERIFIED_ABSENCE"  # §10.6 B
+    VERDICT_SET_MISMATCH = "VERDICT_SET_MISMATCH"
+    FREETEXT_SCREENED = "FREETEXT_SCREENED"
+    MISSING_MUST_HAVE = "MISSING_MUST_HAVE"
+    POSSIBLE_DUPLICATE = "POSSIBLE_DUPLICATE"
     # transient — NEVER cached
-    LLM_ERROR             = "LLM_ERROR"
-    SCHEMA_INVALID        = "SCHEMA_INVALID"
-    PARSER_TIMEOUT        = "PARSER_TIMEOUT"
-    PARSER_CRASHED        = "PARSER_CRASHED"
+    LLM_ERROR = "LLM_ERROR"
+    SCHEMA_INVALID = "SCHEMA_INVALID"
+    PARSER_TIMEOUT = "PARSER_TIMEOUT"
+    PARSER_CRASHED = "PARSER_CRASHED"
 
-TRANSIENT_FLAGS: frozenset[Flag] = frozenset({
-    Flag.LLM_ERROR, Flag.SCHEMA_INVALID, Flag.PARSER_TIMEOUT, Flag.PARSER_CRASHED})
+
+TRANSIENT_FLAGS: frozenset[Flag] = frozenset(
+    {Flag.LLM_ERROR, Flag.SCHEMA_INVALID, Flag.PARSER_TIMEOUT, Flag.PARSER_CRASHED}
+)
+
 
 class EscalationReason(StrEnum):
     """Groups review_required candidates so a queue of 23 is workable (§15.4)."""
+
     UNVERIFIED_EVIDENCE = "UNVERIFIED_EVIDENCE"
-    JUDGE_DISAGREEMENT  = "JUDGE_DISAGREEMENT"
-    ABSENCE_FOUND       = "ABSENCE_FOUND"
-    NEGATION            = "NEGATION"
-    PARTIAL_MUST_HAVE   = "PARTIAL_MUST_HAVE"
-    UNPROCESSABLE       = "UNPROCESSABLE"        # parse/budget/schema failures
+    JUDGE_DISAGREEMENT = "JUDGE_DISAGREEMENT"
+    ABSENCE_FOUND = "ABSENCE_FOUND"
+    NEGATION = "NEGATION"
+    PARTIAL_MUST_HAVE = "PARTIAL_MUST_HAVE"
+    UNPROCESSABLE = "UNPROCESSABLE"  # parse/budget/schema failures
     SUSPECTED_INJECTION = "SUSPECTED_INJECTION"
+
 
 class RedFlag(StrEnum):
     """Closed set. Free-text red flags are a fairness hazard: models reliably emit
     'employment gap' and 'frequent job changes' — proxies for parental leave and
     disability. Only rubric-anchored, job-relevant flags exist."""
+
     CRITERION_CONTRADICTION = "CRITERION_CONTRADICTION"
-    UNVERIFIABLE_CLAIM      = "UNVERIFIABLE_CLAIM"
-    INSTRUCTION_LIKE_TEXT   = "INSTRUCTION_LIKE_TEXT"
-    ILLEGIBLE_SECTION       = "ILLEGIBLE_SECTION"
+    UNVERIFIABLE_CLAIM = "UNVERIFIABLE_CLAIM"
+    INSTRUCTION_LIKE_TEXT = "INSTRUCTION_LIKE_TEXT"
+    ILLEGIBLE_SECTION = "ILLEGIBLE_SECTION"
+
 
 class Actor(BaseModel):
     model_config = ConfigDict(frozen=True)
     id: str
     display_name: str = ""
-    roles: frozenset[str] = frozenset()      # recruiter | hiring_manager | auditor | admin
+    roles: frozenset[str] = frozenset()  # recruiter | hiring_manager | auditor | admin
+
 
 # --- Position / Rubric ----------------------------------------------------
 class Criterion(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    id: str                       # "C1".. assigned by Python, never by the model
+    id: str  # "C1".. assigned by Python, never by the model
     text: str
-    claim: str                    # criterion restated as an assertion, consumed by §10.6
-    claim_stale: bool = False     # set when text is edited without regenerating claim
+    claim: str  # criterion restated as an assertion, consumed by §10.6
+    claim_stale: bool = False  # set when text is edited without regenerating claim
     must_have: bool = False
     weight: int = Field(default=1, ge=1, le=5)
+
 
 class Rubric(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     position_id: str
-    version: int                  # optimistic locking, §14
+    version: int  # optimistic locking, §14
     criteria: list[Criterion] = Field(min_length=4, max_length=12)
     created_by: str
     approved_by: str | None = None
     approved_at: datetime | None = None
+
 
 # --- Intake ---------------------------------------------------------------
 class ParsedResume(BaseModel):
@@ -348,11 +359,16 @@ class ParsedResume(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     parser_version: str
 
+
 class Span(BaseModel):
     """One preserved segment, in both coordinate systems (§12.6)."""
+
     model_config = ConfigDict(extra="forbid")
-    src_start: int; src_end: int      # into resume_text
-    dst_start: int; dst_end: int      # into sent_text
+    src_start: int
+    src_end: int  # into resume_text
+    dst_start: int
+    dst_end: int  # into sent_text
+
 
 # --- Phase 1: judge (granite4.1:8b) --------------------------------------
 class CriterionVerdict(BaseModel):
@@ -362,46 +378,56 @@ class CriterionVerdict(BaseModel):
     evidence: str = Field(max_length=300)
     # Cap matters: §10.5's coverage ratio is meaningless against unbounded evidence.
 
+
 class JudgeOutput(BaseModel):
     """No field for sentiment, personality, or demographics. Schema omission alone
     is NOT sufficient — see §10.8."""
+
     model_config = ConfigDict(extra="forbid")
     criteria: list[CriterionVerdict]
     notable_strengths: list[str] = Field(default_factory=list, max_length=5)
     red_flags: list[RedFlag] = Field(default_factory=list)
     summary: str = Field(default="", max_length=600)
 
+
 # --- Phase 2: verify (gemma4:12b) ----------------------------------------
 class SupportCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     support: Support
-    suggested_verdict: Verdict          # what WOULD be supported — always stated
+    suggested_verdict: Verdict  # what WOULD be supported — always stated
     rationale: str = Field(max_length=200)
+
 
 class AbsenceCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     confirmed_absent: bool
-    found_evidence: str = Field(default="", max_length=300)   # required if not absent
+    found_evidence: str = Field(default="", max_length=300)  # required if not absent
+
 
 class VerifyOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     support_checks: list[SupportCheck] = Field(default_factory=list)
     absence_checks: list[AbsenceCheck] = Field(default_factory=list)
 
+
 # --- Results --------------------------------------------------------------
 class MatchBlock(BaseModel):
     """Character offsets. `doc_*` are into sent_text; §12.6 translates to resume_text."""
+
     model_config = ConfigDict(extra="forbid")
-    ev_start: int; ev_end: int
-    doc_start: int; doc_end: int
+    ev_start: int
+    ev_end: int
+    doc_start: int
+    doc_end: int
+
 
 class ScoredCriterion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    verdict: Verdict              # post-verification (§10.5 A may rewrite)
-    model_verdict: Verdict        # what the judge said — audit only
+    verdict: Verdict  # post-verification (§10.5 A may rewrite)
+    model_verdict: Verdict  # what the judge said — audit only
     evidence: str
     verified: bool
     match_ratio: float
@@ -417,16 +443,17 @@ class ScoredCriterion(BaseModel):
     weight: int
     must_have: bool
 
+
 class Candidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: int | None = None
     run_id: str
-    filename: str                 # NOTE: usually contains the person's name (§12.10)
+    filename: str  # NOTE: usually contains the person's name (§12.10)
     file_sha256: str
-    resume_text: str = ""         # sanitized, names intact — what HR reads (§12.6)
-    sent_text: str = ""           # + redacted — what the model saw
+    resume_text: str = ""  # sanitized, names intact — what HR reads (§12.6)
+    sent_text: str = ""  # + redacted — what the model saw
     redaction_map: list[Span] = Field(default_factory=list)
-    score: float | None           # None when not scoreable — never 0.0
+    score: float | None  # None when not scoreable — never 0.0
     band: Band | None
     must_haves_met: bool
     criteria: list[ScoredCriterion]
@@ -447,6 +474,7 @@ class Candidate(BaseModel):
     @property
     def cacheable(self) -> bool:
         return not (set(self.flags) & TRANSIENT_FLAGS)
+
 
 class RankedResult(BaseModel):
     meets_must_haves: list[Candidate]
@@ -469,7 +497,7 @@ types — MS SQL's `DATETIME2` drops the offset.
 class CacheKey(BaseModel):
     model_config = ConfigDict(frozen=True)
     file_sha256: str
-    position_id: str            # scoped per position — no cross-requisition leakage
+    position_id: str  # scoped per position — no cross-requisition leakage
     rubric_hash: str
     judge_digest: str
     verifier_digest: str
@@ -478,29 +506,36 @@ class CacheKey(BaseModel):
     num_ctx: int
     app_version: str
 
+
 class LLMClient(Protocol):
-    def chat_json(self, model: str, system: str, user: str,
-                  schema: dict[str, Any]) -> dict[str, Any]: ...
+    def chat_json(
+        self, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]: ...
     def count_tokens(self, model: str, text: str) -> int: ...
-    def load(self, model: str) -> None: ...      # phase switch, §17.4
+    def load(self, model: str) -> None: ...  # phase switch, §17.4
     def unload(self, model: str) -> None: ...
     def health(self) -> bool: ...
     def digest(self, model: str) -> str: ...
 
+
 class ResumeParser(Protocol):
-    def parse(self, path: Path) -> ParsedResume: ...      # sandboxed, §8
+    def parse(self, path: Path) -> ParsedResume: ...  # sandboxed, §8
+
 
 class UnitOfWork(Protocol):
     def __enter__(self) -> "Tx": ...
-    def __exit__(self, *exc: object) -> None: ...          # commit or rollback
+    def __exit__(self, *exc: object) -> None: ...  # commit or rollback
+
 
 class ResultsStore(Protocol):
     def get_cached(self, tx: Tx, key: CacheKey) -> Candidate | None: ...
     def save(self, tx: Tx, run_id: str, candidate: Candidate) -> int: ...
     def save_verification(self, tx: Tx, candidate_id: int, out: VerifyOutput) -> None: ...
-    def set_decision(self, tx: Tx, candidate_id: int, decision: Decision,
-                     reason: str, actor: Actor) -> None: ...
+    def set_decision(
+        self, tx: Tx, candidate_id: int, decision: Decision, reason: str, actor: Actor
+    ) -> None: ...
     def purge_candidate(self, tx: Tx, file_sha256: str) -> None: ...
+
 
 class JobQueue(Protocol):
     def snapshot_folder(self, tx: Tx, run_id: str, folder: Path) -> int: ...
@@ -525,9 +560,9 @@ class Settings(BaseSettings):
     verifier_model: str = "gemma4:12b"
     judge_digest_pin: str | None = None
     verifier_digest_pin: str | None = None
-    num_ctx: int = 8192                     # NEVER rely on Ollama's 4096 default
+    num_ctx: int = 8192  # NEVER rely on Ollama's 4096 default
     num_predict: int = 1536
-    verifier_num_ctx: int = 16384           # §10.6 B sends the full resume
+    verifier_num_ctx: int = 16384  # §10.6 B sends the full resume
     temperature: float = 0.0
     top_k: int = 1
     seed: int = 42
@@ -558,24 +593,24 @@ class Settings(BaseSettings):
     # Safety / fairness
     redact_pii: bool = True
     injection_detection: bool = True
-    evidence_match_ratio: float = 0.60      # §10.5 B — AND
-    evidence_match_min_chars: int = 25      # AND
-    evidence_min_block_tokens: int = 3      # AND. Do not set to 1.
-    negation_window_tokens: int = 6         # §10.5 C
+    evidence_match_ratio: float = 0.60  # §10.5 B — AND
+    evidence_match_min_chars: int = 25  # AND
+    evidence_min_block_tokens: int = 3  # AND. Do not set to 1.
+    negation_window_tokens: int = 6  # §10.5 C
     freetext_screen: bool = True
     escalation_budget: float | None = None  # §19.2 — set from the first real run
-    escalation_budget_source_run: str | None = None   # forces the decision to be recorded
+    escalation_budget_source_run: str | None = None  # forces the decision to be recorded
 
     # Ranking
     band_thresholds: tuple[float, float, float] = (7.5, 5.5, 3.5)
 
     # Review / UI
     bulk_decision_enabled: bool = True
-    bulk_excludes_review_required: bool = True   # §15.5 — do not disable
-    capture_raw_on_failure: bool = True          # §18
+    bulk_excludes_review_required: bool = True  # §15.5 — do not disable
+    capture_raw_on_failure: bool = True  # §18
 
     # API
-    api_host: str = "127.0.0.1"             # loopback: no external listener pre-auth
+    api_host: str = "127.0.0.1"  # loopback: no external listener pre-auth
     api_port: int = 8000
     auth_mode: Literal["stub", "ldap", "local"] = "stub"
     dev_actor_id: str = "poc-operator"
@@ -677,15 +712,30 @@ Applied **before** injection detection, redaction, budgeting and evidence matchi
 anything is stored or displayed.
 
 ```python
-BIDI = {"\u202a","\u202b","\u202c","\u202d","\u202e",
-        "\u2066","\u2067","\u2068","\u2069","\u200e","\u200f"}
+BIDI = {
+    "\u202a",
+    "\u202b",
+    "\u202c",
+    "\u202d",
+    "\u202e",
+    "\u2066",
+    "\u2067",
+    "\u2068",
+    "\u2069",
+    "\u200e",
+    "\u200f",
+}
+
 
 def sanitize(raw: str) -> tuple[str, int]:
     text = unicodedata.normalize("NFKC", raw)
-    out = [ch for ch in text
-           if ch not in BIDI
-           and unicodedata.category(ch) not in {"Cf", "Co", "Cs"}
-           and (ch in "\n\t" or unicodedata.category(ch) != "Cc")]
+    out = [
+        ch
+        for ch in text
+        if ch not in BIDI
+        and unicodedata.category(ch) not in {"Cf", "Co", "Cs"}
+        and (ch in "\n\t" or unicodedata.category(ch) != "Cc")
+    ]
     cleaned = "".join(out)
     return cleaned, len(text) - len(cleaned)
 ```
@@ -777,9 +827,10 @@ judged.**
 ```python
 def count_tokens(self, model: str, text: str) -> int:
     if settings.exact_token_count:
-        r = self._client.generate(model=model, prompt=text,
-                                  options={"num_predict": 0, "num_ctx": settings.num_ctx})
-        return r["prompt_eval_count"]          # exact, from the weights doing the judging
+        r = self._client.generate(
+            model=model, prompt=text, options={"num_predict": 0, "num_ctx": settings.num_ctx}
+        )
+        return r["prompt_eval_count"]  # exact, from the weights doing the judging
     return int(len(text) / 3.5 * settings.token_estimate_safety_margin)
 ```
 
@@ -840,13 +891,13 @@ simultaneously stated there is none.
 3. Align, **summing filtered blocks**:
 
 ```python
-MIN_BLOCK = settings.evidence_min_block_tokens          # 3
+MIN_BLOCK = settings.evidence_min_block_tokens  # 3
 m = difflib.SequenceMatcher(None, ev_tokens, doc_tokens, autojunk=False)
-blocks       = [b for b in m.get_matching_blocks() if b.size >= MIN_BLOCK]
-matched      = sum(b.size for b in blocks)
-match_ratio  = matched / len(ev_tokens)
+blocks = [b for b in m.get_matching_blocks() if b.size >= MIN_BLOCK]
+matched = sum(b.size for b in blocks)
+match_ratio = matched / len(ev_tokens)
 longest_span = max((b.size for b in blocks), default=0)
-match_blocks = [to_char_offsets(b) for b in blocks]     # persisted, §12.6
+match_blocks = [to_char_offsets(b) for b in blocks]  # persisted, §12.6
 ```
 
 > **The `MIN_BLOCK` filter is load-bearing. Do not remove it as a simplification.**
@@ -981,11 +1032,20 @@ That is why the band gate stays absolute while the phase-2 gate is looser.
 ## 11. LLM client
 
 ```python
-schema = JudgeOutput.model_json_schema()          # $defs/$ref supported
-r = client.chat(model=settings.judge_model, messages=[...], format=schema,
-                options={"temperature": 0, "top_k": 1, "seed": settings.seed,
-                         "num_ctx": settings.num_ctx, "num_predict": settings.num_predict},
-                keep_alive=settings.keep_alive)
+schema = JudgeOutput.model_json_schema()  # $defs/$ref supported
+r = client.chat(
+    model=settings.judge_model,
+    messages=[...],
+    format=schema,
+    options={
+        "temperature": 0,
+        "top_k": 1,
+        "seed": settings.seed,
+        "num_ctx": settings.num_ctx,
+        "num_predict": settings.num_predict,
+    },
+    keep_alive=settings.keep_alive,
+)
 out = JudgeOutput.model_validate_json(r["message"]["content"])
 ```
 
@@ -1057,8 +1117,10 @@ pending** — a schema/code mismatch on a candidate database is a data integrity
 
 ```python
 def record_decision(self, candidate_id, decision, reason, actor) -> None:
-    with self._uow() as tx:                        # one transaction
-        self._results.set_decision(tx, candidate_id, decision, reason, actor)  # candidates + overrides
+    with self._uow() as tx:  # one transaction
+        self._results.set_decision(
+            tx, candidate_id, decision, reason, actor
+        )  # candidates + overrides
         self._audit.append(tx, actor.id, "decision", "candidate", str(candidate_id))
 ```
 
@@ -1371,23 +1433,28 @@ Requests reuse domain models; **reads use explicit `response_model` types** so i
 by accident.
 
 ```python
-class CriterionView(BaseModel):        # recruiter / hiring_manager
-    id: str; text: str; weight: int; must_have: bool
+class CriterionView(BaseModel):  # recruiter / hiring_manager
+    id: str
+    text: str
+    weight: int
+    must_have: bool
     verdict: Verdict
     evidence: str
     evidence_status: Literal["verified", "partial", "unverified", "not_applicable"]
-    highlights: list[HighlightSpan]    # offsets into resume_text, §15.3
+    highlights: list[HighlightSpan]  # offsets into resume_text, §15.3
     negation_suspected: bool
-    verifier: VerifierView | None      # present only on disagreement
+    verifier: VerifierView | None  # present only on disagreement
+
 
 class VerifierView(BaseModel):
     disagrees: bool
     suggested_verdict: Verdict
     rationale: str
-    found_evidence: str = ""           # absence check
+    found_evidence: str = ""  # absence check
     found_highlights: list[HighlightSpan] = []
 
-class CriterionAuditView(CriterionView):   # auditor only
+
+class CriterionAuditView(CriterionView):  # auditor only
     model_verdict: Verdict
     match_ratio: float
     longest_span: int
@@ -1529,7 +1596,7 @@ Progress is **polling**. A multi-hour job updating every ~5 s does not justify W
 def get_actor(x_actor: str | None = Header(default=None)) -> Actor:
     if settings.auth_mode == "stub":
         return Actor(id=settings.dev_actor_id, roles=frozenset({"admin", "auditor"}))
-    raise NotImplementedError        # LDAP / argon2 lands here — one function
+    raise NotImplementedError  # LDAP / argon2 lands here — one function
 ```
 
 Every mutating route takes `actor: Actor = Depends(get_actor)`. **Threading `actor` through every
@@ -1549,14 +1616,16 @@ business rule must be exercisable without an HTTP client.
 
 ```python
 def main() -> None:
-    reclaim_orphaned(worker_id)              # §17.5 — I crashed last time
+    reclaim_orphaned(worker_id)  # §17.5 — I crashed last time
     while not stopping:
         run, phase = next_active_phase()
         model = judge_model if phase == "judge" else verifier_model
-        ensure_loaded(model)                 # §17.4
+        ensure_loaded(model)  # §17.4
         job = claim_next(worker_id, phase)
         if job is None:
-            advance_phase_if_complete(run); sleep(poll); continue
+            advance_phase_if_complete(run)
+            sleep(poll)
+            continue
         process(job, phase)
 ```
 

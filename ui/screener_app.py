@@ -47,6 +47,9 @@ from api_client import ApiClient, ApiError  # noqa: E402
 # not need a restart to follow it.
 DEFAULT_API = os.environ.get("SCREENER_API_URL", "http://127.0.0.1:8000")
 ESCALATION_BUDGET = 0.03
+# Folders per page in the picker. Bounds the recursive résumé counts to this
+# many per render — the cost that makes an unpaged listing unusable on a share.
+PAGE_SIZE = 15
 
 BAND_HELP = {
     "A": "Strong match against the rubric",
@@ -111,12 +114,9 @@ def call(fn: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         return None
 
 
-
-
 def sidebar() -> None:
     st.sidebar.title("Enterprise Talent Screener")
     st.sidebar.caption("ETS · On-premise. No candidate data leaves this host.")
-
 
     if "pending_run_id" in st.session_state:
         st.session_state["run_id"] = st.session_state.pop("pending_run_id")
@@ -136,7 +136,6 @@ def sidebar() -> None:
     # in the sidebar is also the truer model: it is the context every tab is
     # working within, not a field belonging to any one of them.
     st.sidebar.text_input("Run id", key="run_id")
-
 
     health = None
     try:
@@ -165,22 +164,143 @@ def sidebar() -> None:
 # --- positions and rubrics ---------------------------------------------------
 
 
+def folder_browser(client: ApiClient) -> str:
+    """Navigate the résumé share and return the selected folder, or "".
+
+    **The server's filesystem, not the reviewer's.** The share is mounted on the
+    Screener host, so browsing here is browsing the share. A browser cannot hand
+    a server a path from the machine it is running on — that is why this is a
+    server-side navigator rather than a native folder dialog.
+
+    Paths are relative to `settings.resumes_dir` throughout; the reviewer never
+    sees or types an absolute path, and `folder_for` re-checks containment on
+    every use regardless of what this widget produced.
+    """
+    st.markdown("**Résumé folder**")
+
+    path = st.session_state.get("browse_path", "")
+    query = st.session_state.get("browse_query", "")
+    offset = st.session_state.get("browse_offset", 0)
+
+    page = call(client.list_resume_folders, path, query, offset, PAGE_SIZE) or {}
+    folders = page.get("folders", [])
+    total = page.get("total", 0)
+
+    crumbs, refresh = st.columns([5, 1])
+    crumbs.caption(f"📁 `{path or 'share root'}`")
+    if refresh.button("↻", help="Re-read the share — use after adding a folder"):
+        st.rerun()
+
+    # Filtering server-side, because the cost being avoided is server-side: only
+    # the folders on the visible page get their résumés counted.
+    typed = st.text_input(
+        "Search folders",
+        value=query,
+        key="browse-query-input",
+        placeholder="Type to narrow the list…",
+        label_visibility="collapsed",
+    )
+    if typed != query:
+        st.session_state["browse_query"] = typed
+        st.session_state["browse_offset"] = 0
+        st.rerun()
+
+    if path:
+        # Selecting where you *are*, not only what is below it. Without this the
+        # share root has to be the parent of every requisition folder, and a
+        # `RESUMES_DIR` pointing straight at a folder of CVs offers nothing to
+        # pick — the folder is visible, browsable, and unselectable.
+        up_col, here_col = st.columns(2)
+        if up_col.button("⬆ Up one level", key="browse-up", use_container_width=True):
+            st.session_state["browse_path"] = path.rpartition("/")[0]
+            st.rerun()
+        if here_col.button(
+            "✓ Use this folder",
+            key="browse-pick-here",
+            use_container_width=True,
+            help=f"Screen the CVs directly inside {path}",
+        ):
+            st.session_state["picked_folder"] = path
+            st.rerun()
+
+    if not folders:
+        if query:
+            st.caption(f"No folders matching “{query}”.")
+        elif path:
+            st.caption("No subfolders here — use **✓ Use this folder** to screen this one.")
+        else:
+            st.warning(
+                "Nothing found on the résumé share. Either it holds no folders yet, or "
+                "`RESUMES_DIR` is not pointing where you think — it is currently a folder "
+                "the server can see but which is empty. Add a folder of CVs inside it, "
+                "then use ↻ to re-read."
+            )
+    else:
+        for folder in folders:
+            open_col, label_col = st.columns([1, 5])
+            if folder["has_subfolders"]:
+                if open_col.button("📂", key=f"open-{folder['path']}", help="Open this folder"):
+                    st.session_state["browse_path"] = folder["path"]
+                    st.session_state["browse_offset"] = 0
+                    st.rerun()
+            else:
+                open_col.write("📁")
+            if label_col.button(
+                f"{folder['name']} — {folder['file_count']} CV(s)",
+                key=f"pick-{folder['path']}",
+                use_container_width=True,
+            ):
+                st.session_state["browse_path"] = folder["path"]
+                st.session_state["browse_offset"] = 0
+                st.session_state["picked_folder"] = folder["path"]
+                st.rerun()
+
+        if total > PAGE_SIZE:
+            prev_col, count_col, next_col = st.columns([1, 3, 1])
+            if prev_col.button("‹ Prev", disabled=offset == 0, use_container_width=True):
+                st.session_state["browse_offset"] = max(0, offset - PAGE_SIZE)
+                st.rerun()
+            count_col.caption(
+                f"<div style='text-align:center'>{offset + 1}–{offset + len(folders)} "
+                f"of {total}</div>",
+                unsafe_allow_html=True,
+            )
+            if next_col.button(
+                "Next ›", disabled=offset + PAGE_SIZE >= total, use_container_width=True
+            ):
+                st.session_state["browse_offset"] = offset + PAGE_SIZE
+                st.rerun()
+
+    picked = st.session_state.get("picked_folder", "")
+    if picked:
+        st.success(f"Selected: `{picked}`")
+    return str(picked)
+
+
 def positions_page() -> None:
     st.header("Requisitions")
     client = get_client()
 
     with st.expander("New requisition"):
+        reference = folder_browser(client)
+
         with st.form("create_position"):
-            reference = st.text_input(
-                "Folder reference",
-                help="Resumes are read from data/resumes/<reference>/",
-            )
             title = st.text_input("Job title")
             jd_text = st.text_area("Job description", height=200)
-            if st.form_submit_button("Create") and reference and title and jd_text:
-                if call(client.create_position, reference, title, jd_text):
-                    st.success(f"Created {reference}")
-                    st.rerun()
+            submitted = st.form_submit_button("Create requisition")
+
+        if submitted:
+            # Checked after submit rather than by disabling the button, so the
+            # reason is stated. A disabled control with no explanation is the
+            # dead end this screen had before.
+            if not reference:
+                st.error("Select a résumé folder above first.")
+            elif not (title and jd_text):
+                st.error("A job title and description are both required.")
+            elif call(client.create_position, reference, title, jd_text):
+                st.success(f"Created {reference}")
+                st.session_state.pop("browse_path", None)
+                st.rerun()
 
     positions = call(client.list_positions) or []
     if not positions:
@@ -313,18 +433,12 @@ def runs_page() -> None:
             f"Approved Rubric v{r_ver} (`{r_hash}`) · {r_crit} criteria · Approved by {r_by}"
         )
 
-
-
-
-
         if st.button("Create a run over the folder"):
             run = call(client.create_run, chosen_pos_id, approved_rubric["id"])
             if run:
                 st.session_state["pending_run_id"] = run["id"]
                 st.success(f"Snapshotted the folder into run {run['id']}")
                 st.rerun()
-
-
 
     else:
         st.info(
@@ -336,7 +450,6 @@ def runs_page() -> None:
     if not run_id:
         st.info("Create a run above, or enter a run id in the sidebar.")
         return
-
 
     controls(client, run_id)
     live_status(run_id)
@@ -494,8 +607,6 @@ def review_page() -> None:
     result = call(client.list_candidates, run_id)
     if not result:
         return
-
-
 
     escalation_meter(result["escalation_rate"])
 

@@ -25,6 +25,7 @@ from screener.clients.ollama_client import OllamaClient
 from screener.models import (
     Actor,
     Candidate,
+    FolderInfo,
     HealthReport,
     Position,
     RankedResult,
@@ -34,6 +35,7 @@ from screener.models import (
 )
 from screener.schemas import (
     CandidateResponse,
+    FolderResponse,
     HealthResponse,
     PositionResponse,
     RankedResponse,
@@ -104,6 +106,15 @@ def to_position(position: Position) -> PositionResponse:
     )
 
 
+def to_folder(folder: FolderInfo) -> FolderResponse:
+    return FolderResponse(
+        name=folder.name,
+        path=folder.path,
+        file_count=folder.file_count,
+        has_subfolders=folder.has_subfolders,
+    )
+
+
 def to_rubric(rubric: Rubric) -> RubricResponse:
     return RubricResponse(
         id=rubric.id,
@@ -132,8 +143,6 @@ def to_run(run: Run) -> RunResponse:
         file_count=run.file_count,
         escalation_rate=run.escalation_rate,
     )
-
-
 
 
 def to_run_status(status_: RunStatus) -> RunStatusResponse:

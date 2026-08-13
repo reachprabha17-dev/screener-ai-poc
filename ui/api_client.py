@@ -20,6 +20,7 @@ act on.
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -70,8 +71,6 @@ class ApiClient:
                 f"Cannot reach the screener API at {self.base_url}. Is the API service running?"
             ) from exc
 
-
-
         if response.status_code >= 400:
             raise ApiError(_explain(response))
 
@@ -83,6 +82,13 @@ class ApiClient:
 
     def list_positions(self) -> list[dict[str, Any]]:
         return list(self._request("GET", "/positions"))
+
+    def list_resume_folders(
+        self, path: str = "", query: str = "", offset: int = 0, limit: int = 15
+    ) -> dict[str, Any]:
+        """One page of the folder picker: `{"folders": [...], "total": n}`."""
+        params = f"path={quote(path)}&q={quote(query)}&offset={offset}&limit={limit}"
+        return dict(self._request("GET", f"/positions/folders?{params}"))
 
     def create_position(self, reference: str, title: str, jd_text: str) -> dict[str, Any]:
         return dict(
