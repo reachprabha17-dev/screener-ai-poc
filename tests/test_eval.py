@@ -477,7 +477,7 @@ def test_a_fabrication_stage_b_catches_is_missed_only_by_the_judge_row(
 ) -> None:
     """The case for keeping difflib.
 
-    The model asserts `strong` and quotes something the résumé does not contain.
+    The model asserts `strong` and quotes something the resume does not contain.
     Stage B cannot find it; the second model, shown a quote and asked whether it
     supports the claim, says yes. Character matching is the control that works
     here, and no amount of second-model reasoning replaces it.
@@ -535,7 +535,7 @@ def test_the_verifier_is_not_asked_about_criteria_it_cannot_help_with(
     tmp_path: Path,
 ) -> None:
     """A `none` verdict has no quote to check, so there is nothing to ask."""
-    corpus = one_case_corpus(tmp_path, "A résumé mentioning nothing relevant.", "none")
+    corpus = one_case_corpus(tmp_path, "A resume mentioning nothing relevant.", "none")
     llm = ScriptedVerifier("none")
 
     compare_verifiers(llm, corpus)

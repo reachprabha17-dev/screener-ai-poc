@@ -5,9 +5,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 
-from screener.api.deps import get_actor, get_service, to_candidate
+from screener.api.deps import get_actor, get_service, to_adverse_action, to_candidate
 from screener.models import Actor
 from screener.schemas import (
+    AUDITOR_ROLE,
+    AdverseActionResponse,
     BulkDecisionRequest,
     BulkDecisionResponse,
     CandidateAuditResponse,
@@ -104,3 +106,30 @@ def purge_candidate(
     the data disposable, and it is cheap now and expensive to retrofit (21).
     """
     return CountResponse(count=service.purge_candidate(file_sha256, actor))
+
+
+@router.get("/candidates/{candidate_id}/record", response_model=AdverseActionResponse)
+def adverse_action_record(
+    candidate_id: int,
+    actor: Actor = Depends(get_actor),
+    service: ScreenerService = Depends(get_service),
+) -> AdverseActionResponse:
+    """Why this person got this outcome — the record handed to a regulator.
+
+    **Auditor role required**, like the other two audit reads. It carries
+    `model_verdict` (what the judge said before the consistency gate forced it
+    down) and the stated grounds for the decision, which 15.4 keeps off the
+    reviewer's screen for a reason: showing both the forced verdict and the
+    original invites the second-guessing the gate exists to remove.
+
+    Available for every decision, not only rejections. A record produced solely
+    for adverse outcomes cannot be checked against a favourable one, and that
+    comparison is the first thing an auditor would want to make.
+    """
+    if AUDITOR_ROLE not in actor.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires the auditor role",
+        )
+    record = service.adverse_action_record(candidate_id)
+    return to_adverse_action(record, service.get_candidate(candidate_id))

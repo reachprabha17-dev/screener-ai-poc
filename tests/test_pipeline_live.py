@@ -161,7 +161,7 @@ def test_the_candidate_carries_both_stored_text_versions(deps: Deps, root: Path)
     This replaced the trace: the same content, in the database, where retention,
     permissions and the erasure path already exist. Names are deliberately not
     redacted (see `redact_pii`) — identifying one in free text needs NER, and
-    `Candidate.filename` carries it regardless — so both columns hold the résumé
+    `Candidate.filename` carries it regardless — so both columns hold the resume
     in full, which is why both are named in `purge_candidate`.
     """
     path = real_docx(root / "asha.docx", paragraphs=(RESUME_TEXT,))

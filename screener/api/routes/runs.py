@@ -10,16 +10,25 @@ Progress is **polling**, not WebSockets. A job updating every few seconds over
 78 minutes does not justify the complexity (22.2).
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from screener.api.deps import get_actor, get_service, to_ranked, to_run, to_run_status
+from screener.api.deps import (
+    get_actor,
+    get_service,
+    to_ranked,
+    to_run,
+    to_run_status,
+    to_run_story,
+)
 from screener.models import Actor
 from screener.schemas import (
+    AUDITOR_ROLE,
     CountResponse,
     CreateRunRequest,
     RankedResponse,
     RunResponse,
     RunStatusResponse,
+    RunStoryResponse,
 )
 from screener.service import ScreenerService
 
@@ -97,3 +106,24 @@ def sign_off_run(
 ) -> None:
     """A named human accepting the results."""
     service.sign_off_run(run_id, actor)
+
+
+@router.get("/runs/{run_id}/story", response_model=RunStoryResponse)
+def run_story(
+    run_id: str,
+    actor: Actor = Depends(get_actor),
+    service: ScreenerService = Depends(get_service),
+) -> RunStoryResponse:
+    """The audit log for one run, assembled into order (15.4).
+
+    **Requires the auditor role, like `GET /audit`.** This returns decision
+    reasons and the names attached to them; the gate cannot depend on which URL
+    the same facts arrive through, or the role check becomes a routing detail
+    rather than a control.
+    """
+    if AUDITOR_ROLE not in actor.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires the auditor role",
+        )
+    return to_run_story(service.run_story(run_id))

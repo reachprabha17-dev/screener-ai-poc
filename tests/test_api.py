@@ -354,7 +354,7 @@ def test_the_folder_browser_pages_and_filters_a_large_share(
 ) -> None:
     """A share with hundreds of folders must not render as one flat list.
 
-    Counting a folder's résumés is a recursive walk, so an unpaged listing costs
+    Counting a folder's resumes is a recursive walk, so an unpaged listing costs
     thousands of filesystem operations per render — seconds on a network mount,
     repeated on every Streamlit interaction.
     """
@@ -460,7 +460,7 @@ def test_the_response_keeps_what_a_reviewer_needs_to_disagree(
     assert criterion["evidence"]
     assert criterion["text"], "the criterion the verdict answers is not shown"
     assert criterion["evidence_status"] == "verified"
-    assert criterion["highlights"], "nothing to locate the quote in the résumé"
+    assert criterion["highlights"], "nothing to locate the quote in the resume"
     assert criterion["weight"] == 5  # rejoined from the rubric
     assert criterion["must_have"] is True
 
@@ -956,3 +956,137 @@ def _add_escalated_candidate(uow_factory: Callable[[], UnitOfWork], run_id: str)
                 app_version="v0.1.0",
             ),
         )
+
+
+def test_audit_log_requires_auditor_role(client: TestClient) -> None:
+    response = client.get("/audit", headers={"X-Actor": "poc-operator", "X-Actor-Roles": "admin"})
+    assert response.status_code == 403
+
+
+def test_audit_log_returns_paginated_results(client: TestClient) -> None:
+    client.post(
+        "/positions",
+        json={"reference": "ref-1", "title": "T", "jd_text": "J"},
+        headers={"X-Actor": "u-1", "X-Actor-Roles": "auditor,admin"},
+    )
+
+    response = client.get(
+        "/audit?action=create_position&limit=1",
+        headers={"X-Actor": "u-1", "X-Actor-Roles": "auditor"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] >= 1
+    assert len(data["entries"]) == 1
+    assert data["entries"][0]["action"] == "create_position"
+
+
+def test_audit_log_caps_limit_at_200(client: TestClient) -> None:
+    response = client.get(
+        "/audit?limit=5000", headers={"X-Actor": "u-1", "X-Actor-Roles": "auditor"}
+    )
+    assert response.status_code == 200
+    # Capped at 200 means it won't crash or complain, but returns at most 200 items.
+    assert len(response.json()["entries"]) <= 200
+
+
+def test_the_run_story_requires_the_auditor_role(client: TestClient) -> None:
+    """Same gate as `GET /audit`: it returns decision reasons and who gave them.
+
+    A control that depends on which URL the facts arrive through is a routing
+    detail, not a control.
+    """
+    run_id = make_run(client)
+
+    refused = client.get(f"/runs/{run_id}/story")
+    assert refused.status_code == 403
+
+    allowed = client.get(f"/runs/{run_id}/story", headers={"X-Actor-Roles": "auditor"})
+    assert allowed.status_code == 200
+    story = allowed.json()
+    assert story["run_id"] == run_id
+    assert story["position_reference"] == "REQ-1"
+    assert [e["action"] for e in story["events"]], "the story carried no events"
+
+    missing = client.get("/runs/run-nope/story", headers={"X-Actor-Roles": "auditor"})
+    assert missing.status_code == 404
+
+
+def test_the_decision_record_requires_the_auditor_role(
+    client: TestClient, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """It carries `model_verdict` and the stated grounds — the auditor surface.
+
+    15.4 keeps `model_verdict` off the reviewer's screen deliberately; the role
+    gate is what keeps this route from becoming a way around that.
+    """
+    run_id, candidate_id = _seed_scored_candidate(client, service, uow_factory)
+    client.post(
+        f"/candidates/{candidate_id}/decision",
+        json={"decision": "reject", "reason": "Missing the must-have."},
+    )
+
+    refused = client.get(f"/candidates/{candidate_id}/record")
+    assert refused.status_code == 403
+
+    allowed = client.get(f"/candidates/{candidate_id}/record", headers={"X-Actor-Roles": "auditor"})
+    assert allowed.status_code == 200
+    record = allowed.json()
+    assert record["decision"] == "reject"
+    assert record["history"][0]["reason"] == "Missing the must-have."
+    assert record["run_id"] == run_id
+    # The pre-gate verdict is present here and nowhere a recruiter can reach.
+    assert all("model_verdict" in c for c in record["criteria"])
+
+    missing = client.get("/candidates/999999/record", headers={"X-Actor-Roles": "auditor"})
+    assert missing.status_code == 404
+
+
+def test_the_recruiter_candidate_view_still_hides_model_verdict(client: TestClient) -> None:
+    """The record route must not have widened the reviewer surface by accident."""
+    run_id = make_run(client)
+    listed = client.get(f"/runs/{run_id}/candidates").json()
+    for group in ("needs_review", "meets_must_haves", "missing_must_have"):
+        for candidate in listed[group]:
+            for criterion in candidate["criteria"]:
+                assert "model_verdict" not in criterion
+
+
+def test_the_record_carries_both_the_judge_and_the_verifier(
+    client: TestClient, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """Phase 2's reading has to be legible whatever it concluded.
+
+    `CriterionView.verifier` is populated only on disagreement, by design — a
+    panel that always appears becomes furniture. That makes silence ambiguous on
+    an audit surface between "the second model agreed", "it was skipped" and "it
+    has not run", so the record carries the verifier's fields outright and states
+    `verification_status` alongside them.
+    """
+    _run_id, candidate_id = _seed_scored_candidate(client, service, uow_factory)
+    client.post(
+        f"/candidates/{candidate_id}/decision",
+        json={"decision": "reject", "reason": "Missing the must-have."},
+    )
+
+    record = client.get(
+        f"/candidates/{candidate_id}/record", headers={"X-Actor-Roles": "auditor"}
+    ).json()
+
+    assert record["verification_status"] in {"pending", "done", "skipped"}
+    for criterion in record["criteria"]:
+        # The judge's two verdicts: what it said, and what stood after the gate.
+        assert "model_verdict" in criterion
+        assert "verdict" in criterion
+        # Stage B: was the quote actually found in the document.
+        assert "verified" in criterion
+        assert "match_ratio" in criterion
+        # Phase 2, present whether or not it disagreed.
+        for field in (
+            "support",
+            "suggested_verdict",
+            "verifier_rationale",
+            "absence_confirmed",
+            "absence_evidence",
+        ):
+            assert field in criterion, field

@@ -374,7 +374,7 @@ def test_a_whole_batch_runs_with_no_api_and_no_daemon(runner: CliRunner, workspa
     invoke(runner, "run", "start", run_id, "--actor", "ops-oncall")
 
     screened = invoke(runner, "work")
-    # Three résumés, two passes each: the break-glass path drives the same
+    # Three resumes, two passes each: the break-glass path drives the same
     # two-phase worker the daemon does (17.4).
     assert "6 job(s) processed" in screened.output
 

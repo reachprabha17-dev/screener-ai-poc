@@ -24,6 +24,8 @@ from config.settings import settings
 from screener.clients.ollama_client import OllamaClient
 from screener.models import (
     Actor,
+    AdverseActionRecord,
+    AuditEntry,
     Candidate,
     FolderInfo,
     HealthReport,
@@ -32,9 +34,13 @@ from screener.models import (
     Rubric,
     Run,
     RunStatus,
+    RunStory,
 )
 from screener.schemas import (
+    AdverseActionResponse,
+    AuditEntryResponse,
     CandidateResponse,
+    DecisionRecordResponse,
     FolderResponse,
     HealthResponse,
     PositionResponse,
@@ -42,7 +48,9 @@ from screener.schemas import (
     RubricResponse,
     RunResponse,
     RunStatusResponse,
+    RunStoryResponse,
     candidate_response,
+    criterion_audit_view,
 )
 from screener.service import ScreenerService
 
@@ -170,3 +178,30 @@ def to_ranked(result: RankedResult, actor: Actor) -> RankedResponse:
 
 def to_health(report: HealthReport) -> HealthResponse:
     return HealthResponse(**report.model_dump())
+
+
+def to_audit_entry(entry: AuditEntry) -> AuditEntryResponse:
+    return AuditEntryResponse(**entry.model_dump())
+
+
+def to_run_story(story: RunStory) -> RunStoryResponse:
+    return RunStoryResponse(
+        **story.model_dump(exclude={"events"}),
+        events=[to_audit_entry(e) for e in story.events],
+    )
+
+
+def to_adverse_action(record: AdverseActionRecord, candidate: Candidate) -> AdverseActionResponse:
+    """The auditor view of one outcome.
+
+    `candidate` is passed alongside because `criterion_audit_view` needs the
+    redaction map and `sent_text` to translate evidence offsets — the same
+    translation `to_candidate` performs, reused rather than reimplemented.
+    """
+    return AdverseActionResponse(
+        **record.model_dump(exclude={"criteria", "history", "flags", "escalation_reasons"}),
+        criteria=[criterion_audit_view(c, candidate) for c in record.criteria],
+        history=[DecisionRecordResponse(**h.model_dump()) for h in record.history],
+        flags=[f.value for f in record.flags],
+        escalation_reasons=[r.value for r in record.escalation_reasons],
+    )

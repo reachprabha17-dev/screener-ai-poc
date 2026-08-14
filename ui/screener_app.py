@@ -29,935 +29,104 @@ rather than discovered afterwards (18.2).
 
 import os
 import sys
-from collections import Counter
-from html import escape
 from pathlib import Path
-from typing import Any
 
-import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from api_client import ApiClient, ApiError  # noqa: E402
-
-# Read from the environment so a deployment does not need the file edited, and
-# so the UI does not silently point at whatever else happens to be on port 8000.
-# Overridable at runtime in the sidebar too — an operator moving the API should
-# not need a restart to follow it.
-DEFAULT_API = os.environ.get("SCREENER_API_URL", "http://127.0.0.1:8000")
-ESCALATION_BUDGET = 0.03
-# Folders per page in the picker. Bounds the recursive résumé counts to this
-# many per render — the cost that makes an unpaged listing unusable on a share.
-PAGE_SIZE = 15
-
-BAND_HELP = {
-    "A": "Strong match against the rubric",
-    "B": "Good match, some gaps",
-    "C": "Partial match",
-    "D": "Weak match",
-}
-
-FLAG_HELP = {
-    "POSSIBLE_DUPLICATE": (
-        "Byte-identical to another file in this run. Only catches exact copies — "
-        "the same CV re-exported from Word has a different hash, so absence of "
-        "this flag is not evidence of no duplicate."
-    ),
-    "SUSPECTED_INJECTION": (
-        "The document contains instruction-like text. This is a prompt for a "
-        "human look, not a judgement about the candidate — a security "
-        "engineer's CV legitimately trips it."
-    ),
-    "EVIDENCE_UNVERIFIED": (
-        "The quoted evidence could not be matched back to the document. The "
-        "system could not verify its own output, so the candidate is not ranked."
-    ),
-    "EVIDENCE_CONTRADICTS": (
-        "The model claimed support and simultaneously said there was none. The "
-        "verdict was forced to 'none'."
-    ),
-    "BUDGET_EXCEEDED": "Too long to judge without truncation. Nothing was truncated.",
-    "INPUT_REJECTED": "Rejected before parsing — see the reason in the summary.",
-    "EXTRACTION_FAILED": "No text could be read from the file, including by OCR.",
-    "SANITIZED_TEXT": "Invisible or bidirectional characters were removed before judging.",
-    "FREETEXT_SCREENED": "Non-job-relevant commentary was removed from the summary.",
-    "MISSING_MUST_HAVE": "Does not meet a stated hard requirement.",
-    "VERDICT_SET_MISMATCH": "The model did not return one verdict per criterion.",
-    "PARSER_TIMEOUT": "The parser exceeded its time limit. Transient — retry.",
-    "PARSER_CRASHED": "The parser failed on this file. Reported as a security event.",
-    "LLM_ERROR": "The model was unreachable. Transient — retry.",
-    "SCHEMA_INVALID": "The model returned malformed output. Transient — retry.",
-}
-
-
-# --- plumbing ----------------------------------------------------------------
-
-
-def get_client() -> ApiClient:
-    return ApiClient(
-        base_url=st.session_state.get("api_url", DEFAULT_API),
-        actor=st.session_state.get("actor", "poc-operator"),
-    )
-
-
-def call(fn: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-    """Run an API call, surfacing failures as a message rather than a traceback.
-
-    A stack trace mid-page is useless to a recruiter and indistinguishable from
-    a bug in the screening itself.
-    """
-    try:
-        return fn(*args, **kwargs)
-    except ApiError as exc:
-        st.error(str(exc))
-        return None
+from ui.common import call, get_client
+from ui.views import audit, requisitions, review, runs
 
 
 def sidebar() -> None:
-    st.sidebar.title("Enterprise Talent Screener")
-    st.sidebar.caption("ETS · On-premise. No candidate data leaves this host.")
+    """Navigation, identity, and health. **Not a place to operate the app from.**
 
-    if "pending_run_id" in st.session_state:
-        st.session_state["run_id"] = st.session_state.pop("pending_run_id")
-
-    st.session_state.setdefault("api_url", DEFAULT_API)
-    st.session_state.setdefault("actor", "poc-operator")
-    st.session_state.setdefault("run_id", "")
-
-    st.sidebar.text_input("API", key="api_url")
-    # Reviewer identity. Stubbed auth (15.2) — but it reaches the audit log, so
-    # the two-person flow (one approves, another signs off) is demonstrable.
-    st.sidebar.text_input("Reviewing as", key="actor")
-    # One run selector for the whole app. Two tabs each rendering their own
-    # `text_input("Run id")` collided on Streamlit's auto-generated element id —
-    # it derives one from the widget type and parameters, so two identical
-    # widgets are indistinguishable to it and the second raises. Keeping the run
-    # in the sidebar is also the truer model: it is the context every tab is
-    # working within, not a field belonging to any one of them.
-    st.sidebar.text_input("Run id", key="run_id")
-
-    health = None
-    try:
-        health = get_client().health()
-    except ApiError as exc:
-        st.sidebar.error(str(exc))
-
-    if health:
-        if health["ok"]:
-            st.sidebar.success("Ready")
-        else:
-            st.sidebar.warning("Degraded")
-        for label, key in (
-            ("Model", "llm_reachable"),
-            ("Schema", "migrations_current"),
-            ("Disk", "disk_ok"),
-        ):
-            st.sidebar.caption(f"{'✓' if health[key] else '✗'} {label}")
-        if not health["model_digest_matches_pin"]:
-            st.sidebar.warning(
-                "Model weights differ from the pinned digest — results stored "
-                "before this change are no longer reproducible."
-            )
-
-
-# --- positions and rubrics ---------------------------------------------------
-
-
-def folder_browser(client: ApiClient) -> str:
-    """Navigate the résumé share and return the selected folder, or "".
-
-    **The server's filesystem, not the reviewer's.** The share is mounted on the
-    Screener host, so browsing here is browsing the share. A browser cannot hand
-    a server a path from the machine it is running on — that is why this is a
-    server-side navigator rather than a native folder dialog.
-
-    Paths are relative to `settings.resumes_dir` throughout; the reviewer never
-    sees or types an absolute path, and `folder_for` re-checks containment on
-    every use regardless of what this widget produced.
+    The run selectors live on the pages that use a run, so the sidebar does not
+    have to answer "which run" on screens where the question is meaningless.
+    Removing the `Run id` box also retires the `pending_run_id` hand-off: that
+    existed only because a sidebar widget was bound to `run_id`, which made any
+    mid-script write to the key raise. With no widget on it, `adopt_run` can set
+    it directly from anywhere.
     """
-    st.markdown("**Résumé folder**")
-
-    path = st.session_state.get("browse_path", "")
-    query = st.session_state.get("browse_query", "")
-    offset = st.session_state.get("browse_offset", 0)
-
-    page = call(client.list_resume_folders, path, query, offset, PAGE_SIZE) or {}
-    folders = page.get("folders", [])
-    total = page.get("total", 0)
-
-    crumbs, refresh = st.columns([5, 1])
-    crumbs.caption(f"📁 `{path or 'share root'}`")
-    if refresh.button("↻", help="Re-read the share — use after adding a folder"):
-        st.rerun()
-
-    # Filtering server-side, because the cost being avoided is server-side: only
-    # the folders on the visible page get their résumés counted.
-    typed = st.text_input(
-        "Search folders",
-        value=query,
-        key="browse-query-input",
-        placeholder="Type to narrow the list…",
-        label_visibility="collapsed",
-    )
-    if typed != query:
-        st.session_state["browse_query"] = typed
-        st.session_state["browse_offset"] = 0
-        st.rerun()
-
-    if path:
-        # Selecting where you *are*, not only what is below it. Without this the
-        # share root has to be the parent of every requisition folder, and a
-        # `RESUMES_DIR` pointing straight at a folder of CVs offers nothing to
-        # pick — the folder is visible, browsable, and unselectable.
-        up_col, here_col = st.columns(2)
-        if up_col.button("⬆ Up one level", key="browse-up", use_container_width=True):
-            st.session_state["browse_path"] = path.rpartition("/")[0]
-            st.rerun()
-        if here_col.button(
-            "✓ Use this folder",
-            key="browse-pick-here",
-            use_container_width=True,
-            help=f"Screen the CVs directly inside {path}",
-        ):
-            st.session_state["picked_folder"] = path
-            st.rerun()
-
-    if not folders:
-        if query:
-            st.caption(f"No folders matching “{query}”.")
-        elif path:
-            st.caption("No subfolders here — use **✓ Use this folder** to screen this one.")
-        else:
-            st.warning(
-                "Nothing found on the résumé share. Either it holds no folders yet, or "
-                "`RESUMES_DIR` is not pointing where you think — it is currently a folder "
-                "the server can see but which is empty. Add a folder of CVs inside it, "
-                "then use ↻ to re-read."
-            )
-    else:
-        for folder in folders:
-            open_col, label_col = st.columns([1, 5])
-            if folder["has_subfolders"]:
-                if open_col.button("📂", key=f"open-{folder['path']}", help="Open this folder"):
-                    st.session_state["browse_path"] = folder["path"]
-                    st.session_state["browse_offset"] = 0
-                    st.rerun()
-            else:
-                open_col.write("📁")
-            if label_col.button(
-                f"{folder['name']} — {folder['file_count']} CV(s)",
-                key=f"pick-{folder['path']}",
-                use_container_width=True,
-            ):
-                st.session_state["browse_path"] = folder["path"]
-                st.session_state["browse_offset"] = 0
-                st.session_state["picked_folder"] = folder["path"]
-                st.rerun()
-
-        if total > PAGE_SIZE:
-            prev_col, count_col, next_col = st.columns([1, 3, 1])
-            if prev_col.button("‹ Prev", disabled=offset == 0, use_container_width=True):
-                st.session_state["browse_offset"] = max(0, offset - PAGE_SIZE)
-                st.rerun()
-            count_col.caption(
-                f"<div style='text-align:center'>{offset + 1}–{offset + len(folders)} "
-                f"of {total}</div>",
-                unsafe_allow_html=True,
-            )
-            if next_col.button(
-                "Next ›", disabled=offset + PAGE_SIZE >= total, use_container_width=True
-            ):
-                st.session_state["browse_offset"] = offset + PAGE_SIZE
-                st.rerun()
-
-    picked = st.session_state.get("picked_folder", "")
-    if picked:
-        st.success(f"Selected: `{picked}`")
-    return str(picked)
-
-
-def positions_page() -> None:
-    st.header("Requisitions")
-    client = get_client()
-
-    with st.expander("New requisition"):
-        reference = folder_browser(client)
-
-        with st.form("create_position"):
-            title = st.text_input("Job title")
-            jd_text = st.text_area("Job description", height=200)
-            submitted = st.form_submit_button("Create requisition")
-
-        if submitted:
-            # Checked after submit rather than by disabling the button, so the
-            # reason is stated. A disabled control with no explanation is the
-            # dead end this screen had before.
-            if not reference:
-                st.error("Select a résumé folder above first.")
-            elif not (title and jd_text):
-                st.error("A job title and description are both required.")
-            elif call(client.create_position, reference, title, jd_text):
-                st.success(f"Created {reference}")
-                st.session_state.pop("browse_path", None)
-                st.rerun()
-
-    positions = call(client.list_positions) or []
-    if not positions:
-        st.info("No open requisitions yet.")
-        return
-
-    st.dataframe(
-        pd.DataFrame(positions)[["reference", "title", "created_by", "created_at"]],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    chosen = st.selectbox(
-        "Work on",
-        options=[p["id"] for p in positions],
-        format_func=lambda pid: next(
-            f"{p['reference']} — {p['title']}" for p in positions if p["id"] == pid
-        ),
-    )
-    if chosen:
-        st.session_state["position_id"] = chosen
-        rubric_section(chosen)
-
-
-def rubric_section(position_id: str) -> None:
-    st.subheader("Rubric")
-    st.caption(
-        "Drafted from the job description by the model, then **edited and "
-        "approved by you**. Nothing is screened against an unapproved rubric — "
-        "an invented requirement would silently reject every applicant who "
-        "lacks something the job never asked for."
-    )
-    client = get_client()
-
-    if st.button("Draft from the job description"):
-        with st.spinner("Reading the job description…"):
-            rubric = call(client.extract_rubric, position_id)
-        if rubric:
-            st.session_state["rubric"] = rubric
-
-    rubric = st.session_state.get("rubric")
-    if not rubric or rubric.get("position_id") != position_id:
-        fetched = call(client.get_latest_rubric, position_id)
-        if fetched:
-            st.session_state["rubric"] = fetched
-            rubric = fetched
-
-    if not rubric or rubric.get("position_id") != position_id:
-        st.info("No draft yet.")
-        return
-
-    st.caption(f"Version {rubric['version']} · `{rubric['rubric_hash'][:12]}`")
-
-    edited = st.data_editor(
-        pd.DataFrame(rubric["criteria"]),
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        column_config={
-            "id": st.column_config.TextColumn("ID", disabled=True),
-            "text": st.column_config.TextColumn("Criterion", width="large"),
-            "must_have": st.column_config.CheckboxColumn(
-                "Must have",
-                help=(
-                    "A hard requirement. Failing one moves the candidate to the "
-                    "unqualified group — mark sparingly."
-                ),
+    with st.sidebar.expander("Connection"):
+        # Explicit `value` handles the case where the operator clears the box — it
+        # falls back to the environment immediately rather than sticking on "".
+        url = st.text_input(
+            "API URL",
+            value=st.session_state.get(
+                "api_url", os.environ.get("SCREENER_API_URL", "http://127.0.0.1:8000")
             ),
-            "weight": st.column_config.NumberColumn("Weight", min_value=1, max_value=5),
-        },
-    )
+            key="api_url_input",
+            help="The address of the Screener API. Changes take effect on the next interaction.",
+        )
+        if url:
+            st.session_state["api_url"] = url
 
-    left, right = st.columns(2)
-    if left.button("Save as new version"):
-        saved = call(client.save_rubric, position_id, edited.to_dict("records"))
-        if saved:
-            st.session_state["rubric"] = saved
-            st.success(f"Saved version {saved['version']}")
-            st.rerun()
-
-    if right.button("Approve", type="primary", disabled=bool(rubric.get("approved_at"))):
-        approved = call(client.approve_rubric, rubric["id"])
-        if approved:
-            st.session_state["rubric"] = approved
-            st.success(f"Approved by {approved['approved_by']}")
-
-    if rubric.get("approved_at"):
-        st.success(f"Approved by {rubric['approved_by']} at {rubric['approved_at']}")
-
-
-# --- runs --------------------------------------------------------------------
-
-
-def runs_page() -> None:
-    st.header("Runs")
-    client = get_client()
-
-    positions = call(client.list_positions) or []
-    if not positions:
-        st.info("No open requisitions yet.")
-        return
-
-    current_pos_id = st.session_state.get("position_id")
-    default_index = 0
-    if current_pos_id:
-        for idx, p in enumerate(positions):
-            if p["id"] == current_pos_id:
-                default_index = idx
-                break
-
-    chosen_pos_id = st.selectbox(
-        "Position for run",
-        options=[p["id"] for p in positions],
-        index=default_index,
-        format_func=lambda pid: next(
-            (f"{p['reference']} — {p['title']}" for p in positions if p["id"] == pid),
-            pid,
+    actor = st.sidebar.text_input(
+        "Reviewing as",
+        value=st.session_state.get("actor", "poc-operator"),
+        help=(
+            "Your identity for the audit log. The PoC uses this instead of a "
+            "login screen. Try changing it after approving a rubric to see the "
+            "separation of duties enforcement."
         ),
-        key="runs_position_select",
     )
-    st.session_state["position_id"] = chosen_pos_id
+    if actor:
+        st.session_state["actor"] = actor
 
-    approved_rubric = call(client.get_approved_rubric, chosen_pos_id)
-    if approved_rubric:
-        r_ver = approved_rubric["version"]
-        r_hash = approved_rubric["rubric_hash"][:12]
-        r_crit = len(approved_rubric["criteria"])
-        r_by = approved_rubric["approved_by"]
-        st.success(
-            f"Approved Rubric v{r_ver} (`{r_hash}`) · {r_crit} criteria · Approved by {r_by}"
-        )
-
-        if st.button("Create a run over the folder"):
-            run = call(client.create_run, chosen_pos_id, approved_rubric["id"])
-            if run:
-                st.session_state["pending_run_id"] = run["id"]
-                st.success(f"Snapshotted the folder into run {run['id']}")
-                st.rerun()
-
+    st.sidebar.divider()
+    health = call(get_client().health)
+    if not health:
+        st.sidebar.error("API unreachable")
     else:
-        st.info(
-            "No approved rubric found for this position. "
-            "Please approve a rubric on the Requisitions tab before creating a run."
+        if not health["model_digest_matches_pin"]:
+            st.sidebar.warning("Model digest differs from config pin — reproducibility broken")
+        if not health["migrations_current"]:
+            st.sidebar.error("Database schema is stale")
+        if not health["disk_ok"]:
+            st.sidebar.error(f"Disk full ({health['free_disk_gb']} GB free)")
+        if health["ok"]:
+            st.sidebar.success(f"System healthy (v{health['app_version']})")
+
+    # Stubbed authorisation, at the foot because it is a demonstration control
+    # rather than something touched per task (15.2). `X-Actor-Roles` exists so
+    # role-scoped exposure is something an operator can *show* working rather
+    # than take on trust, and the Audit reads are the first that require it —
+    # without this the audit pages would answer 403 to everybody.
+    st.sidebar.divider()
+    with st.sidebar.expander("Roles"):
+        roles = st.multiselect(
+            "Roles",
+            options=["admin", "auditor"],
+            default=st.session_state.get("roles", ["admin"]),
+            label_visibility="collapsed",
+            help=(
+                "`auditor` is required to read the audit log, a run's story, and "
+                "a candidate's pre-verification scores."
+            ),
         )
-
-    run_id = st.session_state.get("run_id", "")
-    if not run_id:
-        st.info("Create a run above, or enter a run id in the sidebar.")
-        return
-
-    controls(client, run_id)
-    live_status(run_id)
-
-
-def controls(client: ApiClient, run_id: str) -> None:
-    start, rescan, abort = st.columns(3)
-
-    if start.button("Start"):
-        queued = call(client.start_run, run_id)
-        if queued is not None:
-            st.success(f"{queued} file(s) queued — the worker will pick them up.")
-
-    if rescan.button("Rescan folder", help="Pick up files added since the snapshot"):
-        added = call(client.rescan_run, run_id)
-        if added is not None:
-            st.success(f"{added} new file(s) added.")
-
-    if abort.button("Abort", help="Stops the run. Already-screened results are kept."):
-        if call(client.abort_run, run_id) is None:
-            st.warning("Run aborted. It can be started again later.")
-
-
-@st.fragment(run_every="5s")
-def live_status(run_id: str) -> None:
-    """Polling, not WebSockets.
-
-    A job that updates every few seconds over more than an hour does not justify
-    a persistent connection (22.2). The fragment re-runs on its own so the rest
-    of the page is not rebuilt underneath the reviewer.
-    """
-    status = call(get_client().run_status, run_id)
-    if not status:
-        return
-
-    st.subheader(f"Status: {status['status']}")
-
-    done, total = status["done"] + status["failed"], status["total"]
-    st.progress(done / total if total else 0.0, text=f"{done} of {total} screened")
-
-    a, b, c, d = st.columns(4)
-    a.metric("Screened", status["done"])
-    b.metric("Failed", status["failed"])
-    c.metric("Remaining", status["pending"] + status["claimed"])
-    d.metric("ETA", _humanize(status["eta_seconds"]))
-
-    if status["queue_depth_ahead"]:
-        st.caption(
-            f"{status['queue_depth_ahead']} file(s) from earlier runs are ahead in the queue."
-        )
-
-    escalation_meter(status["escalation_rate"])
-
-
-def escalation_meter(rate: float) -> None:
-    """Shown during the run, not after it.
-
-    Human oversight collapses into rubber-stamping the moment the review queue
-    exceeds what a person will actually read, and that failure is silent — the
-    control still looks like it is working (18.2).
-    """
-    st.metric(
-        "Needing review",
-        f"{rate:.0%}",
-        delta=f"{(rate - ESCALATION_BUDGET) * 100:+.1f} pts vs budget",
-        delta_color="inverse",
-    )
-    if rate > ESCALATION_BUDGET:
-        st.warning(
-            f"{rate:.0%} of candidates need a human decision, against a {ESCALATION_BUDGET:.0%} "
-            "design budget. A queue larger than a person will genuinely read is "
-            "the point at which review stops being meaningful."
-        )
-
-
-def _humanize(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    if seconds < 3600:
-        return f"{seconds / 60:.0f}m"
-    return f"{seconds / 3600:.1f}h"
-
-
-# --- review ------------------------------------------------------------------
-
-
-def review_page() -> None:
-    st.header("Review")
-    client = get_client()
-
-    runs = call(client.list_runs) or []
-    positions = call(client.list_positions) or []
-    pos_map = {p["id"]: f"{p['reference']} — {p['title']}" for p in positions}
-
-    if not runs:
-        st.info("No screening runs found yet. Create and start a run on the Runs tab.")
-        return
-
-    st.subheader("Historic Runs")
-    table_data = []
-    for r in runs:
-        rate = r.get("escalation_rate")
-        rate_str = f"{rate:.0%}" if rate is not None else "N/A"
-        created = r.get("created_at")
-        if isinstance(created, str):
-            created_str = created[:10] if created else "N/A"
-        elif hasattr(created, "strftime"):
-            created_str = created.strftime("%Y-%m-%d")
-        else:
-            created_str = "N/A"
-        pos_title = pos_map.get(r["position_id"], r["position_id"])
-        table_data.append(
-            {
-                "Run ID": r["id"],
-                "Position": pos_title,
-                "Status": r["status"],
-                "Created At": created_str,
-                "Created By": r.get("created_by", "N/A"),
-                "Files": r.get("file_count", 0),
-                "Escalation Rate": rate_str,
-            }
-        )
-
-    st.dataframe(table_data, use_container_width=True)
-
-    current_run_id = st.session_state.get("run_id", "")
-    default_index = 0
-    if current_run_id:
-        for idx, r in enumerate(runs):
-            if r["id"] == current_run_id:
-                default_index = idx
-                break
-
-    def _format_run_option(rid: str) -> str:
-        r = next((run for run in runs if run["id"] == rid), None)
-        if not r:
-            return rid
-        title = pos_map.get(r["position_id"], r["position_id"])
-        status = r["status"].capitalize()
-        files = r.get("file_count", 0)
-        return f"{r['id']} — Position: {title} ({status}, {files} files)"
-
-    chosen_run_id = st.selectbox(
-        "Select a run to review",
-        options=[r["id"] for r in runs],
-        index=default_index,
-        format_func=_format_run_option,
-        key="review_run_select",
-    )
-    if chosen_run_id != st.session_state.get("run_id"):
-        st.session_state["pending_run_id"] = chosen_run_id
-        st.rerun()
-    run_id = chosen_run_id
-
-    result = call(client.list_candidates, run_id)
-    if not result:
-        return
-
-    escalation_meter(result["escalation_rate"])
-
-    qualified = result["meets_must_haves"]
-    unqualified = result["missing_must_have"]
-    review = result["needs_review"]
-
-    # Sections in fixed order, **needs-review first and open** (15.4). Tabs were
-    # the previous shape and they were wrong for the same reason a long list is:
-    # at 1,000 applicants a reviewer works the first thing on the screen, and a
-    # third tab is a place escalations go to be not looked at.
-    with st.expander(f"⚠ Needs review — {len(review)}", expanded=True):
-        st.caption(
-            "The system could not produce a reliable result for these. They are "
-            "**not ranked and not scored** — that is a statement about the "
-            "system, not about the candidate."
-        )
-        escalation_breakdown(review)
-        partition(review, run_id, section="needs-review", unranked=True)
-
-    with st.expander(f"Meets all must-haves — {len(qualified)}", expanded=not review):
-        partition(qualified, run_id, section="qualified")
-
-    with st.expander(f"Missing a must-have — {len(unqualified)}", expanded=False):
-        st.caption(
-            "These did not meet a stated hard requirement. They are ranked "
-            "among themselves, never against the group above — the two are not "
-            "comparable."
-        )
-        partition(unqualified, run_id, section="unqualified")
-
-    sign_off_section(client, run_id, result)
-
-
-ESCALATION_LABELS = {
-    "unverified_evidence": "unverified evidence",
-    "judge_disagreement": "judge disagreement",
-    "absence_found": 'evidence found for an "absent" criterion',
-    "negation": "negation suspected",
-    "partial_must_have": "partial evidence on a must-have",
-    "unprocessable": "could not be processed",
-    "suspected_injection": "suspected injection",
-}
-
-
-def escalation_breakdown(candidates: list[dict[str, Any]]) -> None:
-    """Grouped by reason, never one undifferentiated count (15.4).
-
-    "23 need review" prompts a shrug. "8 unverified evidence, 7 judge
-    disagreement" tells a reviewer that similar cases can be worked in a batch,
-    which is the difference between a queue that gets cleared and one that does
-    not.
-    """
-    counts = Counter(
-        reason for candidate in candidates for reason in candidate.get("escalation_reasons", [])
-    )
-    for reason, count in counts.most_common():
-        st.write(f"**{count}** &nbsp; {ESCALATION_LABELS.get(reason, reason)}")
-
-
-def partition(
-    candidates: list[dict[str, Any]], run_id: str, *, section: str, unranked: bool = False
-) -> None:
-    if not candidates:
-        st.info("Nobody in this group.")
-        return
-
-    table = pd.DataFrame(
-        [
-            {
-                "Candidate": c["filename"],
-                # Band, not score. The decimal implies a precision three verdict
-                # levels cannot support (10.6).
-                "Band": c["band"] or "—",
-                "Verified": VERIFICATION_BADGE.get(c.get("verification_status", ""), "—"),
-                "Flags": ", ".join(c["flags"]) or "",
-            }
-            for c in candidates
-        ]
-    )
-    st.dataframe(table, use_container_width=True, hide_index=True)
-
-    chosen = st.selectbox(
-        "Open",
-        options=range(len(candidates)),
-        format_func=lambda i: candidates[i]["filename"],
-        key=f"open-{run_id}-{section}",
-    )
-    if chosen is not None:
-        candidate_detail(candidates[chosen], run_id)
-
-    st.download_button(
-        "Export CSV",
-        _to_csv(candidates),
-        file_name=f"{run_id}-candidates.csv",
-        mime="text/csv",
-        key=f"csv-{run_id}-{section}",
-        help="Includes the numeric score for audit. On screen, reviewers see bands.",
-    )
-
-    if not unranked:
-        bulk_decision_form(candidates, run_id, section=section)
-
-
-def bulk_decision_form(candidates: list[dict[str, Any]], run_id: str, *, section: str) -> None:
-    """One decision across a group, with a shared reason.
-
-    Offered here and **not** on the needs-review section. A reviewer working 400
-    clear rejections one modal at a time stops reading them, so the bulk path is
-    real; but the escalated ones are exactly where the system said a human has to
-    look, and the server skips them regardless of what this sends.
-    """
-    eligible = [c for c in candidates if not c["review_required"] and c.get("id")]
-    if not eligible:
-        return
-
-    with st.expander(f"Decide on all {len(eligible)} at once"):
-        with st.form(f"bulk-{run_id}-{section}"):
-            decision = st.radio("Decision", ["advance", "reject", "hold"], horizontal=True)
-            reason = st.text_area("Shared reason", help="Required. Recorded against every one.")
-            if st.form_submit_button(f"Record for {len(eligible)}"):
-                if not reason.strip():
-                    st.error("A reason is required.")
-                    return
-                result = call(
-                    get_client().decide_bulk, [int(c["id"]) for c in eligible], decision, reason
-                )
-                if result is not None:
-                    st.success(f"Recorded for {len(result['decided'])}.")
-                    if result["skipped"]:
-                        st.warning(
-                            f"{len(result['skipped'])} skipped — they need review and "
-                            "have to be opened individually."
-                        )
-
-
-def candidate_detail(candidate: dict[str, Any], run_id: str) -> None:
-    st.subheader(candidate["filename"])
-
-    if candidate.get("verification_status") == "pending":
-        # A half-verified result that renders like a finished one is how someone
-        # signs off on work that has not happened yet (17.6).
-        st.warning(
-            "**Provisional** — the second model has not checked this candidate "
-            "yet. Escalations it would raise are not shown below."
-        )
-
-    if candidate.get("id"):
-        st.link_button("Open the original document", get_client().file_url(candidate["id"]))
-
-    left, right = st.columns([1, 2])
-    left.metric("Band", candidate["band"] or "Not scored")
-    if candidate["score"] is None:
-        # None, never 0.0 — a resume that could not be read is not a weak
-        # candidate, and showing 0 would put them among genuinely weak ones.
-        right.info("Not scored. See the flags below for why.")
-    else:
-        right.caption(f"Internal score {candidate['score']} / 10 — exported for audit.")
-
-    for flag in candidate["flags"]:
-        st.warning(f"**{flag}** — {FLAG_HELP.get(flag, 'See the run log.')}")
-
-    if candidate["summary"]:
-        st.write(candidate["summary"])
-    if candidate["notable_strengths"]:
-        st.write("**Notable:** " + "; ".join(candidate["notable_strengths"]))
-    if candidate["red_flags"]:
-        st.write("**Flagged in the document:** " + ", ".join(candidate["red_flags"]))
-
-    st.markdown("**Criteria**")
-    st.caption(
-        "Evidence is quoted from the candidate's own document. It confirms the "
-        "model read the resume faithfully — it cannot tell a true claim from a "
-        "false one, and it is not fraud detection."
-    )
-    for criterion in candidate["criteria"]:
-        criterion_block(criterion, candidate)
-
-    decision_form(candidate, run_id)
-
-
-EVIDENCE_BADGE = {
-    "verified": "✓ verified",
-    "partial": "⚠ partially matched",
-    "unverified": "⚠ not found in the résumé",
-    "not_applicable": "",
-}
-
-# `pending` means phase 2 has not checked this candidate yet — not that it
-# never will. `skipped` means it never will (unscoreable, or verification is
-# off for this run), which is why it gets its own badge rather than "done".
-VERIFICATION_BADGE = {
-    "done": "✓ verified",
-    "pending": "⏳ provisional",
-    "skipped": "— not verified",
-}
-
-
-def criterion_block(criterion: dict[str, Any], candidate: dict[str, Any]) -> None:
-    """One criterion, its quote in context, and any disagreement about it (15.5)."""
-    must = " · **MUST-HAVE**" if criterion["must_have"] else ""
-    badge = EVIDENCE_BADGE.get(criterion["evidence_status"], "")
-    st.markdown(
-        f"**{criterion['id']}** {criterion['text']} — `{criterion['verdict'].upper()}` "
-        f"w{criterion['weight']}{must} &nbsp; {badge}"
-    )
-
-    if criterion["evidence"]:
-        # The quote inside its surrounding paragraph, not alone: a bare quote can
-        # be cherry-picked from a sentence that said the opposite (15.3).
-        st.markdown(
-            highlighted(candidate.get("resume_text", ""), criterion["highlights"])
-            or f"> {criterion['evidence']}",
-            unsafe_allow_html=True,
-        )
-
-    if criterion.get("negation_suspected"):
-        st.caption("⚠ A negation appears just before this quote — read the full sentence.")
-
-    verifier = criterion.get("verifier")
-    if verifier:
-        # "A second model disagrees — you decide", never "the correct answer is".
-        # Presented as an answer, reviewers defer to it, and automated
-        # decision-making returns through the interface (15.5).
-        suggested = (verifier.get("suggested_verdict") or "—").upper()
-        st.info(
-            f"**A second model disagrees — you decide.** It suggests `{suggested}`.\n\n"
-            f"{verifier.get('rationale') or ''}"
-            + (
-                f"\n\nIt located: “{verifier['found_evidence']}”"
-                if verifier.get("found_evidence")
-                else ""
-            )
-        )
-
-
-CONTEXT_CHARS = 240
-
-
-def highlighted(resume_text: str, highlights: list[dict[str, int]]) -> str:
-    """The matched span marked inside the surrounding text of `resume_text`.
-
-    Offsets arrive already translated out of `sent_text` by the read layer, so
-    this only has to slice. Doing the translation here would put it downstream of
-    the boundary that owns it and inside the one process with no tests.
-    """
-    if not resume_text or not highlights:
-        return ""
-
-    start = min(h["start"] for h in highlights)
-    end = max(h["end"] for h in highlights)
-    left = max(0, start - CONTEXT_CHARS)
-    right = min(len(resume_text), end + CONTEXT_CHARS)
-
-    before = escape(resume_text[left:start])
-    matched = escape(resume_text[start:end])
-    after = escape(resume_text[end:right])
-    ellipsis_l = "…" if left > 0 else ""
-    ellipsis_r = "…" if right < len(resume_text) else ""
-    return f"<blockquote>{ellipsis_l}{before}<mark>{matched}</mark>{after}{ellipsis_r}</blockquote>"
-
-
-def decision_form(candidate: dict[str, Any], run_id: str) -> None:
-    current = candidate.get("decision", "undecided")
-    label = "Record a decision" if current == "undecided" else f"Decision: {current} — change it"
-    with st.expander(label, expanded=current == "undecided"):
-        st.caption(
-            "Your decision is recorded against your name with the reason, and "
-            "cannot be edited afterwards."
-        )
-        with st.form(f"decide-{run_id}-{candidate['file_sha256']}"):
-            decision = st.radio("Decision", ["advance", "reject", "hold"], horizontal=True)
-            reason = st.text_area("Reason", help="Required. This is the record.")
-            if st.form_submit_button("Record"):
-                if not reason.strip():
-                    st.error("A reason is required.")
-                elif call(get_client().decide, int(candidate["id"]), decision, reason) is None:
-                    st.success("Recorded.")
-
-
-def sign_off_section(client: ApiClient, run_id: str, result: dict[str, Any]) -> None:
-    st.divider()
-    # Mirrors the server's precondition rather than counting the section, so the
-    # warning and the refusal agree. A screen that says "ready" and a button that
-    # returns 400 teaches reviewers to distrust the screen.
-    outstanding = [
-        c
-        for group in ("needs_review", "meets_must_haves", "missing_must_have")
-        for c in result[group]
-        if c.get("decision", "undecided") == "undecided"
-        and (c["review_required"] or c.get("verification_status") == "pending")
-    ]
-    if outstanding:
-        st.warning(
-            f"{len(outstanding)} candidate(s) still need a decision. Sign-off is "
-            "blocked until each one is advanced, held, or rejected — signing off "
-            "with an unread queue is the failure this screen exists to prevent."
-        )
-    if st.button("Sign off this run", type="primary", disabled=bool(outstanding)):
-        if call(client.sign_off, run_id) is None:
-            st.success("Signed off. Recorded against your name.")
-
-
-def _to_csv(candidates: list[dict[str, Any]]) -> str:
-    return pd.DataFrame(
-        [
-            {
-                "filename": c["filename"],
-                "file_sha256": c["file_sha256"],
-                "band": c["band"],
-                "score": c["score"],
-                "must_haves_met": c["must_haves_met"],
-                "scoreable": c["scoreable"],
-                "review_required": c["review_required"],
-                # 15.6: the outcome and who owns it, not only the ranking.
-                "decision": c.get("decision", "undecided"),
-                "decided_by": c.get("decided_by") or "",
-                "decided_at": c.get("decided_at") or "",
-                "verification_status": c.get("verification_status", ""),
-                "escalation_reasons": "|".join(c.get("escalation_reasons", [])),
-                "flags": "|".join(c["flags"]),
-                "scored_at": c["scored_at"],
-            }
-            for c in candidates
-        ]
-    ).to_csv(index=False)
-
-
-# --- entry point -------------------------------------------------------------
+    st.session_state["roles"] = roles
 
 
 def main() -> None:
-    st.set_page_config(page_title="Enterprise Talent Screener (ETS)", page_icon="📄", layout="wide")
+    st.set_page_config(page_title="Enterprise Talent Screener (ETS)", layout="wide")
+
+    st.title("Enterprise Talent Screener")
+    st.caption("On-premise · no data leaves this host")
 
     sidebar()
 
-    requisitions, runs, review = st.tabs(["Requisitions", "Runs", "Review"])
-    with requisitions:
-        positions_page()
-    with runs:
-        runs_page()
-    with review:
-        review_page()
+    pg = st.navigation(
+        [
+            st.Page(requisitions.positions_page, title="Requisitions", default=True),
+            st.Page(runs.runs_page, title="Runs"),
+            st.Page(review.review_page, title="Review"),
+            st.Page(audit.audit_page, title="Audit"),
+        ]
+    )
+    pg.run()
 
 
 if __name__ == "__main__":
-    # Streamlit executes this file with `__name__ == "__main__"`, so this is the
-    # entry point under `streamlit run` as well as under `python`.
-    #
-    # There is deliberately no `else: main()`. Calling it on import would mean
-    # merely importing this module renders the whole app — which breaks any test
-    # that wants to read a constant, and turns an import into a live HTTP call
-    # against the API.
     main()

@@ -343,6 +343,107 @@ def test_sign_off_is_refused_while_an_escalation_has_no_decision(
     assert row["reviewed_by"] is None
 
 
+def test_an_identical_file_twice_in_one_run_flags_rather_than_fails(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """Two copies of one CV is ordinary, not an error.
+
+    `UNIQUE(file_sha256, run_id)` used to surface as an `IntegrityError` out of a
+    plain INSERT: the worker retried three times and retired the job `failed`, so
+    the second copy was lost to a message naming a constraint. Routine the moment
+    HR copies files onto a share.
+    """
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        before = results_store.list_for_run(tx, run_id)
+        original = next(c for c in before if c.file_sha256 == "sha-qualified")
+        assert Flag.POSSIBLE_DUPLICATE not in original.flags
+
+        key = CacheKey(
+            file_sha256="sha-qualified",
+            position_id="pos-x",
+            rubric_hash="r" * 64,
+            judge_digest="sha256:aaa",
+            prompt_hash="p" * 64,
+            redaction_on=True,
+            num_ctx=settings.num_ctx,
+            app_version="v0.1.0",
+        )
+        duplicate = Candidate(
+            run_id=run_id,
+            filename="a-second-copy.pdf",
+            file_sha256="sha-qualified",
+            score=8.0,
+            band="A",
+            must_haves_met=True,
+            scoreable=True,
+        )
+        # Does not raise, and returns the row that already describes these bytes.
+        returned_id = results_store.save(tx, run_id, duplicate, key)
+
+    assert returned_id == original.id
+    with uow_factory() as tx:
+        after = results_store.list_for_run(tx, run_id)
+    assert len(after) == len(before), "the duplicate must not create a second candidate"
+    flagged = next(c for c in after if c.id == original.id)
+    assert Flag.POSSIBLE_DUPLICATE in flagged.flags
+
+    # Idempotent: a third copy does not list the flag twice.
+    with uow_factory() as tx:
+        results_store.save(tx, run_id, duplicate, key)
+        again = next(c for c in results_store.list_for_run(tx, run_id) if c.id == original.id)
+    assert again.flags.count(Flag.POSSIBLE_DUPLICATE) == 1
+
+
+def test_sign_off_is_refused_while_a_file_was_never_screened(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """The gate's blind spot: a failed job produces no candidate.
+
+    `judge_one` turns document problems into a flagged candidate, so a job that
+    reaches `failed` was stopped by the model, the database or a bug. Checking
+    only candidates missed those files entirely — the run completed, sign-off
+    succeeded, and applicants who were never assessed were simply absent from
+    the result with nothing on screen naming them.
+    """
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        outstanding = [
+            c
+            for c in results_store.list_for_run(tx, run_id)
+            if c.review_required or c.verification_status == "pending"
+        ]
+    for candidate in outstanding:
+        assert candidate.id is not None
+        service.record_decision(candidate.id, "hold", "looked at it", ACTOR)
+
+    # A file the worker could never get through: retried to the cap, then retired.
+    with uow_factory() as tx:
+        tx.execute(
+            "INSERT INTO jobs (run_id, phase, file_path, status, attempts, last_error, "
+            "created_at, updated_at) VALUES (?, 'judge', ?, 'failed', 3, ?, ?, ?)",
+            (
+                run_id,
+                "/share/req/priya-sharma.pdf",
+                "LLMError: could not load granite4.1:8b",
+                now().isoformat(),
+                now().isoformat(),
+            ),
+        )
+
+    with pytest.raises(ServiceError, match="never screened"):
+        service.sign_off_run(run_id, ACTOR)
+
+    with uow_factory() as tx:
+        row = tx.execute("SELECT reviewed_by FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert row["reviewed_by"] is None
+
+    # And the reviewer can find out *which* file, not just that there was one.
+    status = service.run_status(run_id)
+    assert [f.filename for f in status.failed_files] == ["priya-sharma.pdf"]
+    assert "granite4.1" in status.failed_files[0].last_error
+
+
 def test_sign_off_proceeds_once_every_escalation_has_been_answered(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
@@ -848,7 +949,7 @@ def test_purge_removes_failure_captures_from_disk(
 ) -> None:
     """The step 12.10 calls easy to forget and fatal to omit.
 
-    Clearing database columns while model output derived from the résumé sits in
+    Clearing database columns while model output derived from the resume sits in
     a failure capture leaves erasure looking implemented — worse than absent,
     because it gets reported as done.
     """
@@ -1057,3 +1158,176 @@ def _seed_run_with_candidates(
         runs_store.set_status(tx, run.id, "running")
 
     return run.id
+
+
+def test_service_search_audit_filters_and_writes_no_row(service: ScreenerService) -> None:
+    # First, make some noise in the audit log
+    actor1 = Actor(id="auditor-1")
+    actor2 = Actor(id="auditor-2")
+    service.create_position(reference="ref-audit-1", title="T", jd_text="J", actor=actor1)
+    service.create_position(reference="ref-audit-2", title="T", jd_text="J", actor=actor2)
+
+    # Measure baseline total
+    baseline_entries, baseline_total = service.search_audit()
+
+    # Now run a search for actor1
+    entries, total = service.search_audit(actor_id="auditor-1", action="create_position")
+
+    # Verify no audit row was written by the read
+    after_entries, after_total = service.search_audit()
+    assert baseline_total == after_total
+    assert len(baseline_entries) == len(after_entries)
+
+    # Verify filtering
+    assert len(entries) >= 1
+    assert all(e.actor_id == "auditor-1" for e in entries)
+    assert all(e.action == "create_position" for e in entries)
+
+
+def test_run_story_assembles_the_whole_chain_in_order(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """The audit log's value is a narrative about one run, not a stream of rows.
+
+    The chain reaches back through the rubric to the requisition and forward to
+    the decisions, so a single call answers "prove this was done properly".
+    """
+    position_id, rubric_id = approved_position(service)
+    resumes_for("REQ-1", count=1)
+    run = service.create_run(position_id, rubric_id, ACTOR)
+    service.start_run(run.id, ACTOR)
+
+    story = service.run_story(run.id)
+
+    actions = [e.action for e in story.events]
+    for expected in ("create_position", "extract_rubric", "approve_rubric", "create_run"):
+        assert expected in actions, expected
+    assert story.position_reference == "REQ-1"
+    assert story.events == sorted(story.events, key=lambda e: e.ts), "events are not chronological"
+
+
+def test_run_story_reports_separation_of_duties(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """One person approving the rubric and accepting its results is permitted…
+
+    …but it is the first thing an auditor checks, so the record states it rather
+    than leaving it to be reconstructed from two lines of the log.
+    """
+    position = service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
+    rubric = service.extract_rubric(position.id, ACTOR)
+    service.approve_rubric(rubric.id, ACTOR)
+    resumes_for("REQ-1", count=1)
+
+    same = service.create_run(position.id, rubric.id, ACTOR)
+    service.sign_off_run(same.id, ACTOR)
+    assert service.run_story(same.id).separation_of_duties is False
+
+    other = service.create_run(position.id, rubric.id, ACTOR)
+    service.sign_off_run(other.id, OTHER)
+    story = service.run_story(other.id)
+    assert story.separation_of_duties is True
+    assert story.approved_by == ACTOR.id
+    assert story.signed_off_by == OTHER.id
+
+
+def test_run_story_is_a_read_and_audits_nothing(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """A read that logged itself would bury the mutations an auditor came for."""
+    position_id, rubric_id = approved_position(service)
+    resumes_for("REQ-1", count=1)
+    run = service.create_run(position_id, rubric_id, ACTOR)
+
+    with uow_factory() as tx:
+        before = tx.execute("SELECT COUNT(*) AS n FROM audit_log").fetchone()["n"]
+    service.run_story(run.id)
+    with uow_factory() as tx:
+        after = tx.execute("SELECT COUNT(*) AS n FROM audit_log").fetchone()["n"]
+
+    assert before == after
+
+
+def test_run_story_rejects_an_unknown_run(service: ScreenerService) -> None:
+    with pytest.raises(NotFoundError):
+        service.run_story("run-does-not-exist")
+
+
+def test_the_adverse_action_record_carries_the_grounds_and_the_provenance(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """The artefact handed to a regulator: why, against what, judged by which weights.
+
+    The reason lives only in `overrides` — `candidates` keeps the standing
+    decision and never why it was taken — so a record assembled without the
+    history answers "rejected" and not "on what grounds".
+    """
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        candidate = next(
+            c for c in results_store.list_for_run(tx, run_id) if c.file_sha256 == "sha-qualified"
+        )
+    assert candidate.id is not None
+    service.record_decision(candidate.id, "reject", "Missing the Kubernetes must-have.", ACTOR)
+
+    record = service.adverse_action_record(candidate.id)
+
+    assert record.decision == "reject"
+    assert record.decided_by == ACTOR.id
+    assert [h.reason for h in record.history] == ["Missing the Kubernetes must-have."]
+    assert record.history[0].from_decision == "undecided"
+    # The criterion text is rejoined, so an id means something to a reader who
+    # has never seen the rubric.
+    assert record.criteria and all(c.text for c in record.criteria)
+    # The reproducibility record, frozen at scoring time.
+    assert record.rubric_hash and record.judge_digest and record.prompt_hash
+    assert record.rubric_version is not None
+
+
+def test_a_record_exists_for_favourable_outcomes_too(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """A record produced only for rejections cannot be checked against anything.
+
+    The asymmetry would itself be the finding: an auditor's first move is to
+    compare an adverse outcome with a favourable one scored the same way.
+    """
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        candidate = next(
+            c for c in results_store.list_for_run(tx, run_id) if c.file_sha256 == "sha-qualified"
+        )
+    assert candidate.id is not None
+    service.record_decision(candidate.id, "advance", "Strong evidence on every must-have.", ACTOR)
+
+    record = service.adverse_action_record(candidate.id)
+    assert record.decision == "advance"
+    assert record.history[0].reason == "Strong evidence on every must-have."
+
+
+def test_the_record_shows_a_reversed_decision_in_order(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """A changed decision is a fact about the process, not something to overwrite."""
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        candidate = next(
+            c for c in results_store.list_for_run(tx, run_id) if c.file_sha256 == "sha-qualified"
+        )
+    assert candidate.id is not None
+    service.record_decision(candidate.id, "reject", "Looked like a miss on Kubernetes.", ACTOR)
+    service.record_decision(candidate.id, "advance", "Second read: evidence was on page 2.", OTHER)
+
+    record = service.adverse_action_record(candidate.id)
+    assert [(h.actor_id, h.to_decision) for h in record.history] == [
+        (ACTOR.id, "reject"),
+        (OTHER.id, "advance"),
+    ]
+    assert record.decision == "advance"
+
+
+def test_the_adverse_action_record_rejects_an_unknown_candidate(
+    service: ScreenerService,
+) -> None:
+    with pytest.raises(NotFoundError):
+        service.adverse_action_record(999_999)

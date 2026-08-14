@@ -231,28 +231,28 @@ def test_the_app_shows_bands_and_keeps_the_score_for_export() -> None:
 
     The float is exported for audit; the reviewer sees a band.
     """
-    source = (UI_DIR / "screener_app.py").read_text(encoding="utf-8")
+    source = (UI_DIR / "views" / "review.py").read_text(encoding="utf-8")
 
     assert '"Band"' in source
     assert "Export CSV" in source
     assert "exported for audit" in source
 
 
-def test_needs_review_is_its_own_tab() -> None:
+def test_needs_review_is_its_own_section() -> None:
     """Never the tail of a ranking.
 
     At 1,000 applicants a reviewer reads the top of Band A and stops; anything
     at the bottom of one long list is invisible in practice (10.5b).
     """
-    source = (UI_DIR / "screener_app.py").read_text(encoding="utf-8")
+    source = (UI_DIR / "views" / "review.py").read_text(encoding="utf-8")
 
     assert "Needs review" in source
-    assert "st.tabs" in source
+    assert "st.expander" in source
 
 
 def test_the_escalation_rate_is_shown_against_its_budget() -> None:
     """Surfaced live, not discovered afterwards (18.2)."""
-    from ui.screener_app import ESCALATION_BUDGET
+    from ui.common import ESCALATION_BUDGET
 
     assert ESCALATION_BUDGET == 0.03
 
@@ -263,7 +263,7 @@ def test_weak_signals_are_labelled_as_weak() -> None:
     The same CV re-exported from Word has a different hash, so the UI says so
     rather than implying coverage the check does not have (12.6).
     """
-    from ui.screener_app import FLAG_HELP
+    from ui.common import FLAG_HELP
 
     assert "exact copies" in FLAG_HELP["POSSIBLE_DUPLICATE"]
     assert "not fraud detection" not in FLAG_HELP  # it is stated in the detail view
@@ -272,6 +272,90 @@ def test_weak_signals_are_labelled_as_weak() -> None:
 
 def test_evidence_is_not_presented_as_fraud_detection() -> None:
     """It confirms the model quoted the resume faithfully. Nothing more (1)."""
-    source = (UI_DIR / "screener_app.py").read_text(encoding="utf-8")
+    source = (UI_DIR / "views" / "review.py").read_text(encoding="utf-8")
 
     assert "not fraud detection" in source
+
+
+def test_every_view_module_imports() -> None:
+    """The gate that was missing when the pages were split.
+
+    `escalation_meter` was imported from `ui.common` while it lived in
+    `ui.views.runs`, so the app raised `ImportError` before rendering a single
+    widget — and the full suite stayed green. Nothing else covers this: `mypy`'s
+    `files` list is `screener`, `config`, `worker.py`, so `ui/` is unchecked, and
+    ruff resolves names within a file but not across modules. Importing each
+    module is the cheapest thing that would have caught it.
+    """
+    import importlib
+
+    for module in (
+        "ui.common",
+        "ui.api_client",
+        "ui.views.requisitions",
+        "ui.views.runs",
+        "ui.views.review",
+        "ui.views.audit",
+        "ui.screener_app",
+    ):
+        importlib.import_module(module)
+
+
+def test_the_entrypoint_registers_every_page() -> None:
+    """A view that exists but is not registered is unreachable in the browser."""
+    source = (Path(__file__).resolve().parent.parent / "ui" / "screener_app.py").read_text()
+    for page in ("positions_page", "runs_page", "review_page", "audit_page"):
+        assert page in source, f"{page} is not registered with st.navigation"
+
+
+def test_every_recorded_action_renders_as_a_sentence() -> None:
+    """A compliance screen must not show raw JSON, or crash on a new action.
+
+    The renderer is a lookup keyed on action, so an action added to the service
+    layer later has no entry here. It must degrade to showing the raw row —
+    never to a `KeyError` in front of an auditor.
+    """
+    from ui.views.audit import KNOWN_ACTIONS, describe
+
+    details = {
+        "create_position": {"reference": "REQ-1"},
+        "extract_rubric": {"criteria": 5, "prompt_hash": "a" * 64, "judge_digest": "b" * 64},
+        "save_rubric": {"version": 2, "rubric_hash": "c" * 64},
+        "approve_rubric": {"rubric_hash": "c" * 64},
+        "create_run": {"folder": "/share/req", "queued": 12, "rubric_id": "rub-1"},
+        "start_run": {"queued": 12},
+        "advance_phase": {"phase": "verify", "queued": 12},
+        "complete_run": {"done": 12, "failed": 0, "escalation_rate": 0.25},
+        "decision": {"decision": "reject", "old_score": 3.1, "reason": "Missing the must-have."},
+        "sign_off_run": None,
+        "rescan_run": {"added": 3},
+        "abort_run": {"released": 4},
+        "reclaim_orphaned": {"jobs": 2},
+        "purge_candidate": {"reason": "erasure request"},
+    }
+    for action in KNOWN_ACTIONS:
+        if not action:
+            continue
+        rendered = describe({"action": action, "detail": details.get(action)})
+        assert rendered and "{" not in rendered, f"{action} rendered as raw data: {rendered}"
+
+    # An action nobody has templated yet, and a malformed detail, both degrade.
+    assert "future_action" in describe({"action": "future_action", "detail": {"a": 1}})
+    assert describe({"action": "complete_run", "detail": {"escalation_rate": "not-a-number"}})
+    # A NULL detail is ordinary: several actions record none at all.
+    assert describe({"action": "sign_off_run", "detail": None})
+
+
+def test_the_decision_reason_is_never_truncated() -> None:
+    """That string is the adverse-action justification.
+
+    Shortening it to fit a table is how a rejection stops being explainable to
+    the person it affected.
+    """
+    from ui.views.audit import describe
+
+    reason = "Missing the Kubernetes must-have; " + "verified against the resume. " * 12
+    rendered = describe(
+        {"action": "decision", "detail": {"decision": "reject", "reason": reason, "old_score": 2.0}}
+    )
+    assert reason in rendered

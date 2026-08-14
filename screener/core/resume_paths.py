@@ -1,4 +1,4 @@
-"""Validation and path resolution for résumé folder references (spec intake share).
+"""Validation and path resolution for resume folder references (spec intake share).
 
 A reference is the folder a requisition screens, expressed **relative to
 `settings.resumes_dir`** — `engineering-2026`, or `2026/Q3/engineering` when the

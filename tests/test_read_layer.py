@@ -153,7 +153,7 @@ def test_a_none_verdict_is_not_applicable_rather_than_unverified() -> None:
 
 
 def test_a_quote_that_only_partly_aligned_is_badged_partial() -> None:
-    """The reviewer's actual question is *which part* was not in the résumé."""
+    """The reviewer's actual question is *which part* was not in the resume."""
     assert evidence_status(scored(match_ratio=0.72)) == "partial"
     assert evidence_status(scored(match_ratio=1.0)) == "verified"
     assert evidence_status(scored(verified=False, match_ratio=0.2)) == "unverified"

@@ -24,7 +24,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -130,11 +130,57 @@ class Actor(BaseModel):
     roles: frozenset[str] = frozenset()
 
 
+class AuditEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ts: datetime
+    actor_id: str | None
+    action: str
+    entity: str | None
+    entity_id: str | None
+    # Nullable because the column is. Several actions are audited with no detail
+    # at all — the entity id carries the whole fact — and a required dict here
+    # rejects them when they are read back.
+    detail: dict[str, Any] | None = None
+
+
+class RunStory(BaseModel):
+    """One run's whole life, assembled from the audit log (15.4).
+
+    The audit log answers "prove this hiring decision was made properly", and
+    that question is always scoped to one thing rather than to the whole stream.
+    A run is the useful scope: it reaches back through the rubric it was screened
+    against to the requisition that raised it, and forward to the decisions and
+    the sign-off.
+
+    `separation_of_duties` is computed here rather than in a template. It is a
+    statement about the record — whether the person who approved the rubric is
+    the person who accepted its results — and a second implementation in the UI
+    would be a second thing to keep true.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    position_reference: str
+    rubric_version: int | None = None
+    approved_by: str | None = None
+    signed_off_by: str | None = None
+    events: list[AuditEntry] = Field(default_factory=list)
+    # False when one person did both, or when either half has not happened yet.
+    # Not a rule violation — 14 permits it — but it is the first thing an auditor
+    # looks for, so the record states it rather than leaving it to be noticed.
+    separation_of_duties: bool = False
+    # Candidate events are gathered per candidate; a large run is truncated
+    # rather than issuing a query per applicant. The UI says so when it fires.
+    candidate_events_truncated: bool = False
+
+
 # --- Position / Rubric ------------------------------------------------------
 
 
 class FolderInfo(BaseModel):
-    """One folder on the résumé share, as the picker sees it."""
+    """One folder on the resume share, as the picker sees it."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -325,7 +371,7 @@ class ExtractedCriterion(BaseModel):
     text: str
     # The criterion restated as an assertion the phase-2 support check can test
     # (9.1, 10.6 A). Written here, once per rubric, rather than derived per
-    # résumé: a hypothesis re-invented 1,000 times is 1,000 chances to drift, and
+    # resume: a hypothesis re-invented 1,000 times is 1,000 chances to drift, and
     # the verifier's answer is only as sharp as the question.
     claim: str = ""
     must_have: bool = False
@@ -524,7 +570,99 @@ class Run(BaseModel):
     escalation_rate: float | None = None
     created_at: datetime = Field(default_factory=now)
     created_by: str
+    # The named human who accepted the results. Half of the separation-of-duties
+    # pair — the other half is `rubrics.approved_by` — and the reason sign-off is
+    # an artefact rather than a status change.
+    reviewed_by: str | None = None
     reproducibility_rate: float | None = None
+
+
+class DecisionRecord(BaseModel):
+    """One decision, and the grounds given for it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_id: str
+    from_decision: str
+    to_decision: str
+    old_score: float | None = None
+    old_band: str | None = None
+    reason: str
+    at: datetime
+
+
+class AdverseActionRecord(BaseModel):
+    """Why one named person was rejected, and everything that determined it.
+
+    **The artefact handed to a regulator, an ombudsman, or the applicant.** The
+    question is never "what did the system score them" alone — it is "on what
+    criteria, against which approved rubric, judged by which model weights, and
+    who decided, on what stated grounds". Every one of those is already frozen at
+    scoring time on the candidate row; this assembles them into one answer rather
+    than leaving them to be joined by hand across four tables.
+
+    Assembled for any decision, not only rejections. A record that only exists
+    for adverse outcomes is a record nobody can check against a favourable one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: int
+    filename: str
+    run_id: str
+    position_reference: str
+    decision: Decision
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    # The grounds. Read from `overrides`, which is the only place a reason is
+    # stored — `candidates` keeps the standing decision, never why it was taken.
+    history: list[DecisionRecord] = Field(default_factory=list)
+    score: float | None = None
+    band: Band | None = None
+    must_haves_met: bool = False
+    scoreable: bool = True
+    # Whether phase 2 ran at all. Without it, a record showing no verifier
+    # disagreement is ambiguous between "the second model agreed", "it was
+    # skipped" and "it has not run yet" — three different things to an auditor.
+    verification_status: Literal["pending", "done", "skipped"] = "pending"
+    # Per-criterion, with the rubric text rejoined so a criterion id means
+    # something to a reader who has never seen the rubric.
+    criteria: list[ScoredCriterion] = Field(default_factory=list)
+    flags: list[Flag] = Field(default_factory=list)
+    escalation_reasons: list[EscalationReason] = Field(default_factory=list)
+    summary: str = ""
+    # The reproducibility record, copied onto the candidate when it was scored.
+    # Months later these are what make the outcome re-derivable; the model tag
+    # will have moved and the prompt will have been edited.
+    rubric_version: int | None = None
+    rubric_hash: str = ""
+    judge_digest: str = ""
+    verifier_digest: str | None = None
+    prompt_hash: str = ""
+    app_version: str = ""
+    redaction_on: bool = True
+    scored_at: datetime | None = None
+    # Who approved the rubric this person was judged against, and who accepted
+    # the run's results. The two human gates, named.
+    rubric_approved_by: str | None = None
+    run_signed_off_by: str | None = None
+
+
+class FailedFile(BaseModel):
+    """A file that was never screened, and why.
+
+    Distinct from a flagged `Candidate`: a document the parser rejected still
+    becomes a candidate a human sees. This is a file the system failed to process
+    for reasons that say nothing about the applicant — and which, until it is
+    surfaced, exists in no results table at all.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str
+    phase: str
+    attempts: int
+    last_error: str = ""
 
 
 class RunStatus(BaseModel):
@@ -558,6 +696,10 @@ class RunStatus(BaseModel):
     undecided_count: int = 0
     queue_depth_ahead: int = 0
     eta_seconds: float = 0.0
+    # Named, not just counted. `failed` above is a number a reviewer can do
+    # nothing with; these are the files behind it, and sign-off refuses while
+    # any remain.
+    failed_files: list[FailedFile] = Field(default_factory=list)
     escalation_rate: float = 0.0
 
     @property

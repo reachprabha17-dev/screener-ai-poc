@@ -512,6 +512,21 @@ def test_reclaim_leaves_other_workers_jobs_alone(uow: UnitOfWork) -> None:
         assert jobs_store.progress(tx, "run1").claimed == 1
 
 
+def test_the_default_worker_id_is_unique_per_process() -> None:
+    """The precondition the test above depends on.
+
+    Reclaim being scoped to "this worker's own id" is only a safety property
+    while that id is unique. A shared constant default meant two workers each
+    reset the other's *in-flight* jobs at startup and then judged the same
+    resume — the scoping test would still pass, because both processes were
+    telling the truth about an id they wrongly shared.
+    """
+    from config.settings import Settings
+
+    assert Settings().worker_id != "worker-1", "a constant default is the bug"
+    assert str(os.getpid()) in Settings().worker_id
+
+
 def test_heartbeat_sequence_advances(uow: UnitOfWork) -> None:
     """A monotonic counter, not a timestamp — immune to a clock step (16.5)."""
     seed_run(uow)
@@ -685,7 +700,7 @@ def test_a_verify_job_does_not_collide_with_the_judge_job_for_the_same_file(
 def test_only_scoreable_candidates_are_verified(uow: UnitOfWork) -> None:
     """An unscoreable candidate is already going to a human for a stronger reason.
 
-    Spending ~5 s of GPU per résumé to confirm it would be the review queue
+    Spending ~5 s of GPU per resume to confirm it would be the review queue
     paying for work that changes nothing.
     """
     seed_run(uow)

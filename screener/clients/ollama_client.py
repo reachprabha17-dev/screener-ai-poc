@@ -142,7 +142,7 @@ class OllamaClient:
     def ensure_loaded(self, model: str) -> None:
         """Make `model` the resident one, unloading the other.
 
-        **Called once per phase, never per résumé.** 12 GB of VRAM does not hold
+        **Called once per phase, never per resume.** 12 GB of VRAM does not hold
         `granite4.1:8b` (~5–6 GB) and `gemma4:12b` (~8 GB) at once, and swapping
         per candidate costs a 10–20 s load each time — 2,000 loads on a 1,000-CV
         run instead of two.
@@ -272,11 +272,11 @@ class OllamaClient:
 
     @staticmethod
     def _context_for(model: str) -> int:
-        """The verifier reads a whole résumé plus every `none` criterion (10.6 B).
+        """The verifier reads a whole resume plus every `none` criterion (10.6 B).
 
         Keyed on the model rather than passed by the caller: the context size is
         a property of what that model is asked to do, and a caller free to vary
-        it could put a résumé through a window it does not fit, which Ollama
+        it could put a resume through a window it does not fit, which Ollama
         truncates silently.
         """
         return settings.verifier_num_ctx if model == settings.verifier_model else settings.num_ctx

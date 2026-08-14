@@ -42,10 +42,14 @@ from screener.llm.judge_resume import judge_prompt_hash
 from screener.logging import failure_paths_for
 from screener.models import (
     Actor,
+    AdverseActionRecord,
+    AuditEntry,
     Candidate,
     Criterion,
     Decision,
+    DecisionRecord,
     EscalationReason,
+    FailedFile,
     FolderInfo,
     HealthReport,
     Position,
@@ -53,6 +57,7 @@ from screener.models import (
     Rubric,
     Run,
     RunStatus,
+    RunStory,
     now,
 )
 from screener.ports import CacheKey, Job, LLMClient
@@ -186,13 +191,13 @@ class ScreenerService:
     def list_resume_folders(
         self, subpath: str = "", query: str = "", offset: int = 0, limit: int = 15
     ) -> tuple[list[FolderInfo], int]:
-        """One page of subfolders of the résumé share, and the total matching.
+        """One page of subfolders of the resume share, and the total matching.
 
         Touches no database, so no transaction. `subpath` is validated inside
         the store; an unsafe or missing path lists as empty rather than raising,
         because an unmounted share is an ordinary state of this screen.
 
-        Paged because counting a folder's résumés is a recursive walk: a large
+        Paged because counting a folder's resumes is a recursive walk: a large
         share on a network mount would otherwise spend seconds per render, and
         Streamlit renders on every click.
         """
@@ -488,6 +493,7 @@ class ScreenerService:
             current = progress if active == "judge" else jobs_store.progress(tx, run_id, active)
             ahead = jobs_store.queue_depth_ahead(tx, run_id)
             scored = results_store.list_for_run(tx, run_id)
+            failed = jobs_store.failed_jobs(tx, run_id)
 
         escalated = [c for c in scored if c.review_required or not c.scoreable]
         breakdown: dict[EscalationReason, int] = {}
@@ -517,6 +523,15 @@ class ScreenerService:
             queue_depth_ahead=ahead,
             eta_seconds=remaining * per_resume,
             escalation_rate=round(len(escalated) / len(scored), 4) if scored else 0.0,
+            failed_files=[
+                FailedFile(
+                    filename=f.filename,
+                    phase=f.phase,
+                    attempts=f.attempts,
+                    last_error=f.last_error,
+                )
+                for f in failed
+            ],
         )
 
     def sign_off_run(self, run_id: str, actor: Actor) -> None:
@@ -532,6 +547,15 @@ class ScreenerService:
         A candidate still `pending` verification counts as outstanding for the
         same reason (17.6): partial verification must never look like completed
         verification, and phase 2 may yet raise an escalation nobody has seen.
+
+        **A permanently-failed job blocks it too, and for a stronger reason.**
+        Those files produced no candidate at all — `judge_one` turns document
+        problems into a flagged candidate, so a job reaching `failed` means the
+        model, the database or a bug stopped it being screened. Checking only
+        candidates missed them entirely: the run reached `completed`, sign-off
+        succeeded, and applicants who were never assessed were absent from the
+        result with nothing on screen naming them. That is precisely the outcome
+        this gate exists to prevent, arriving by the one path it did not inspect.
         """
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
@@ -547,6 +571,16 @@ class ScreenerService:
                 raise ServiceError(
                     f"{len(outstanding)} candidate(s) need review and have no decision; "
                     "sign-off is blocked until each one is advanced, held, or rejected"
+                )
+            unscreened = jobs_store.failed_jobs(tx, run_id)
+            if unscreened:
+                names = ", ".join(f.filename for f in unscreened[:5])
+                more = f" and {len(unscreened) - 5} more" if len(unscreened) > 5 else ""
+                raise ServiceError(
+                    f"{len(unscreened)} file(s) were never screened and are missing from "
+                    f"these results: {names}{more}. Fix the cause and rescan, or abort "
+                    "the run — signing off would accept a result those applicants are "
+                    "absent from."
                 )
             runs_store.sign_off(tx, run_id, actor.id)
             audit_store.append_for(tx, actor, "sign_off_run", "run", run_id)
@@ -724,7 +758,7 @@ class ScreenerService:
         data that a later abort was supposed to keep.
 
         The files are the failure captures of 18 — raw model output written when
-        schema validation failed, which is derived from the résumé and is
+        schema validation failed, which is derived from the resume and is
         therefore inside the erasure path. They are found by hash rather than
         through an index table: needing an index is what made continuous tracing
         expensive to keep correct, and a glob cannot fall out of step with the
@@ -1007,7 +1041,7 @@ class ScreenerService:
         free_gb = _free_disk_gb(Path(settings.db_path).parent)
         disk_ok = free_gb >= settings.min_free_disk_gb
         if not disk_ok:
-            # Stored résumé text grows the database fast; the worker stops
+            # Stored resume text grows the database fast; the worker stops
             # claiming below this (18).
             detail["disk"] = f"{free_gb:.1f} GB free, below {settings.min_free_disk_gb} GB"
 
@@ -1020,6 +1054,146 @@ class ScreenerService:
             disk_ok=disk_ok,
             app_version=settings.app_version,
             detail=detail,
+        )
+
+    def search_audit(
+        self,
+        *,
+        actor_id: str = "",
+        action: str = "",
+        entity: str = "",
+        entity_id: str = "",
+        since: str = "",
+        until: str = "",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[AuditEntry], int]:
+        with self.uow_factory() as tx:
+            rows, total = audit_store.search(
+                tx,
+                actor_id=actor_id,
+                action=action,
+                entity=entity,
+                entity_id=entity_id,
+                since=since,
+                until=until,
+                offset=offset,
+                limit=limit,
+            )
+            entries = [AuditEntry(**row) for row in rows]
+            return entries, total
+
+    # Candidate events are one query each. A thousand of them against a local
+    # SQLite file is survivable but pointless; past this many the story is a
+    # summary of the run rather than a per-applicant record, and the reader is
+    # told so. Exactness here wants one `entity_id IN (…)` query, not a bigger cap.
+    CANDIDATE_EVENT_CAP = 200
+
+    def adverse_action_record(self, candidate_id: int) -> AdverseActionRecord:
+        """Everything that determined one person's outcome, in one object.
+
+        Orchestration across four stores, and the reason it belongs here: the
+        grounds for the decision live in `overrides`, the criteria and verdicts
+        in `candidates`/`verdicts`, the criterion *text* in the rubric, and the
+        two human gates on the rubric and run rows. Answering "why was this
+        person rejected" from the UI would mean four round trips and a rejoin
+        that has to agree with the one `list_candidates` already does.
+
+        **Not restricted to rejections.** A record that exists only for adverse
+        outcomes cannot be checked against a favourable one, and the asymmetry is
+        exactly what an auditor would want to test.
+        """
+        with self.uow_factory() as tx:
+            candidate = results_store.get(tx, candidate_id)
+            if candidate is None:
+                raise NotFoundError(f"candidate {candidate_id}")
+            run = runs_store.get(tx, candidate.run_id)
+            rubric = rubrics_store.get(tx, run.rubric_id) if run else None
+            position = positions_store.get(tx, run.position_id) if run else None
+            history = results_store.decision_history(tx, candidate_id)
+
+        # The same rejoin `list_candidates` performs, for the same reason: weight
+        # and must_have are rubric facts and are not duplicated onto verdicts.
+        attached = self._attach_rubric(candidate, rubric)
+
+        return AdverseActionRecord(
+            candidate_id=candidate_id,
+            filename=attached.filename,
+            run_id=attached.run_id,
+            position_reference=position.reference if position else "",
+            decision=attached.decision,
+            decided_by=attached.decided_by,
+            decided_at=attached.decided_at,
+            history=[DecisionRecord(**row) for row in history],
+            score=attached.score,
+            band=attached.band,
+            must_haves_met=attached.must_haves_met,
+            scoreable=attached.scoreable,
+            verification_status=attached.verification_status,
+            criteria=attached.criteria,
+            flags=attached.flags,
+            escalation_reasons=attached.escalation_reasons,
+            summary=attached.summary,
+            rubric_version=rubric.version if rubric else None,
+            rubric_hash=rubric.content_hash if rubric else "",
+            judge_digest=run.judge_digest if run else "",
+            verifier_digest=run.verifier_digest if run else None,
+            prompt_hash=run.prompt_hash if run else "",
+            app_version=run.app_version if run else "",
+            redaction_on=run.redaction_on if run else True,
+            scored_at=attached.scored_at,
+            rubric_approved_by=rubric.approved_by if rubric else None,
+            run_signed_off_by=run.reviewed_by if run else None,
+        )
+
+    def run_story(self, run_id: str) -> RunStory:
+        """Everything the audit log records about one run, in order.
+
+        Orchestration across four stores: the run gives the rubric and position
+        it descends from, `audit_store.list_for_entity` supplies each link's
+        events, and the candidates supply the decisions. Assembling it here
+        rather than in the UI is what keeps `separation_of_duties` a single fact
+        about the record instead of a rule re-derived in a template.
+
+        **Reads only.** Looking at the audit log is not a mutation, and a read
+        that logged itself would bury the mutations an auditor came to find under
+        the traffic of the page they used to find them.
+        """
+        with self.uow_factory() as tx:
+            run = runs_store.get(tx, run_id)
+            if run is None:
+                raise NotFoundError(f"run {run_id}")
+
+            position = positions_store.get(tx, run.position_id)
+            rubric = rubrics_store.get(tx, run.rubric_id)
+
+            rows = [
+                *audit_store.list_for_entity(tx, "position", run.position_id),
+                *audit_store.list_for_entity(tx, "rubric", run.rubric_id),
+                *audit_store.list_for_entity(tx, "run", run_id),
+            ]
+
+            candidates = results_store.list_for_run(tx, run_id)
+            capped = [c for c in candidates if c.id is not None][: self.CANDIDATE_EVENT_CAP]
+            for candidate in capped:
+                # `entity_id` is the integer id stored as text; the str() is
+                # required rather than cosmetic.
+                rows.extend(audit_store.list_for_entity(tx, "candidate", str(candidate.id)))
+
+        events = sorted((AuditEntry(**row) for row in rows), key=lambda e: e.ts)
+        approved_by = rubric.approved_by if rubric else None
+        signed_off_by = run.reviewed_by
+
+        return RunStory(
+            run_id=run_id,
+            position_reference=position.reference if position else run.position_id,
+            rubric_version=rubric.version if rubric else None,
+            approved_by=approved_by,
+            signed_off_by=signed_off_by,
+            events=events,
+            separation_of_duties=bool(approved_by and signed_off_by)
+            and approved_by != signed_off_by,
+            candidate_events_truncated=len(candidates) > self.CANDIDATE_EVENT_CAP,
         )
 
 

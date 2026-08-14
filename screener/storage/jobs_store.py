@@ -42,6 +42,20 @@ _ACTIVE_RUN_STATUSES = ("pending", "running")
 
 
 @dataclass(frozen=True)
+class FailedJob:
+    """A file that exhausted its attempts and produced no candidate.
+
+    `filename` rather than the full path: it is what a reviewer recognises, and
+    it is what every other candidate-facing surface shows.
+    """
+
+    filename: str
+    phase: str
+    attempts: int
+    last_error: str
+
+
+@dataclass(frozen=True)
 class RunProgress:
     """Counts behind `/runs/{id}/status` and the completion check."""
 
@@ -86,7 +100,7 @@ def snapshot_folder(tx: Tx, run_id: str, folder: Path) -> int:
 
     `INSERT OR IGNORE` against `UNIQUE(run_id, phase, file_path)` makes this
     idempotent, so rescan is the same call and inserts only what is new. The
-    phase is part of that key: without it, the verify job for a résumé collides
+    phase is part of that key: without it, the verify job for a resume collides
     with the judge job that produced the candidate, and phase 2 silently
     enqueues nothing.
     """
@@ -109,7 +123,7 @@ def enqueue_verify_jobs(tx: Tx, run_id: str) -> int:
 
     **Scoreable only.** An unscoreable candidate is already going to a human for
     a stronger reason than anything the verifier could add, and spending ~5 s of
-    GPU per résumé to confirm it would be the review queue paying for work that
+    GPU per resume to confirm it would be the review queue paying for work that
     changes nothing (10.4).
 
     Idempotent through the same UNIQUE key as the snapshot, so a worker that
@@ -140,7 +154,7 @@ def _eligible_files(folder: Path) -> list[Path]:
     **Dot-prefixed files are skipped, extension notwithstanding.** macOS writes
     an AppleDouble sidecar (`._alice.pdf`) beside every file it copies onto an
     SMB or NFS share, and those carry the `.pdf` suffix that would otherwise
-    admit them. They are not résumés: `validate_file` rejects them on magic
+    admit them. They are not resumes: `validate_file` rejects them on magic
     bytes and each one becomes an unscoreable candidate a human has to clear.
     On a share written to from a Mac that doubles the review queue with junk.
     `resumes_store.list_folders` applies the same rule, so the count shown when
@@ -386,6 +400,36 @@ def progress(tx: Tx, run_id: str, phase: str = "judge") -> RunProgress:
         done=counts.get("done", 0),
         failed=counts.get("failed", 0),
     )
+
+
+def failed_jobs(tx: Tx, run_id: str) -> list[FailedJob]:
+    """Files that exhausted `job_max_attempts` and were never screened (16.5).
+
+    **These are not candidates and never become one.** `judge_one` turns document
+    problems into a flagged `Candidate` with `scoreable=False`, so reaching
+    `failed` means infrastructure — the model was unreachable, the database
+    errored, or there is a bug. Nothing about that is a statement on the
+    applicant, and nothing in the results tables records that they existed.
+
+    Read by `run_status` and by `sign_off_run`, which refuses while any of these
+    remain. Without it a run completes and signs off with applicants missing from
+    it entirely, which is the one outcome the sign-off gate exists to prevent —
+    arriving through the path the gate does not otherwise inspect.
+    """
+    rows = tx.execute(
+        "SELECT file_path, phase, attempts, last_error FROM jobs "
+        "WHERE run_id = ? AND status = 'failed' ORDER BY file_path",
+        (run_id,),
+    ).fetchall()
+    return [
+        FailedJob(
+            filename=Path(row["file_path"]).name,
+            phase=row["phase"],
+            attempts=int(row["attempts"]),
+            last_error=row["last_error"] or "",
+        )
+        for row in rows
+    ]
 
 
 def queue_depth_ahead(tx: Tx, run_id: str) -> int:

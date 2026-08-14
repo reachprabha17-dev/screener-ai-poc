@@ -203,7 +203,7 @@ def test_a_fabricated_find_is_discarded() -> None:
     """Requiring a quote and re-checking it stops one hallucination overriding another.
 
     Without stage B here, the verifier's invented evidence would escalate a
-    candidate and be shown to a reviewer as text from their résumé.
+    candidate and be shown to a reviewer as text from their resume.
     """
     before = candidate(criterion("C1", "none"))
     output = VerifyOutput(

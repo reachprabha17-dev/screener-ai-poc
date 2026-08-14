@@ -201,7 +201,7 @@ def drain(worker: Worker, limit: int = 100) -> int:
 
 
 def test_a_batch_screens_end_to_end(worker: Worker, service: ScreenerService, llm: FakeLLM) -> None:
-    """Two passes over four résumés: four judge jobs, then four verify jobs (17.4).
+    """Two passes over four resumes: four judge jobs, then four verify jobs (17.4).
 
     `drain` counts units of work, so eight is the two-phase shape. `llm.judged`
     counting four is the part that matters — each candidate is judged once, and
@@ -569,7 +569,7 @@ def _only_run(service: ScreenerService) -> str:
 def test_a_run_loads_two_models_not_two_thousand(
     worker: Worker, service: ScreenerService, llm: FakeLLM
 ) -> None:
-    """**The gate.** Two loads per run, not two per résumé.
+    """**The gate.** Two loads per run, not two per resume.
 
     12 GB of VRAM does not hold `granite4.1:8b` and `gemma4:12b` together, so the
     two passes are phased over the whole run. Swapping per candidate would cost a

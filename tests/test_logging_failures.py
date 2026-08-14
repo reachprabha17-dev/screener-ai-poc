@@ -1,6 +1,6 @@
 """Structured logging and failure capture (spec 18, build gate 20 step 17).
 
-The gate is blunt and it moved: **purge leaves no copy of the résumé anywhere**.
+The gate is blunt and it moved: **purge leaves no copy of the resume anywhere**.
 In v4 "anywhere" meant the trace directory. In v6 traces are gone and the same
 text lives in `candidates.resume_text` and `candidates.sent_text`, so the gate
 searches the database columns *and* the failure-capture directory, by content,
@@ -110,7 +110,7 @@ def service(uow_factory: Callable[[], UnitOfWork]) -> ScreenerService:
 
 
 def capture(sha: str = "sha-asha") -> Path:
-    """One failure capture, holding model output derived from the résumé."""
+    """One failure capture, holding model output derived from the resume."""
     path = write_failure(
         file_sha256=sha,
         prompt_hash="p" * 64,
@@ -212,7 +212,7 @@ def test_purge_leaves_no_copy_of_the_resume_anywhere(
 ) -> None:
     """**The gate.** Searches by content, across the database and the disk.
 
-    v6 moved the résumé into `candidates`, so the database is now the primary
+    v6 moved the resume into `candidates`, so the database is now the primary
     place a copy can survive a purge — and `sent_text`, `redaction_map_json` and
     `verdicts.absence_evidence` all arrived after the original purge statement
     was written. Asserting on columns would only prove the columns someone

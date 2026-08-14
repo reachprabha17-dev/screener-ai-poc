@@ -131,7 +131,7 @@ class Worker:
             return False
         run, phase = active
 
-        # **Once per phase, not once per résumé.** 12 GB of VRAM holds one of the
+        # **Once per phase, not once per resume.** 12 GB of VRAM holds one of the
         # two models, and swapping per candidate costs a 10–20 s load every time:
         # two loads across a 1,000-CV run against two thousand (17.4).
         self._ensure_model_for(phase)

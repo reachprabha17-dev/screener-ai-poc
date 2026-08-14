@@ -2,7 +2,7 @@
 
 **A `none` verdict is unfalsifiable without a second look.** Every other check in
 10.5 examines a quote; a `none` has no quote to examine, so nothing in phase 1
-can tell "the résumé does not say this" from "the model did not notice". On a
+can tell "the resume does not say this" from "the model did not notice". On a
 must-have that distinction is the disqualifying outcome, and getting it wrong
 drops a qualified person silently.
 
@@ -68,7 +68,7 @@ def confirm_absence(
 ) -> AbsenceResult:
     """One batched call over every `none` criterion.
 
-    One call, not one per criterion: the résumé is the same document each time,
+    One call, not one per criterion: the resume is the same document each time,
     so twelve calls would be twelve copies of the whole context for no extra
     information — and at `verifier_num_ctx` that is the most expensive thing this
     system could be made to do.
@@ -80,7 +80,7 @@ def confirm_absence(
     user = build_user_message(criteria, rubric, sent_text)
 
     # Phase 2 has its own budget (10.1). Over it, the check is skipped and the
-    # candidate is flagged — the alternative is Ollama truncating the résumé
+    # candidate is flagged — the alternative is Ollama truncating the resume
     # without an error and the model confirming an absence from a document it
     # was only shown half of.
     budget = settings.verifier_num_ctx - settings.num_predict

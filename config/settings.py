@@ -20,10 +20,12 @@ them alone admits fabricated evidence.
 reuse is the largest remaining source of run-to-run variation (10.8).
 """
 
+import os
+import socket
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _VERSION_FILE = Path(__file__).resolve().parent.parent / "screener" / "_version.txt"
@@ -51,14 +53,14 @@ class Settings(BaseSettings):
     verifier_digest_pin: str | None = None
     num_ctx: int = 8192
     num_predict: int = 1536
-    # 10.6 B sends the whole résumé plus every `none` criterion in one call, so
+    # 10.6 B sends the whole resume plus every `none` criterion in one call, so
     # the verifier needs materially more room than the judge.
     verifier_num_ctx: int = 16384
     temperature: float = 0.0
     top_k: int = 1
     seed: int = 42
     keep_alive: str = "30m"
-    # Raised from 180: phase 2 reads a full résumé at `verifier_num_ctx` on a
+    # Raised from 180: phase 2 reads a full resume at `verifier_num_ctx` on a
     # 12b model, which is slower than anything phase 1 does.
     request_timeout_s: int = 300
     max_retries: int = 2
@@ -164,7 +166,14 @@ class Settings(BaseSettings):
     dev_actor_id: str = "poc-operator"
 
     # --- Worker (16) ---
-    worker_id: str = "worker-1"
+    # **Unique per process, not a constant.** Startup reclaim resets every job
+    # still `claimed` by this worker_id, on the reasoning that a process which
+    # has claimed nothing yet can only be seeing its own previous life. That
+    # holds exactly as long as the id is unique: two workers sharing `worker-1`
+    # would each reset the other's *in-flight* jobs at startup, and both would
+    # then judge the same resume. Override with WORKER_ID where a stable name
+    # matters (a systemd unit that must reclaim its own work across a restart).
+    worker_id: str = Field(default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}")
     worker_poll_interval_s: int = 2
     heartbeat_interval_s: int = 15
     job_max_attempts: int = 3

@@ -2,7 +2,7 @@
 
 Two endpoints because they answer different questions. `/health` says the process
 is up and can serve. `/ready` says it can do useful work: the model is reachable,
-migrations are current, and there is disk headroom for the stored résumé text.
+migrations are current, and there is disk headroom for the stored resume text.
 
 Conflating them means a full disk either takes the process out of rotation
 entirely, or goes unnoticed until a batch fills it.

@@ -85,7 +85,25 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
     `cacheable` is derived from the flags here rather than trusted from the
     caller — it is the one column that decides whether a failure becomes
     permanent, and a caller that forgets it would produce exactly the 12.5 bug.
+
+    **A byte-identical duplicate in the same run is an outcome, not an error.**
+    `UNIQUE(file_sha256, run_id)` used to surface as an `IntegrityError` out of a
+    plain INSERT: the worker retried the job three times and retired it `failed`,
+    so a folder containing the same CV twice lost the second job to a message
+    naming a constraint rather than the duplicate. Two copies of one CV is
+    ordinary — routine when HR copies files onto a share — so the conflict flags
+    the stored candidate `POSSIBLE_DUPLICATE` and returns its id. The job then
+    completes normally against the row that already describes those bytes.
     """
+    existing = tx.execute(
+        "SELECT id FROM candidates WHERE run_id = ? AND file_sha256 = ?",
+        (run_id, candidate.file_sha256),
+    ).fetchone()
+    if existing is not None:
+        candidate_id = int(existing["id"])
+        _flag_duplicate(tx, candidate_id)
+        return candidate_id
+
     cursor = tx.execute(
         "INSERT INTO candidates ("
         "run_id, filename, file_sha256, resume_text, sent_text, sent_text_sha256, "
@@ -155,6 +173,31 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
     return candidate_id
 
 
+def _flag_duplicate(tx: Tx, candidate_id: int) -> None:
+    """Add `POSSIBLE_DUPLICATE` to a stored candidate, idempotently.
+
+    Read-modify-write rather than SQL string surgery: `flags_json` is a JSON
+    array the rest of the codebase round-trips through the `Flag` enum, and a
+    duplicate arriving twice must not produce a flag listed twice.
+
+    The flag deliberately does **not** set `review_required`. Per 15.4 it maps to
+    no escalation reason — two copies of one CV is a filing observation, and
+    escalating it would put ordinary housekeeping into the queue that exists for
+    cases the system could not resolve.
+    """
+    row = tx.execute("SELECT flags_json FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
+    if row is None:
+        return
+    flags = json.loads(row["flags_json"] or "[]")
+    if Flag.POSSIBLE_DUPLICATE.value in flags:
+        return
+    flags.append(Flag.POSSIBLE_DUPLICATE.value)
+    tx.execute(
+        "UPDATE candidates SET flags_json = ? WHERE id = ?",
+        (json.dumps(sorted(flags)), candidate_id),
+    )
+
+
 def save_verification(tx: Tx, candidate_id: int, candidate: Candidate) -> None:
     """Write what phase 2 produced. **Never score, band, or verdict.**
 
@@ -213,6 +256,37 @@ def save_decision(
         "UPDATE candidates SET decision = ?, decided_by = ?, decided_at = ? WHERE id = ?",
         (decision, actor_id, at.isoformat(), candidate_id),
     )
+
+
+def decision_history(tx: Tx, candidate_id: int) -> list[dict[str, Any]]:
+    """Every decision ever recorded against this candidate, oldest first (12.8).
+
+    `candidates.decision` says where the person stands now; this says how they
+    got there and **why**. The reason lives only here — there is no column for it
+    on `candidates` — so an adverse-action record that must answer "on what
+    grounds was this person rejected" has to read it from the history.
+
+    Oldest first, deliberately: a decision that was changed is a fact about the
+    process, and showing the reversal in the order it happened is what makes it
+    legible rather than something an auditor has to reconstruct from timestamps.
+    """
+    rows = tx.execute(
+        "SELECT actor_id, old_decision, new_decision, old_score, old_band, reason, created_at "
+        "FROM overrides WHERE candidate_id = ? ORDER BY id",
+        (candidate_id,),
+    ).fetchall()
+    return [
+        {
+            "actor_id": row["actor_id"],
+            "from_decision": row["old_decision"],
+            "to_decision": row["new_decision"],
+            "old_score": row["old_score"],
+            "old_band": row["old_band"],
+            "reason": row["reason"],
+            "at": row["created_at"],
+        }
+        for row in rows
+    ]
 
 
 def mark_unverified_as_skipped(tx: Tx, run_id: str) -> int:
@@ -284,7 +358,7 @@ def purge_candidate(tx: Tx, file_sha256: str) -> None:
     **Every text column has to be listed here.** v6 added four of them
     (`resume_text`, `sent_text`, `redaction_map_json`, `verdicts.absence_evidence`)
     and `candidates` stopped being a results table the moment it started holding
-    full résumés. Missing one leaves erasure looking implemented while a complete
+    full resumes. Missing one leaves erasure looking implemented while a complete
     copy of the person's CV sits in the row next to the redacted one — which is
     worse than not having the control, because it gets reported as done.
 

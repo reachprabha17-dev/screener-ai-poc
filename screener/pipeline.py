@@ -147,7 +147,7 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
     run_id: str,
     root: Path,
 ) -> Candidate:
-    """Phase 1: judge one résumé. Returns a `Candidate` in every case; never raises.
+    """Phase 1: judge one resume. Returns a `Candidate` in every case; never raises.
 
     Everything a candidate needs to be *ranked* happens here, and nothing that
     needs the verifier. The split is not organisational: 12 GB of VRAM cannot
@@ -322,7 +322,7 @@ def verify_one(candidate: Candidate, rubric: Rubric, deps: Deps) -> Candidate:
     )
 
     if absence.skipped_over_budget:
-        # The résumé plus its `none` criteria did not fit `verifier_num_ctx`.
+        # The resume plus its `none` criteria did not fit `verifier_num_ctx`.
         # Flagged rather than truncated: Ollama truncates without an error, and a
         # confirmed absence from half a document is worse than no answer (10.1).
         flags = sorted({*verified.flags, Flag.BUDGET_EXCEEDED})

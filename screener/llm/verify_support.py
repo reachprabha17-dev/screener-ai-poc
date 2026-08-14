@@ -7,7 +7,7 @@ B is checking provenance; it is right not to care what the words mean, and
 nothing before this stage does.
 
 **Premise and hypothesis are both bounded.** The model is given the quote plus a
-window of `sent_text` around it — not the whole résumé — because the question is
+window of `sent_text` around it — not the whole resume — because the question is
 whether *this excerpt* establishes the claim. Given the full document a model
 will happily justify the claim from somewhere else entirely, which is the judge's
 job over again rather than a second opinion on its answer.

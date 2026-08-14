@@ -297,7 +297,7 @@ def work(
         if limit and processed >= limit:
             break
 
-    # Jobs, not résumés. A run is two passes over the same candidates (17.4),
+    # Jobs, not resumes. A run is two passes over the same candidates (17.4),
     # so "6 resumes screened" for a folder of 3 would be wrong in the direction
     # that makes an operator think the queue contained something it did not.
     typer.secho(f"Done. {processed} job(s) processed.", fg=typer.colors.GREEN)

@@ -81,6 +81,52 @@ def recent(tx: Tx, limit: int = 100) -> list[dict[str, Any]]:
     return [_row_to_dict(row) for row in rows]
 
 
+def search(
+    tx: Tx,
+    *,
+    actor_id: str = "",
+    action: str = "",
+    entity: str = "",
+    entity_id: str = "",
+    since: str = "",
+    until: str = "",
+    offset: int = 0,
+    limit: int = 50,
+) -> tuple[list[dict[str, Any]], int]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if actor_id:
+        clauses.append("actor_id = ?")
+        params.append(actor_id)
+    if action:
+        clauses.append("action = ?")
+        params.append(action)
+    if entity:
+        clauses.append("entity = ?")
+        params.append(entity)
+    if entity_id:
+        clauses.append("entity_id = ?")
+        params.append(entity_id)
+    if since:
+        clauses.append("ts >= ?")
+        params.append(since)
+    if until:
+        clauses.append("ts <= ?")
+        params.append(until)
+
+    where = " AND ".join(clauses) if clauses else "1=1"
+
+    query_count = f"SELECT COUNT(*) FROM audit_log WHERE {where}"  # noqa: S608
+    total_row = tx.execute(query_count, tuple(params)).fetchone()
+    total = total_row[0] if total_row else 0
+
+    query = f"SELECT ts, actor_id, action, entity, entity_id, detail_json FROM audit_log WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?"  # noqa: S608, E501
+    rows = tx.execute(query, tuple([*params, limit, offset])).fetchall()
+
+    return [_row_to_dict(row) for row in rows], total
+
+
 def _row_to_dict(row: Any) -> dict[str, Any]:  # noqa: ANN401 — sqlite3.Row
     detail = row["detail_json"]
     return {

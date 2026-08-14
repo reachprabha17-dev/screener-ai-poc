@@ -46,7 +46,7 @@ def test_a_denial_quoted_as_support_is_flagged() -> None:
 def test_a_hyphenated_compound_is_not_a_negation() -> None:
     """`no-code` is a product category. Tokenization cannot tell; the source can.
 
-    Without the hyphen check this fires on every résumé mentioning low-code or
+    Without the hyphen check this fires on every resume mentioning low-code or
     no-code tooling, and a check that cries wolf on a common word is a check
     reviewers learn to ignore.
     """

@@ -1,7 +1,7 @@
 """difflib only vs judge only vs both, over the labelled set (spec 19.3).
 
 **This experiment decides `verify_scope` and the escalation budget, and both are
-currently guesses.** Phase 2 costs ~5 s of GPU per résumé and puts more people in
+currently guesses.** Phase 2 costs ~5 s of GPU per resume and puts more people in
 front of a reviewer; whether that buys anything is a measurement nobody has taken.
 Running the second model because it sounds prudent is how a review queue becomes
 long enough that people stop reading it — which is the oversight control failing
@@ -14,7 +14,7 @@ Two things about the setup are worth being explicit about, because they are the
 difference between a comparison and a strawman.
 
 **Stage B's *alignment* runs in all three configurations.** It is pure, free, and
-the verifier needs the match blocks to know which part of the résumé to quote
+the verifier needs the match blocks to know which part of the resume to quote
 back as context. What varies is whose answer *escalates*: stage B's, the second
 model's, or either. That is the actual decision on the table — not whether to
 compute a ratio.
@@ -204,7 +204,7 @@ def _judge_and_align(
     """One judge call, then the pure stage-B pass. Shared by all three rows.
 
     Judging once per case rather than once per configuration is what makes the
-    three rows comparable: a second sampling of the same résumé would put judge
+    three rows comparable: a second sampling of the same resume would put judge
     variance inside a table that is supposed to isolate verification.
     """
     judged = judge_resume(llm, case.resume, rubric)

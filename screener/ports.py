@@ -55,7 +55,7 @@ class Job(BaseModel):
     id: int
     run_id: str
     # Which pass this job belongs to (17.4). Part of the job's identity, not a
-    # property of it: the same résumé has one judge job and one verify job, and
+    # property of it: the same resume has one judge job and one verify job, and
     # they are distinct rows.
     phase: Literal["judge", "verify"] = "judge"
     file_path: Path
@@ -106,7 +106,7 @@ class LLMClient(Protocol):
         """Make this model resident, unloading the other (17.4).
 
         Called once per phase. 12 GB of VRAM does not hold both, and swapping per
-        résumé costs a 10–20 s load on every candidate.
+        resume costs a 10–20 s load on every candidate.
         """
         ...
 

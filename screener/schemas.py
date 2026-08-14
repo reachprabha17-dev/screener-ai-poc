@@ -17,7 +17,7 @@ fields — fails silently the first time someone adds a field to `Candidate`.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, field_validator
 
@@ -183,10 +183,21 @@ class CriterionAuditView(CriterionView):
     model_config = ConfigDict(extra="forbid")
 
     model_verdict: Verdict
+    # Stage B: whether the judge's quote was actually found in the resume. A
+    # verdict resting on a quote that could not be located is a different fact
+    # from one that verified, and an audit that omits it cannot distinguish them.
+    verified: bool = True
     match_ratio: float
     longest_span: int
+    # Phase 2, in full. `verifier` above carries these too but only when the
+    # second model *disagreed* — which leaves silence meaning either "it agreed"
+    # or "it never ran". For an audit both halves have to be legible, so the
+    # verifier's reading is carried here whatever it concluded.
     support: Support | None = None
+    suggested_verdict: Verdict | None = None
+    verifier_rationale: str = ""
     absence_confirmed: bool | None = None
+    absence_evidence: str = ""
 
 
 class CandidateResponse(BaseModel):
@@ -245,7 +256,7 @@ def evidence_status(criterion: ScoredCriterion) -> EvidenceStatus:
     """The badge that answers "can I trust this quote?" (15.1).
 
     Four states, and `partial` is the one worth having. A quote that mostly
-    aligned but trails words the résumé never contained is neither trustworthy
+    aligned but trails words the resume never contained is neither trustworthy
     nor junk — it is the case where the reviewer needs to see *which part*
     matched, which is what the highlights show.
     """
@@ -332,10 +343,14 @@ def criterion_audit_view(criterion: ScoredCriterion, candidate: Candidate) -> Cr
     return CriterionAuditView(
         **base.model_dump(),
         model_verdict=criterion.model_verdict,
+        verified=criterion.verified,
         match_ratio=criterion.match_ratio,
         longest_span=criterion.longest_span,
         support=criterion.support,
+        suggested_verdict=criterion.suggested_verdict,
+        verifier_rationale=criterion.verifier_rationale,
         absence_confirmed=criterion.absence_confirmed,
+        absence_evidence=criterion.absence_evidence,
     )
 
 
@@ -443,6 +458,17 @@ class RunResponse(BaseModel):
     escalation_rate: float | None = None
 
 
+class FailedFileResponse(BaseModel):
+    """A file that was never screened. Named, because a count is not actionable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str
+    phase: str
+    attempts: int
+    last_error: str = ""
+
+
 class RunStatusResponse(BaseModel):
     """Progress, plus which pass is producing it (15.4).
 
@@ -469,6 +495,9 @@ class RunStatusResponse(BaseModel):
     undecided_count: int
     queue_depth_ahead: int
     eta_seconds: float
+    # Named files, not just the `failed` count above. Sign-off refuses while any
+    # remain, so a reviewer needs to know which ones and why.
+    failed_files: list[FailedFileResponse] = Field(default_factory=list)
     escalation_rate: float
 
 
@@ -489,3 +518,99 @@ class CountResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     count: int
+
+
+class AuditEntryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ts: datetime
+    actor_id: str | None
+    action: str
+    entity: str | None
+    entity_id: str | None
+    # Nullable because `detail_json` is: `append_for` is called without a detail
+    # on actions whose entity id says everything (`sign_off_run`), and 15 of the
+    # 90 rows in a working database have none. A non-optional dict here made the
+    # page 500 on real data while passing every test, because no fixture wrote a
+    # row without one.
+    detail: dict[str, Any] | None = None
+
+
+class DecisionRecordResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_id: str
+    from_decision: str
+    to_decision: str
+    old_score: float | None = None
+    old_band: str | None = None
+    reason: str
+    at: datetime
+
+
+class AdverseActionResponse(BaseModel):
+    """Why one named person was rejected, and everything that determined it.
+
+    Carries `CriterionAuditView` rather than `CriterionView`: this is the auditor
+    surface, and `model_verdict` — what the judge said *before* the consistency
+    gate forced it down — is exactly the number someone contesting an outcome is
+    entitled to see. It is withheld from the reviewer screen for the opposite
+    reason (15.4), and the role gate on the route is what keeps the two apart.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: int
+    filename: str
+    run_id: str
+    position_reference: str
+    decision: Decision
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    history: list[DecisionRecordResponse] = Field(default_factory=list)
+    score: float | None = None
+    band: Band | None = None
+    must_haves_met: bool = False
+    scoreable: bool = True
+    verification_status: str = "pending"
+    criteria: list[CriterionAuditView] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+    escalation_reasons: list[str] = Field(default_factory=list)
+    summary: str = ""
+    rubric_version: int | None = None
+    rubric_hash: str = ""
+    judge_digest: str = ""
+    verifier_digest: str | None = None
+    prompt_hash: str = ""
+    app_version: str = ""
+    redaction_on: bool = True
+    scored_at: datetime | None = None
+    rubric_approved_by: str | None = None
+    run_signed_off_by: str | None = None
+
+
+class RunStoryResponse(BaseModel):
+    """One run's whole life, for the audit view.
+
+    `separation_of_duties` is carried rather than re-derived: whether the person
+    who approved the rubric is the person who accepted its results is a fact
+    about the record, and a client recomputing it could disagree with the server.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    position_reference: str
+    rubric_version: int | None = None
+    approved_by: str | None = None
+    signed_off_by: str | None = None
+    events: list[AuditEntryResponse] = Field(default_factory=list)
+    separation_of_duties: bool = False
+    candidate_events_truncated: bool = False
+
+
+class AuditPageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entries: list[AuditEntryResponse]
+    total: int

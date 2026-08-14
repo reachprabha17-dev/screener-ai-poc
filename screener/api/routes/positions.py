@@ -49,9 +49,9 @@ def list_resume_folders(
     limit: int = 15,
     service: ScreenerService = Depends(get_service),
 ) -> FolderPageResponse:
-    """One page of subfolders of `path` on the résumé share, for the picker.
+    """One page of subfolders of `path` on the resume share, for the picker.
 
-    Paged and filtered server-side: counting a folder's résumés is a recursive
+    Paged and filtered server-side: counting a folder's resumes is a recursive
     walk, so an unbounded listing costs thousands of filesystem operations on a
     large share — seconds per render over a network mount, repeated on every
     Streamlit interaction.

@@ -20,7 +20,7 @@ act on.
 
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -39,8 +39,27 @@ class ApiError(RuntimeError):
 class ApiClient:
     base_url: str
     actor: str
+    # Comma-separated, matching the `X-Actor-Roles` header format. Role-scoped
+    # reads exist to be exercised — `GET /audit` requires `auditor`, and a client
+    # that could not send a role would make that gate untestable from the one
+    # place a person actually uses. Empty means "send no header", which the API
+    # reads as the stub default rather than as "no roles".
+    roles: str = ""
 
     # --- transport -----------------------------------------------------------
+
+    def _headers(self) -> dict[str, str]:
+        """Identity, and roles only when the operator has chosen some.
+
+        Omitting `X-Actor-Roles` entirely is not the same as sending it empty:
+        the API reads an absent header as the stub's default role set, and an
+        empty one as "this actor has no roles at all" — which would lock the
+        operator out of every role-scoped read.
+        """
+        headers = {"X-Actor": self.actor}
+        if self.roles:
+            headers["X-Actor-Roles"] = self.roles
+        return headers
 
     def _request(
         self,
@@ -55,7 +74,7 @@ class ApiClient:
                 method,
                 f"{self.base_url.rstrip('/')}{path}",
                 json=json,
-                headers={"X-Actor": self.actor},
+                headers=self._headers(),
                 timeout=timeout,
             )
         except httpx.ConnectError as exc:
@@ -187,6 +206,17 @@ class ApiClient:
 
     def purge(self, file_sha256: str) -> int:
         return int(self._request("DELETE", f"/candidates/{file_sha256}")["count"])
+
+    # --- audit ---------------------------------------------------------------
+
+    def search_audit(self, **filters: Any) -> dict[str, Any]:  # noqa: ANN401
+        return dict(self._request("GET", f"/audit?{urlencode(filters)}"))
+
+    def run_story(self, run_id: str) -> dict[str, Any]:
+        return dict(self._request("GET", f"/runs/{run_id}/story"))
+
+    def adverse_action_record(self, candidate_id: int) -> dict[str, Any]:
+        return dict(self._request("GET", f"/candidates/{candidate_id}/record"))
 
     # --- ops -----------------------------------------------------------------
 

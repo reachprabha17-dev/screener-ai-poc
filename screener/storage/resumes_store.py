@@ -1,4 +1,4 @@
-"""Browsing the résumé share (spec intake share).
+"""Browsing the resume share (spec intake share).
 
 Lists **one level at a time** rather than walking the whole tree. A mounted
 share can be arbitrarily large and is often on network storage where `rglob`
@@ -18,7 +18,7 @@ from screener.models import FolderInfo
 
 
 def _count_eligible(folder: Path) -> int:
-    """Résumés `jobs_store._eligible_files` would queue from this folder.
+    """Resumes `jobs_store._eligible_files` would queue from this folder.
 
     Kept in step with that function by hand — the two live in different layers
     and neither may import the other. The invariant is pinned by a test.

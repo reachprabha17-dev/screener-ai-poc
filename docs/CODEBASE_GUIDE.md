@@ -109,7 +109,7 @@ see the "escalates, never overrules" invariant actually asserted.
     screener/worker_loop.py     (290)   claim, heartbeat, reclaim, phase switch
     screener/storage/uow.py      (89)
     screener/storage/jobs_store.py (437)
-    screener/storage/resumes_store.py   résumé share folder discovery
+    screener/storage/resumes_store.py   resume share folder discovery
     screener/core/resume_paths.py      folder reference validation & containment
 
 `service.py` is the biggest file and mostly rhythm: open a unit of work, call
@@ -117,7 +117,7 @@ stores, append an audit row, commit. The rule that shapes it is that **stores
 never open a transaction** — they receive one. And `service.py` may not import
 `pipeline.py`: it enqueues, the worker executes.
 
-Résumé intake reads from `RESUMES_DIR` (which may point at a local directory or IT-mounted network share). `resumes_store.list_folders()` lists available folders for UI selection, and `core/resume_paths.py` enforces reference validation and path containment.
+Resume intake reads from `RESUMES_DIR` (which may point at a local directory or IT-mounted network share). `resumes_store.list_folders()` lists available folders for UI selection, and `core/resume_paths.py` enforces reference validation and path containment.
 
 
 The parts of `service.py` that are not rhythm are worth finding by name:
@@ -171,7 +171,7 @@ Three rules carry most of the weight:
 
 ### Read one candidate as the auditor sees it
 
-Traces are gone (v6 removed them: a second store of full résumé text to index,
+Traces are gone (v6 removed them: a second store of full resume text to index,
 retain, permission and purge, holding what `sent_text` now holds). The v6
 equivalent is the auditor view, which is *more* informative because it shows the
 model's input and the matched offsets side by side:
@@ -192,7 +192,7 @@ that reading them will not.
 Note what the `highlights` on each criterion are: character offsets into
 `resume_text`, not `sent_text`. The match blocks are computed against `sent_text`
 and translated at read time by `core/offsets.py`. Highlighting the untranslated
-offsets renders correctly right up until a résumé contains a redaction above the
+offsets renders correctly right up until a resume contains a redaction above the
 quote, and then it is silently wrong — `tests/test_read_layer.py` has a test
 named for exactly that.
 
@@ -212,7 +212,7 @@ the same `Worker` class the daemon runs.
 
 The phase switch is the part to watch for: the worker drains every `judge` job
 for a run, then unloads granite, loads gemma, and drains the `verify` jobs. The
-model is loaded twice per run, not twice per résumé — that is the whole reason
+model is loaded twice per run, not twice per resume — that is the whole reason
 the run is two phases rather than one pass, and it is forced by 12 GB of VRAM.
 
 ---

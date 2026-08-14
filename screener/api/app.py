@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from config.settings import settings
-from screener.api.routes import candidates, health, positions, rubrics, runs
+from screener.api.routes import audit, candidates, health, positions, rubrics, runs
 from screener.service import (
     ConflictError,
     NotFoundError,
@@ -93,7 +93,7 @@ def create_app(*, check_migrations: bool = True) -> FastAPI:
 
     _install_error_handlers(app)
 
-    for module in (positions, rubrics, runs, candidates, health):
+    for module in (positions, rubrics, runs, candidates, health, audit):
         app.include_router(module.router)
 
     @app.middleware("http")

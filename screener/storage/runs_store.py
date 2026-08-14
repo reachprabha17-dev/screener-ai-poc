@@ -158,5 +158,6 @@ def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
         escalation_rate=row["escalation_rate"],
         created_at=row["created_at"],
         created_by=row["created_by"],
+        reviewed_by=row["reviewed_by"],
         reproducibility_rate=row["reproducibility_rate"],
     )
