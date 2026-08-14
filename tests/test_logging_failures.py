@@ -416,3 +416,46 @@ def _seed_candidate(
                 app_version="v",
             ),
         )
+
+
+def test_the_jsonl_stream_carries_only_screener_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`screener.jsonl` is machine-readable, so every line has to be JSON.
+
+    The file handler used to be attached to the **root** logger, which collected
+    every INFO line any dependency emitted. httpx logs one per Ollama health
+    poll: the real file reached 15.7 MB of which 99.8% was
+    `HTTP Request: GET /api/tags` — 229,769 noise lines against 395 real events,
+    none of the noise being JSON, in a file named `.jsonl`.
+
+    Silencing httpx by name fixed the loudest library. This asserts the property
+    that matters instead: the handler is scoped to the `screener` logger, so a
+    dependency added next year cannot reintroduce the problem.
+    """
+    import logging as stdlib_logging
+
+    import structlog
+
+    from screener.logging import configure_logging, get_logger
+
+    monkeypatch.setattr(settings, "log_dir", str(tmp_path))
+    # Same reset the neighbouring test performs: `configure_logging` is
+    # idempotent by design, so a test that wants its own stream must clear the
+    # previous one first.
+    structlog.reset_defaults()
+    screener_logger = stdlib_logging.getLogger("screener")
+    for handler in list(screener_logger.handlers):
+        screener_logger.removeHandler(handler)
+
+    configure_logging()
+
+    get_logger("screener").info("screened", band="A")
+    get_logger("screener.worker_loop").info("job_failed", error="LLMError")
+    for library in ("httpx", "httpcore", "urllib3", "uvicorn", "watchdog", "yoyo", "streamlit"):
+        stdlib_logging.getLogger(library).info("chatter that is not JSON")
+
+    lines = (tmp_path / "screener.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines]  # raises if any line is not JSON
+
+    assert {e["event"] for e in events} == {"screened", "job_failed"}

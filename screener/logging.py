@@ -59,14 +59,31 @@ def configure_logging(*, to_file: bool = True) -> None:
     if structlog.is_configured():
         return
 
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    # stderr takes everything; the console is the right place for a library's
+    # chatter. `screener.jsonl` takes **only this package's events**.
+    logging.basicConfig(
+        format="%(message)s", handlers=[logging.StreamHandler(sys.stderr)], level=logging.INFO
+    )
+
     if to_file:
         log_dir = Path(settings.log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(log_dir, DIR_MODE)  # noqa: PTH101 — Path.chmod is the same call
-        handlers.append(logging.FileHandler(log_dir / "screener.jsonl", encoding="utf-8"))
-
-    logging.basicConfig(format="%(message)s", handlers=handlers, level=logging.INFO)
+        # **On the `screener` logger, not the root one.** Every `get_logger`
+        # name is a child of it (`screener.worker_loop`, `screener.clients...`),
+        # so one handler here catches all of them and nothing else.
+        #
+        # Attached to root, this file collected every INFO line any dependency
+        # emitted: httpx logs one per Ollama health poll, and the file measured
+        # 15.7 MB of which 99.8% was `HTTP Request: GET /api/tags` — 229,769
+        # noise lines against 395 real events. Worse, those lines are not JSON,
+        # so a `.jsonl` file nothing could parse. Silencing httpx by name fixes
+        # the library that happened to be loudest; urllib3, uvicorn, watchdog,
+        # yoyo and streamlit are all still there to take its place. Scoping the
+        # handler removes the whole class instead of the instance.
+        handler = logging.FileHandler(log_dir / "screener.jsonl", encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logging.getLogger("screener").addHandler(handler)
 
     structlog.configure(
         processors=[
@@ -84,7 +101,18 @@ def configure_logging(*, to_file: bool = True) -> None:
 
 
 def get_logger(name: str = "screener") -> Any:  # noqa: ANN401 — structlog's BoundLogger is dynamic
+    """A logger whose output reaches `screener.jsonl`, whatever it is named.
+
+    The file handler is bound to the `screener` logger so third-party chatter
+    cannot reach the stream (see `configure_logging`). Module callers pass
+    `__name__` and are already children of it, but the parameter accepts any
+    string — so a name from outside the package is namespaced under it here
+    rather than silently logging into a void. The logger name does not appear
+    in the rendered JSON, so this changes routing and nothing an operator reads.
+    """
     configure_logging()
+    if name != "screener" and not name.startswith("screener."):
+        name = f"screener.{name}"
     return structlog.get_logger(name)
 
 
