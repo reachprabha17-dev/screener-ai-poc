@@ -1,349 +1,662 @@
-# Reading this codebase
+# Guide to this codebase
 
-A route through ~11,400 lines of source, in the order that makes each file
-comprehensible when you reach it. The layering is enforced by tests, so reading
-bottom-up genuinely works: nothing early references anything you have not seen.
+This is a guide for someone new to the project. It explains what the app does,
+what technologies it uses, what you should learn first, and in what order to read
+the code.
 
-Budget: **20 minutes** for orientation, **half a day** for the five layers, and
-you will be able to place any file in the repository.
+Source code: about 13,600 lines. Tests: about 12,700 lines.
 
-The authority on *why* anything is the way it is remains `screener_spec_v6.md`.
-This document is a route through it and the code, not a replacement for either.
-`screener_spec_v4.md` is retained as history — where the two disagree, v6 wins,
-and `v4_to_v6_migration.md` records what moved and why.
+How long it takes:
+
+* 20 minutes to understand what the app does
+* Half a day to read the code, layer by layer
+* 2 to 3 days to learn the technologies, if they are new to you
+
+The full design document is `screener_spec_v6.md`. It explains *why* every
+decision was made. This guide is a shortcut into it, not a replacement.
+(`screener_spec_v4.md` is the old version, kept for history. If the two ever
+disagree, v6 is correct.)
 
 ---
 
-## Step 0 — twenty minutes, no code
+## Part 1 — What this app does
 
-Read three things, in this order:
+It screens job applicants using a local AI model.
 
-| Where | What it gives you |
+You give it a job description. It turns that into a list of criteria (a
+"rubric"). A human approves the rubric. Then it reads a folder full of CVs,
+scores each one against the rubric, and gives you a ranked list.
+
+Two rules shape the entire design. Everything else follows from them.
+
+**Rule 1: every decision that can affect a person is a plain function with no
+side effects.** All of that logic lives in `screener/core/`. Those functions
+don't touch the database, the network, or the AI model. They take data in and
+return data out. This means every rule that could cost someone a job interview
+can be tested on a laptop in milliseconds.
+
+**Rule 2: the AI checks its own work, but is never allowed to change a
+decision.** The app runs the CVs past a *second* AI model that reviews the
+first model's answers. When the two disagree, the app flags the candidate for a
+human to look at. It never lets the second model silently overturn the first.
+Both models read the same untrusted text (a CV can contain anything, including
+text designed to trick an AI), so letting them argue their way to a final answer
+with no human involved would be unsafe. This rule is enforced in
+`screener/core/reconcile_judge.py`.
+
+### Before reading any code (20 minutes)
+
+Read these three sections of the spec, in this order:
+
+| Section | What you get from it |
 |---|---|
-| `screener_spec_v6.md:1917` (section 24) | The whole system as one ASCII flow, JD to CSV, with both phases drawn |
-| `screener_spec_v6.md:1286` (section 13) | `judge_one` and `verify_one` as pseudocode — this *is* the product |
-| `screener_spec_v6.md:16` (section 1) | The locked decisions. Most "why is it like this?" questions end here |
+| §24 (`screener_spec_v6.md:1917`) | One diagram of the whole system, job description to final CSV |
+| §13 (`screener_spec_v6.md:1286`) | The two main functions written as plain pseudocode |
+| §1 (`screener_spec_v6.md:16`) | The decisions that are locked and won't change |
 
-Then stop. The spec is a reference, not a tutorial. Come back to it by section
-number when a file raises a question.
-
-Two sentences worth carrying into the code:
-
-**This system ranks people, and every rule that can cost a candidate a place is a
-pure function in `core/`.** That constraint explains most of the architecture.
-
-**The verifier escalates and proposes; it never overrules.** Phase 2 is a second
-model reading the same attacker-controlled text as the first. Letting it move an
-outcome would mean a candidate's result changed because two models disagreed,
-with no human involved. `core/reconcile_judge.py` is where that is enforced, and
-it is pure so the guarantee is testable without a GPU.
+Then stop reading the spec. It's a reference book, not a tutorial. Go back to it
+by section number when the code raises a question.
 
 ---
 
-## The five layers
+## Part 2 — The technologies
 
-### 1. The vocabulary — ~780 lines
+Everything runs on **one computer, inside the company network, with no internet
+access**. That one constraint chose most of the stack for us:
 
-    screener/models.py    (585)
+* No internet means the AI model runs locally (Ollama), not through a cloud API.
+* One machine means a simple file-based database (SQLite), not a database
+  cluster.
+* A small internal audience means a Python-based UI (Streamlit), not React and a
+  JavaScript build system.
+* One machine again means plain Linux services (systemd), not Docker or
+  Kubernetes.
+
+### The full list
+
+| Technology | What it is | Where it's used here |
+|---|---|---|
+| **Python 3.12** | The language everything is written in | Everywhere |
+| **Pydantic v2** | Defines data shapes and validates them automatically | `models.py`, `schemas.py`, `ports.py` |
+| **pydantic-settings** | Reads configuration from environment variables into a typed object | `config/settings.py` |
+| **FastAPI** | Web framework that serves the HTTP API | `screener/api/` |
+| **uvicorn** | The web server that runs FastAPI | `scripts/dev.sh`, `deploy/` |
+| **SQLite** | A database that is just a single file on disk | `screener/storage/` |
+| **yoyo-migrations** | Applies database schema changes in order | `storage/migrations/sqlite/` |
+| **Ollama** | Runs AI models locally on this machine | `clients/ollama_client.py` |
+| **Streamlit** | Builds web UIs in pure Python, no JavaScript | `ui/` |
+| **httpx** | HTTP client library | `ui/api_client.py` |
+| **Typer** | Builds command-line tools | `screener/cli.py` |
+| **structlog** | Writes logs as JSON instead of sentences | `screener/logging.py` |
+| **xberg** | Extracts text from PDFs and Word files, with OCR for scans | `intake/parse_worker.py` |
+| **python-magic** | Detects a file's real type by looking at its bytes | `intake/validate_file.py` |
+| **defusedxml** | XML parser that blocks known XML attacks | `intake/` |
+| **pytest** | The testing framework | `tests/` |
+| **hypothesis** | Generates random test inputs to find edge cases | `tests/` |
+| **mypy** | Checks type annotations are correct before you run the code | Build check |
+| **ruff** | Formats code and catches common mistakes | Build check |
+| **uv** | Installs dependencies and manages the virtual environment | `uv.lock` |
+| **systemd** | Linux's service manager; keeps the app running | `deploy/*.service` |
+
+### What to learn, in order
+
+You do not need all of this before you start. Here is what to learn and when.
+
+#### Learn these first — you can't read the code without them
+
+**1. Modern Python typing (about half a day)**
+
+Learn these specific things:
+
+* `Protocol` — lets you say "anything with these methods will do" without
+  inheritance. This is how `ports.py` defines the swappable parts of the system.
+* `StrEnum` — an enum whose members are also strings.
+* `Literal["a", "b"]` — a type meaning "only these exact values are allowed".
+* `X | None` — the modern way to write "optional".
+
+The whole codebase passes strict type checking, so the type annotations are
+reliable. Reading them often saves you from reading the function body at all.
+
+**2. Pydantic v2 (about half a day) — the single most useful thing to learn here**
+
+Pydantic is how every piece of data in this app is defined. A Pydantic model is
+a class where you declare fields with types, and Pydantic checks the data
+matches when you create one.
+
+There are two sets of models, and the difference matters:
+
+* `screener/models.py` (743 lines) — the *internal* shapes. A `Candidate`, a
+  `Rubric`, a `Run`.
+* `screener/schemas.py` (616 lines) — the *external* shapes. What the API sends
+  and receives over HTTP.
+
+They are separate on purpose. It means you can change something internal without
+accidentally changing what the API promises to its callers.
+
+Learn: `BaseModel`, `Field`, `ConfigDict`, `field_validator`, `model_dump`, and
+how to subclass a model to make a variant.
+
+Skip: generics, custom types, `RootModel`. None of them appear here.
+
+One warning if you learn from older tutorials: Pydantic v1 and v2 are quite
+different. In v2, `@validator` became `@field_validator`, and the inner `Config`
+class became `model_config`.
+
+**3. pytest (about 2 hours)**
+
+Learn fixtures, `parametrize`, markers, and `monkeypatch`. You will read far
+more test code than you write at first, because in this project the tests are
+where the rules are actually written down.
+
+#### Learn these before touching the matching part of the code
+
+**4. FastAPI (about half a day) — before working in `screener/api/`**
+
+FastAPI turns Python functions into HTTP endpoints. Learn `APIRouter`,
+`Depends` (its dependency injection), `response_model`, and `HTTPException`.
+
+Two things specific to this codebase are worth understanding rather than
+memorising:
+
+* One endpoint sets `response_model=None` on purpose. Auditors get a *bigger*
+  version of the candidate object than recruiters do. If we declared the normal
+  response type, FastAPI would helpfully strip the extra fields back off and the
+  auditor would silently see less than they should.
+* The API is created by a *function* (`create_app`), not built at import time.
+  That's what `--factory` means in the startup command. It lets the app run its
+  database checks at startup and refuse to start if the schema is out of date.
+
+Skip: async endpoints (there are none here), WebSockets, background tasks.
+
+**5. How SQLite handles concurrent access (about half a day) — before working in
+`screener/storage/`**
+
+This is the least "framework-like" item on the list and the one people most
+often get wrong. Two separate programs write to this database: the web API and
+the background worker.
+
+Learn:
+
+* **WAL mode** — a SQLite setting that allows one writer and many readers at the
+  same time, without readers ever being blocked.
+* **`busy_timeout`** — how long to wait when the database is locked instead of
+  failing immediately.
+* **`check_same_thread`** — SQLite connections belong to the thread that made
+  them. FastAPI runs handlers on a pool of threads, so a single shared
+  connection works fine in development and breaks under real traffic.
+* **Why a database transaction must never wrap an AI call.** An AI call takes
+  about 5 seconds. Holding the database's write lock for 5 seconds blocks the
+  other process completely. The worker's pattern is: claim job (transaction),
+  run the AI (no transaction), save result (transaction).
+
+Then read `storage/connection.py` and `storage/uow.py`. That's 250 lines
+containing all of the above.
+
+yoyo-migrations takes another 20 minutes. A migration is a `.sql` file with a
+matching `.rollback.sql` file. One gotcha: yoyo reads one folder and does not
+look inside subfolders. Point it at the wrong level and it silently applies
+nothing.
+
+**6. How Streamlit works (about 2 hours) — before working in `ui/`**
+
+There is one big idea, and everything else follows from it:
+
+> **Every time the user clicks anything, Streamlit re-runs your entire script
+> from the top.**
+
+There is no event handling in the usual sense. Your script runs again, and
+`st.session_state` is the only thing that survives between runs.
+
+Learn: `session_state`, giving widgets a `key`, `on_change` callbacks,
+`st.navigation` and `st.Page` for multiple pages, and `st.rerun`.
+
+Read the comment on `adopt_run` in `ui/common.py` for a real example of why this
+matters. Three different pages have a "which run?" dropdown. An earlier version
+updated shared state by comparing values on each re-run, and the dropdowns ended
+up fighting each other: 1,207 script re-runs in 150 seconds, each one making an
+API call. The fix was to update state only when a human actually moves the
+dropdown.
+
+**7. Ollama (about 2 hours) — before working in `clients/` or `llm/`**
+
+Ollama runs the AI models locally. The key idea:
+
+When you pass a JSON schema as `format=`, Ollama doesn't *ask* the model to
+produce that shape. It physically prevents the model from generating any text
+that would break the schema. That's why there is no code anywhere in this repo
+that tries to repair broken JSON from the model.
+
+But it only constrains the *shape*, not the *meaning*. The model can still
+return the right shape with wrong contents, which is what
+`core/validate_verdicts.py` exists to catch.
+
+Then learn the settings that matter, all of which are in `config/settings.py`
+with comments explaining what goes wrong without them:
+
+* `num_ctx` — how much text the model can read. Go over it and Ollama **silently
+  cuts off** the input. The model then judges half a CV and reports no error.
+* `num_predict` — how much the model can write. Too low and the JSON gets cut off
+  mid-object.
+* `temperature`, `top_k`, `seed` — set for repeatability. Same input, same
+  output.
+* `keep_alive` — how long to keep the model in memory between calls.
+* `OLLAMA_NUM_PARALLEL=1` — only one request at a time. See "The two AI models"
+  below for why this is important.
+
+Honestly, `config/settings.py` is the best Ollama tutorial in this repository.
+
+#### Learn these when you happen to land in them (an hour each, at most)
+
+**8. Typer** — one decorated function per command. `cli.py` is straightforward.
+
+**9. structlog** — the shape of the log events matters more than the library.
+Note that this app has *two separate log streams* and they are not
+interchangeable:
+
+* The **audit log** lives in SQLite. It records *who did what*: approvals,
+  overrides, purges, sign-offs. It can only be appended to, enforced by a
+  database trigger.
+* **`screener.jsonl`** is a rotating log file. It records *what the system did*:
+  timings, retries, crashes, budget overflows.
+
+The reason for JSON rather than sentences: you need to ask questions like "how
+many parses crashed last night?" You can't ask that of prose.
+
+**10. mypy and ruff** — you'll meet these as build failures rather than as
+reading. `./scripts/dev.sh check` runs both.
+
+**11. hypothesis** — used only in the pure logic layer. Learn `@given` and the
+handful of strategies actually used. Ignore stateful testing.
+
+**12. `resource`, `subprocess`, fork safety** — only needed for
+`intake/sandbox.py`, and only if you're interested in safely parsing hostile
+files.
+
+### What you do NOT need to learn
+
+People often expect these and they aren't here:
+
+* No React, no JavaScript, no npm, no frontend build step.
+* No Docker or Kubernetes.
+* No PostgreSQL, MySQL, or any database server.
+* **No ORM** (no SQLAlchemy, no Django ORM). The SQL is written by hand. Open
+  `storage/results_store.py` and you are looking at the actual queries.
+* No Celery, Redis, or message queue. The job queue is a table in SQLite.
+* No LangChain or agent framework. Prompts are markdown files, and the model is
+  called directly.
+* No cloud SDKs.
+* **Almost no async.** The only `async` code is a small wrapper in
+  `parse_worker.py`, because the PDF library only offers an async API.
+
+---
+
+## Part 3 — Reading the code, layer by layer
+
+The layers are enforced by an automated test, so reading bottom-up genuinely
+works. Nothing in an early layer refers to anything you haven't seen yet.
+
+### Layer 1: the vocabulary (about 935 lines)
+
+    screener/models.py    (743)
     screener/ports.py     (192)
 
-Every other file is a function over these types. Read `models.py` for the shapes
-and `ports.py` for the seams — and note which seams are real: `LLMClient` and
-`ResumeParser` are genuine swap points (callers are typed against the Protocol),
-while the storage Protocols are declarations that `tests/test_layering.py` keeps
-honest. Section 6 of the spec is explicit that storage portability is *not* the
-one-file swap the inference ports are — and see "What is not built" below for
-where that currently stands.
+Every other file in the project is a function over these types. Read
+`models.py` for the data shapes, and `ports.py` for the "swappable parts".
 
-The three fields to notice in `models.py`, because everything downstream turns on
-them: `Candidate.resume_text` (what HR reads), `Candidate.sent_text` (what the
-model actually saw, post-sanitize and post-redaction), and
-`ScoredCriterion.match_blocks` (which characters of `sent_text` a quote matched).
-Three text versions exist and two are persisted; §12.6 says why the third is not.
+Not all the swappable parts are equally real. `LLMClient` and `ResumeParser` are
+genuine — you could replace Ollama or the PDF parser by writing one new class.
+The storage ones are more of a statement of intent (see "What isn't built yet").
 
-### 2. The spine — 357 lines
+Three fields in `models.py` matter more than the rest, because everything
+downstream depends on them:
 
-    screener/pipeline.py    ::judge_one, ::verify_one
+* `Candidate.resume_text` — the CV as a human reads it.
+* `Candidate.sent_text` — the CV as the AI actually saw it, after cleaning and
+  after personal details were blanked out.
+* `ScoredCriterion.match_blocks` — which exact characters of `sent_text` the AI's
+  quoted evidence matched.
 
-Two functions. `judge_one` is the phase-1 sequence, about 40 lines of actual
-order: validate, parse, sanitize, detect injection, redact, budget, judge,
-validate verdicts, screen free text, verify evidence, detect negation, score.
-`verify_one` is phase 2 and is much shorter — two batched LLM calls and a pure
-reconciliation.
+So there are three versions of the CV text and two are saved. §12.6 of the spec
+explains why the third isn't.
 
-Note the ordering rule `judge_one` encodes: `verify_evidence` matches against the
-exact string sent to the model, post-sanitize and post-redaction. Matching
-anything else fails on every quote near a redaction. Translation back into
-`resume_text` coordinates happens at read time, in `core/offsets.py`.
+### Layer 2: the spine (357 lines)
 
-Once you have read these two functions you can place every other file here.
+    screener/pipeline.py
 
-### 3. The decisions — `core/`, ~1,600 lines, all pure
+Two functions, and they are the whole product.
 
-Read in pipeline order:
+`judge_one` is phase 1. About 40 lines of ordering: validate the file, extract
+text, clean it, check for prompt-injection attempts, blank out personal details,
+check it fits in the model's context, ask the AI, check the answer covers every
+criterion, strip irrelevant commentary, verify the quoted evidence actually
+appears in the CV, check for negation ("no experience with Python"), then score.
 
-    detect_injection.py   (154)   review, never exclude
-    redact_pii.py         (245)   produces the span map offsets depend on
-    offsets.py             (73)   sent_text coordinates → resume_text coordinates
-    budget.py             (136)   silent truncation is the failure it prevents
-    validate_verdicts.py  (102)   set equality against the rubric
-    screen_freetext.py    (139)
-    verify_evidence.py    (388)   stage B — the anti-hallucination checks
-    detect_negation.py    (117)   stage C — the context that inverts a quote
-    reconcile_judge.py    (134)   phase 2 folded back in, and never onto a verdict
-    compute_score.py       (68)   arithmetic only — the model never scores
-    rank.py                (60)   three partitions, never one list
+`verify_one` is phase 2 and much shorter: two AI calls and one pure function
+that folds the results back in.
 
-**This is the part to read slowly.** Every consequence for a person is decided
-here, and there is no I/O anywhere in it, so each function can be run in a REPL
-against a literal.
+One ordering rule is worth noticing. Evidence is matched against `sent_text` —
+the exact string the model was given. If you matched against the original text
+instead, every quote near a blanked-out phone number would fail. The conversion
+back to original-text positions happens later, when the data is read, in
+`core/offsets.py`.
 
-Read each one with its test file open beside it. `tests/test_verify_evidence.py`
-next to `screener/core/verify_evidence.py` is the fastest way into the hardest
-module in the codebase. `tests/test_reconcile_judge.py` is the shortest way to
-see the "escalates, never overrules" invariant actually asserted.
+Once you've read these two functions you can place every other file in the
+project.
 
-### 4. The seams
+### Layer 3: the decisions (`core/`, about 1,700 lines, all pure functions)
 
-    screener/service.py         (989)   transaction boundary
-    screener/worker_loop.py     (290)   claim, heartbeat, reclaim, phase switch
-    screener/storage/uow.py      (89)
-    screener/storage/jobs_store.py (437)
-    screener/storage/resumes_store.py   resume share folder discovery
-    screener/core/resume_paths.py      folder reference validation & containment
+Read them in the order the pipeline calls them:
 
-`service.py` is the biggest file and mostly rhythm: open a unit of work, call
-stores, append an audit row, commit. The rule that shapes it is that **stores
-never open a transaction** — they receive one. And `service.py` may not import
-`pipeline.py`: it enqueues, the worker executes.
+    detect_injection.py   (171)   flag suspicious text for review, never auto-reject
+    redact_pii.py         (245)   blank out personal details; produces a position map
+    offsets.py             (73)   convert positions between the two text versions
+    budget.py             (136)   make sure nothing gets silently cut off
+    validate_verdicts.py  (102)   the AI answered for exactly the right criteria
+    screen_freetext.py    (139)   strip commentary that isn't about the job
+    verify_evidence.py    (388)   does the AI's quote actually appear in the CV?
+    detect_negation.py    (117)   the quote is there, but does it say the opposite?
+    reconcile_judge.py    (134)   fold in phase 2, without changing any verdict
+    compute_score.py       (68)   arithmetic only; the AI never produces a score
+    rank.py                (60)   split into three groups, never one long list
+    resume_paths.py        (74)   check a folder path is real and inside bounds
 
-Resume intake reads from `RESUMES_DIR` (which may point at a local directory or IT-mounted network share). `resumes_store.list_folders()` lists available folders for UI selection, and `core/resume_paths.py` enforces reference validation and path containment.
+**Read this part slowly.** Every consequence for a real person is decided here.
+There is no database access and no network access in any of it, so you can paste
+any of these functions into a Python shell and try them on made-up data.
 
+Read each file with its test file open next to it. `tests/test_verify_evidence.py`
+is the fastest way into `verify_evidence.py`, which is the hardest file here.
+`tests/test_reconcile_judge.py` is the shortest way to see the "never overrules"
+rule actually being checked.
 
-The parts of `service.py` that are not rhythm are worth finding by name:
-`record_decision` (three writes, one transaction), `save_rubric` (optimistic
-locking on `base_version`, 409 on conflict), `approve_rubric` (blocked while any
-criterion's `claim_stale` is set), and `sign_off_run` (refuses while any
-review-required candidate is undecided).
+### Layer 4: the plumbing
 
-All of the concurrency lives in `jobs_store.py` and nowhere else. The claim is
-one statement — `UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING` — so there
-is no window between choosing a job and owning it.
+    screener/service.py                (1206)  where transactions begin and end
+    screener/worker_loop.py             (290)  the background job runner
+    screener/storage/uow.py              (89)  the transaction object itself
+    screener/storage/connection.py      (163)  WAL, threading, migration check
+    screener/storage/jobs_store.py      (492)  all the concurrency lives here
+    screener/storage/results_store.py   (505)
+    screener/storage/runs_store.py      (163)
+    screener/storage/audit_store.py     (139)
+    screener/storage/resumes_store.py   (115)  finds CV folders on the share
+    screener/storage/rubrics_store.py   (111)
+    screener/storage/positions_store.py  (88)
 
-### 5. The edges
+`service.py` is the largest file and most of it is the same rhythm repeating:
+open a transaction, call some stores, write an audit record, commit.
 
-    screener/clients/ollama_client.py  (394)   structured output, token counting
-    screener/intake/validate_file.py   (277)
-    screener/intake/sandbox.py         (438)   rlimits, subprocess, fork safety
-    screener/schemas.py                (457)   wire contracts + role-scoped views
-    screener/api/                              routes parse, authorize, delegate
-    ui/                                        HTTP client only
+Two rules shape it:
 
-`schemas.py` is worth more attention than its position suggests: §15.2's
-role-scoped field exposure is a disclosure boundary, and it is implemented by
-returning a *different type* to an auditor rather than by filtering a dict. That
-is also why `get_candidate` sets `response_model=None` — FastAPI would otherwise
-re-validate the subclass back down to the base model and silently drop the
-auditor's extra fields.
+1. **Stores never open a transaction.** They are handed one. This is what makes
+   multi-table operations all-or-nothing.
+2. **`service.py` is not allowed to import `pipeline.py`.** It only adds jobs to
+   the queue; the background worker runs them. Otherwise screening 1,000 CVs
+   would happen inside a single web request.
+
+CVs are read from whatever `RESUMES_DIR` points at — a local folder, or a
+network share mounted by IT. `resumes_store.list_folders()` lists what's
+available for the UI to show, and `core/resume_paths.py` makes sure a chosen
+folder is genuinely inside the allowed area.
+
+The interesting parts of `service.py`, worth finding by name:
+
+* `record_decision` — three writes in one transaction.
+* `save_rubric` — detects two people editing the same rubric and returns a 409.
+* `approve_rubric` — refuses while any criterion is marked as needing re-checking.
+* `sign_off_run` — refuses while any flagged candidate hasn't been decided.
+* `advance_phase_if_complete` — the switch from phase 1 to phase 2.
+
+All the concurrency is in `jobs_store.py` and nowhere else. Claiming a job is a
+single SQL statement (`UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING`),
+so there is no gap between picking a job and owning it during which another
+worker could grab the same one.
+
+### Layer 5: the edges
+
+    screener/clients/ollama_client.py  (394)   talking to the AI model
+    screener/intake/validate_file.py   (277)   is this file safe to open?
+    screener/intake/sandbox.py         (438)   parsing untrusted files safely
+    screener/intake/parse_worker.py    (102)   the actual PDF/DOCX extraction
+    screener/schemas.py                (616)   the HTTP contract
+    screener/api/                    (~450)    routes: parse, check permission, delegate
+    ui/                             (~1600)    the web UI
+
+`schemas.py` deserves more attention than its position suggests. The rule that
+auditors see more fields than recruiters is a data-disclosure boundary, and it's
+implemented by returning a *different class* to an auditor rather than by
+filtering a dictionary. Filtering is easy to forget in one place; returning the
+wrong type is caught by the type checker.
+
+The UI is four pages behind a shell:
+
+    ui/screener_app.py       (132)  shell: sidebar, health check, page navigation
+    ui/common.py             (152)  shared helpers, glossary, escalation meter
+    ui/api_client.py         (249)  the only way the UI reaches any data
+    ui/views/requisitions.py (232)  create a position, extract and approve a rubric
+    ui/views/runs.py         (193)  start a run, watch progress
+    ui/views/review.py       (386)  read candidates, make decisions
+    ui/views/audit.py        (578)  the audit trail
+
+The split into pages is not cosmetic. Streamlit tabs run *every* tab's code on
+every re-run; pages run only the one you're looking at. With three run-pickers
+sharing state, tabs were unworkable.
 
 Read `sandbox.py` last, and only if hostile files interest you. It is the most
 specialised code here and teaches you nothing about the domain.
 
 ---
 
-## Three shortcuts that beat reading linearly
+## Part 4 — Three shortcuts that beat reading everything
 
-### `tests/test_layering.py` is the architecture, executable
+### 1. `tests/test_layering.py` is the architecture, written as code
 
-Nineteen rules read from the AST import graph, each with a docstring saying what
-goes wrong if you break it. It is the fastest 391 lines in the repository, and it
-answers "what is allowed to import what" definitively rather than by convention.
+Nineteen rules, each checked against the real import graph, each with a comment
+saying what breaks if you violate it. It's 391 lines and it answers "what is
+allowed to import what?" definitively.
 
 Three rules carry most of the weight:
 
-- `service.py` must not import `pipeline.py` — otherwise a 1,000-CV batch runs
-  inside an HTTP request.
-- `ui/` must not import `sqlite3` or `screener.*` — the real enforcement of the
-  UI-is-an-HTTP-client decision, since `sqlite3` ships with Python and cannot be
-  uninstalled.
-- `core/` must do no I/O — which is why the scoring and evidence rules are
-  testable without a GPU or a database.
+* `service.py` must not import `pipeline.py` — or a 1,000-CV batch runs inside
+  one HTTP request.
+* `ui/` must not import `sqlite3` or anything from `screener` — this is what
+  actually enforces "the UI is only an HTTP client". You can't enforce it by
+  leaving a driver uninstalled, because `sqlite3` ships with Python itself.
+* `core/` must not do any I/O — which is why all the scoring rules can be tested
+  without a database or a GPU.
 
-### Read one candidate as the auditor sees it
-
-Traces are gone (v6 removed them: a second store of full resume text to index,
-retain, permission and purge, holding what `sent_text` now holds). The v6
-equivalent is the auditor view, which is *more* informative because it shows the
-model's input and the matched offsets side by side:
+### 2. Look at one candidate the way an auditor sees them
 
 ```bash
 curl -s -H 'X-Actor-Roles: auditor' \
   localhost:8000/candidates/1 | .venv/bin/python -m json.tool
 ```
 
-You get `sent_text` — the exact string the model was given — alongside each
-criterion's `evidence`, `evidence_status`, `match_ratio`, `longest_span`,
-`model_verdict`, and the `verifier` panel (`disagrees`, `suggested_verdict`,
-`rationale`). Diff `sent_text` against `resume_text` in the same payload and the
-redaction span map becomes concrete. That single response makes the prompt
-contract, the evidence check and the verifier's bounded role concrete in a way
-that reading them will not.
+You get `sent_text` (the exact text the AI was given) next to each criterion's
+quoted evidence, whether that evidence was verified, how well it matched, what
+the first model said, and what the second model thought about it.
 
-Note what the `highlights` on each criterion are: character offsets into
-`resume_text`, not `sent_text`. The match blocks are computed against `sent_text`
-and translated at read time by `core/offsets.py`. Highlighting the untranslated
-offsets renders correctly right up until a resume contains a redaction above the
-quote, and then it is silently wrong — `tests/test_read_layer.py` has a test
-named for exactly that.
+Compare `sent_text` against `resume_text` in the same response and the redaction
+becomes concrete. That one response teaches you more about how the app works
+than reading three files.
 
-For a schema failure specifically, `data/failures/` holds the raw model output —
-captured only on failure, so it is empty on a healthy run.
+One detail: the highlight positions in the response point into `resume_text`
+(what the human reads), but they were originally calculated against `sent_text`
+(what the AI read). `core/offsets.py` converts between them at read time. If you
+skip that conversion, highlights look perfect until a CV has a redaction above
+the quote, and then they're silently wrong. There's a test named after exactly
+that in `tests/test_read_layer.py`.
 
-### Run it once yourself
+If the AI ever returns malformed output, the raw response is saved in
+`data/failures/`. That folder is empty on a healthy run, by design.
+
+### 3. Run it once yourself
 
 ```bash
 .venv/bin/screener work --limit 1
 ```
 
 Then read `worker_loop.py` immediately afterwards. Watching it claim, screen and
-complete a single job is worth more than tracing it statically. The CLI needs
-neither the API nor the daemon — that is the break-glass path, and it exercises
-the same `Worker` class the daemon runs.
+finish one job teaches more than tracing it on paper. The command needs neither
+the API nor the background service running.
 
-The phase switch is the part to watch for: the worker drains every `judge` job
-for a run, then unloads granite, loads gemma, and drains the `verify` jobs. The
-model is loaded twice per run, not twice per resume — that is the whole reason
-the run is two phases rather than one pass, and it is forced by 12 GB of VRAM.
-
----
-
-## How to read the comments
-
-The docstrings carry reasoning, not mechanics, and many of them record things
-that actually failed on this system:
-
-- `screener/core/verify_evidence.py` — why a check that works was deliberately
-  downgraded to flag-only, after it removed the two strongest candidates from a
-  live run.
-- `screener/core/reconcile_judge.py` — why `escalation_reasons` is *derived* from
-  the flags rather than accumulated alongside them.
-- `screener/intake/sandbox.py` — why the process limit is relative to current
-  usage rather than absolute (the absolute one killed every parse).
-- `config/settings.py` — why `parse_mem_limit_mb` is 2048, `seconds_per_resume`
-  is 5.4, and `evidence_match_min_chars` is 16. All three were measured.
-
-When a constant looks arbitrary, the comment above it usually says what was
-measured to pick it. `git grep -n "Measured"` finds them.
+Watch for the phase switch: the worker finishes *every* phase-1 job for a run,
+then unloads the first model, loads the second, and does all the phase-2 jobs.
+The models are loaded twice per run, not twice per CV. That's the whole reason
+the run has two phases, and it's forced by having only 12 GB of video memory.
 
 ---
 
-## Repository map
+## Part 5 — How to read the comments
 
-| Path | What lives there |
+The docstrings in this codebase explain *reasoning*, not mechanics. Many of them
+record something that actually went wrong on this system:
+
+* `core/verify_evidence.py` — why a check that worked correctly was deliberately
+  downgraded to a warning, after it removed the two best candidates from a real
+  run.
+* `core/reconcile_judge.py` — why the escalation reasons are calculated from the
+  flags rather than collected alongside them.
+* `intake/sandbox.py` — why the memory limit is relative to current usage rather
+  than a fixed number (the fixed number killed every parse).
+* `storage/connection.py` — why each thread makes its own database connection,
+  and why pointing yoyo at the wrong folder silently disables all migrations.
+* `ui/common.py` (`adopt_run`) — the 1,207-re-runs-in-150-seconds story.
+* `config/settings.py` — why the parse memory limit is 2048 MB, why the timing
+  estimate is 5.4 seconds per CV, and why the minimum evidence length is 16
+  characters. All three were measured, not guessed. The 16 replaced a 25 that had
+  been copied over from a rejected idea and never re-checked; at 25, three
+  perfectly good short quotes were being flagged.
+
+When a number looks arbitrary, the comment above it usually says what was
+measured to pick it. `git grep -n "Measured"` finds them all.
+
+---
+
+## Part 6 — Map of the repository
+
+| Path | What's in it |
 |---|---|
-| `screener/models.py`, `ports.py` | Domain contracts and seams |
-| `screener/core/` | Every decision that affects a candidate. Pure |
-| `screener/intake/` | File validation, sandboxed parsing, Unicode sanitizing |
-| `screener/llm/`, `screener/prompts/` | Prompt contracts. Prompts are hashed files, not literals |
-| `screener/clients/` | Ollama. The one place inference is spoken to |
-| `screener/storage/` | SQLite, migrations, unit of work, stores |
-| `screener/pipeline.py` | `judge_one` (phase 1) and `verify_one` (phase 2) |
-| `screener/service.py` | Transactions, audit, authorization, preconditions |
-| `screener/schemas.py` | Wire contracts and the §15.2 role-scoped views |
-| `screener/worker_loop.py`, `worker.py` | The daemon that drains both phases |
-| `screener/api/` | FastAPI. Parses, authorizes, delegates, serializes |
-| `ui/` | Streamlit. HTTP client, no database, no domain imports |
-| `eval/` | The harness that decides whether a change improved anything |
-| `tests/` | 547 tests run without a GPU; 37 more are `live`-marked. `test_layering.py` is the architecture |
-| `deploy/` | systemd units |
-| `scripts/dev.sh` | Local runner: start, stop, restart, status, logs, check |
+| `screener/models.py`, `ports.py` | Data shapes and swappable interfaces |
+| `screener/core/` | Every decision that affects a candidate. Pure functions |
+| `screener/intake/` | File checking, safe parsing, text cleaning |
+| `screener/llm/`, `screener/prompts/` | Prompts. Stored as files and hashed, not as strings in code |
+| `screener/clients/` | Ollama. The only place the AI is spoken to |
+| `screener/storage/` | SQLite, migrations, transactions, seven stores |
+| `screener/pipeline.py` | The two main functions: `judge_one` and `verify_one` |
+| `screener/service.py` | Transactions, audit records, permissions, preconditions |
+| `screener/schemas.py` | The HTTP contract, including role-based views |
+| `screener/worker_loop.py`, `worker.py` | The background service |
+| `screener/api/` | FastAPI. Parses requests, checks permission, delegates |
+| `screener/cli.py` | Typer. Do anything without the API or the UI |
+| `ui/` | Streamlit. Shell plus four pages. No database access at all |
+| `config/settings.py` | All configuration in one typed object. Read the comments |
+| `eval/` | Tools for measuring whether a change actually improved anything |
+| `tests/` | 636 tests. 599 run anywhere; 37 need a real GPU and model |
+| `deploy/` | systemd service files for the API, worker, and UI |
+| `scripts/dev.sh` | Local runner: `start`, `stop`, `restart`, `status`, `logs`, `check` |
 
 ---
 
-## The two models
+## Part 7 — The two AI models
 
-Phase 1 judges with `granite4.1:8b`; phase 2 verifies with `gemma4:12b`. They do
-not fit in 12 GB together, which is why the run is phased rather than
-interleaved, and why `OLLAMA_NUM_PARALLEL=1` is locked (spec §1, row 5).
+Phase 1 judges with `granite4.1:8b`. Phase 2 verifies with `gemma4:12b`. They
+are deliberately different models: a verifier trained on the same data as the
+judge would share its blind spots, and an agreement for the same wrong reason
+isn't a second opinion.
 
-That last setting is load-bearing in a way that is easy to undo by accident: one
-slot means one in-flight request, which is what makes Ollama's prompt-cache reuse
-deterministic. `count_prompt_tokens` runs a pre-flight count with the *same
-bytes* the judging call will send, so the second call inherits the first's
-KV cache. Measured on this repo: 246.489 s to pre-fill, then 0.244 s for the
-judging call on the identical prompt — a factor of a thousand. Change the prompt
-between those two calls and you pay the pre-fill twice.
+They don't fit in 12 GB of video memory at the same time. That's why a run has
+two phases instead of interleaving the two models per CV.
 
----
+`OLLAMA_NUM_PARALLEL=1` is locked to 1 and it matters more than it looks. One
+slot means one request at a time, which makes Ollama's prompt caching
+predictable. The app counts the tokens of a prompt first using the *exact same
+bytes* it's about to send, so the real call reuses the cache from the counting
+call.
 
-## What to skip
-
-`ui/screener_app.py` (723) and `screener/cli.py` (451) are the largest files after
-`service.py` and the least informative — presentation over an API you will
-already understand. `eval/` matters only when you need to judge whether a change
-improved anything.
+Measured on this repo: 246.489 seconds to process the prompt the first time,
+then 0.244 seconds for the actual judging call on the identical prompt. That's a
+thousand times faster. Change even one character of the prompt between those two
+calls and you pay the full cost twice.
 
 ---
 
-## What is not built
+## Part 8 — What you can skip
 
-Read this before concluding a gap is a bug.
+`ui/views/audit.py` (578), `storage/results_store.py` (505), and `cli.py` (451)
+are the biggest files after `service.py`, and the least informative. They're
+display code and SQL over a domain you'll already understand.
 
-- **MS SQL.** Spec §12.2 describes a `storage/dialect/` seam and a second
-  migration directory. Neither exists: the PoC runs on SQLite by decision, and
-  the port is deferred to production. Several store queries are SQLite-only today
-  — `INSERT OR IGNORE`, the two-argument `MAX`, `LIMIT`, and the `RETURNING`
-  claim — so the swap is a real piece of work, not a config change. It is also
-  gated on the MS ODBC Driver 18 dependency closure being resolved for an
-  air-gapped host.
-- **The §19.3 verifier comparison has not been run.** `eval/compare_verifiers.py`
-  exists and is tested against fakes; the table it produces needs a GPU and the
-  labelled set. Until it runs, `verify_scope="all"` is a default rather than a
-  finding.
-- **`escalation_budget` is `None`,** deliberately (§19.2), so "measure it later"
-  cannot quietly become "never". Setting it requires recording
-  `escalation_budget_source_run`.
-- **The labelled set has one labeller, not the two §18.1 requires.** The corpus
-  says so in its own provenance header, in terms nobody can quote past. Any
-  accuracy figure from it is provisional.
-- **Auth is stubbed.** `X-Actor` and `X-Actor-Roles` are trusted headers, which
-  is acceptable only while the port is on loopback and `auth_mode` is `stub`.
+`eval/` only matters when you need to prove a change made things better.
 
 ---
 
-## If you only have an hour
+## Part 9 — What isn't built yet
 
-1. Spec section 24 — the flow diagram.
-2. `screener/pipeline.py` — both functions.
-3. `screener/core/verify_evidence.py`, `core/reconcile_judge.py`, and
-   `core/compute_score.py`.
+Read this before reporting any of it as a bug.
 
-That is the product's actual judgment in about 600 lines.
+* **Microsoft SQL Server support.** The spec describes it. It doesn't exist. The
+  proof of concept runs on SQLite by decision. Several queries use SQLite-only
+  syntax, so porting is real work, not a config change. It's also blocked on
+  getting the Microsoft ODBC driver installed on a machine with no internet.
+* **The verifier comparison hasn't been run.** `eval/compare_verifiers.py` exists
+  and is tested, but producing the actual comparison needs a GPU and the
+  labelled data set. Until then, verifying *every* criterion is a default rather
+  than a measured choice.
+* **`escalation_budget` is deliberately unset.** 3% was a guess, and a guessed
+  budget is worse than none because it reads like a measurement in every report
+  that quotes it. The worker warns on every run while it's unset, so "we'll
+  measure it later" can't quietly become "never". Note that `ui/common.py` has
+  its own 3% constant for the on-screen meter — that's a display value, not this
+  setting.
+* **The labelled data set has one labeller, not the two required.** It says so in
+  its own header. Any accuracy figure from it is provisional.
+* **Authentication is a stub.** The `X-Actor` and `X-Actor-Roles` HTTP headers
+  are simply trusted. This is only acceptable because the API listens on
+  localhost only. It must be replaced before anything external can reach it.
+  The good news: it's all behind one function (`get_actor`), so replacing it
+  means changing one file.
 
 ---
 
-## Verifying you have understood it
+## Part 10 — If you only have an hour
 
-Run the gates, which take about 45 seconds and need neither a GPU nor a database:
+1. Spec §24, the diagram.
+2. `screener/pipeline.py`, both functions.
+3. `core/verify_evidence.py`, `core/reconcile_judge.py`, `core/compute_score.py`.
+
+That's the actual judgement the product makes, in about 600 lines.
+
+---
+
+## Part 11 — Check that you've understood it
+
+First, run the build checks. They take about 45 seconds and need no GPU and no
+database:
 
 ```bash
-./scripts/dev.sh check          # ruff format, ruff check, mypy, pytest
+./scripts/dev.sh check          # formatting, linting, type checking, tests
 ```
 
-Then try to answer these from the code. Each has a definite answer:
+Then try to answer these from the code. Every one has a definite answer.
 
-1. Where is the decision made that an unmet must-have does *not* set
-   `review_required`? Why not?
-2. What happens to a candidate whose evidence quote cannot be verified — and how
-   does that differ from evidence that contradicts its own verdict?
-3. Which nine fields go into the results cache key, and which one is deliberately
-   excluded so that a run can resume?
-4. The verifier returns `support="insufficient"` and `suggested_verdict="none"`
-   for a criterion the judge scored `strong`. What changes in the database, and
-   what does not?
+1. A candidate doesn't meet a must-have requirement. Where is it decided that
+   this does *not* flag them for human review, and why not?
+2. What happens to a candidate whose quoted evidence can't be found in their CV?
+   How is that different from evidence that contradicts the verdict it was given?
+3. Nine things go into the results cache key. Which one is deliberately left out,
+   so that an interrupted run can be resumed?
+4. The verifier says there's insufficient support for a criterion the judge
+   scored as strong. What changes in the database, and what doesn't?
 5. A reviewer highlights evidence in the UI. Which text is being highlighted,
-   which text were the offsets computed against, and what closes the gap?
-6. Why does the API use `--factory` rather than a module-level `app`?
-7. Where would you add a second LLM backend, and how many files would change?
+   which text were the positions calculated against, and what bridges the two?
+6. Why is the API started with `--factory` instead of pointing at an `app`
+   variable?
+7. Where would you add support for a second AI backend, and how many files would
+   you have to change?
+8. Three pages each have a "which run?" dropdown. What stops them fighting over
+   the shared value, and what did the previous approach cost?
+9. Someone submits a folder path of `../../etc`. Name every layer it passes
+   through, and the one that rejects it.
 
-If those are answerable, you can change this codebase safely.
+If you can answer those, you can change this codebase safely.
