@@ -34,11 +34,27 @@ def create_position(
     return to_position(position)
 
 
+@router.post("/positions/{position_id}/close", response_model=PositionResponse)
+def close_position(
+    position_id: str,
+    actor: Actor = Depends(get_actor),
+    service: ScreenerService = Depends(get_service),
+) -> PositionResponse:
+    """Take a filled requisition off the working list. Deletes nothing.
+
+    Declared above `/positions/{position_id}/rubric` for no reason other than
+    grouping; the literal `folders` route is the one whose order matters.
+    """
+    return to_position(service.close_position(position_id, actor))
+
+
 @router.get("/positions", response_model=list[PositionResponse])
 def list_positions(
+    include_closed: bool = False,
     service: ScreenerService = Depends(get_service),
 ) -> list[PositionResponse]:
-    return [to_position(p) for p in service.list_positions()]
+    """Open requisitions, or all of them for screens that name a run's own."""
+    return [to_position(p) for p in service.list_positions(include_closed=include_closed)]
 
 
 @router.get("/positions/folders", response_model=FolderPageResponse)

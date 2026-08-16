@@ -18,7 +18,8 @@ export function RunSelect({
   label?: string;
 }) {
   const runs = useRuns();
-  const positions = usePositions();
+  // Includes closed requisitions: a run outlives the post it screened for.
+  const positions = usePositions(true);
   const byId = new Map((positions.data ?? []).map((p) => [p.id, p]));
 
   if (runs.isPending) {

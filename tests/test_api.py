@@ -689,6 +689,7 @@ def test_list_positions(client: TestClient) -> None:
 
 MUTATING_ROUTES = {
     ("POST", "/positions"),
+    ("POST", "/positions/{position_id}/close"),
     ("POST", "/positions/{position_id}/rubric/extract"),
     ("PUT", "/positions/{position_id}/rubric"),
     ("POST", "/rubrics/{rubric_id}/approve"),
@@ -1246,3 +1247,110 @@ def test_dashboard_writes_no_audit_row(
 
     after = client.get("/audit", headers={"X-Actor-Roles": "auditor"}).json()["total"]
     assert after == before
+
+
+# --- closing a requisition ---------------------------------------------------
+
+
+def test_closing_a_requisition_takes_it_off_the_working_list(client: TestClient) -> None:
+    position_id = make_position(client, "REQ-FILLED")
+    make_position(client, "REQ-STILL-OPEN")
+
+    closed = client.post(f"/positions/{position_id}/close")
+
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
+    assert closed.json()["closed_at"] is not None
+
+    remaining = [p["reference"] for p in client.get("/positions").json()]
+    assert remaining == ["REQ-STILL-OPEN"]
+
+
+def test_closing_a_requisition_keeps_its_runs_and_candidates(
+    client: TestClient,
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+) -> None:
+    """Closing is not deletion.
+
+    The record of an adverse decision cannot depend on whether somebody later
+    tidied up the requisition it was made under.
+    """
+    run_id, candidate_id = _seed_scored_candidate(client, service, uow_factory)
+    with uow_factory() as tx:
+        run = runs_store.get(tx, run_id)
+    assert run is not None
+
+    assert client.post(f"/positions/{run.position_id}/close").status_code == 200
+
+    assert any(r["id"] == run_id for r in client.get("/runs").json())
+    assert len(client.get(f"/runs/{run_id}/candidates").json()["meets_must_haves"]) == 1
+    assert client.get(f"/candidates/{candidate_id}").status_code == 200
+
+
+def test_a_run_already_screening_carries_on_after_its_requisition_closes(
+    client: TestClient,
+) -> None:
+    """Closing is administrative, not a stop signal.
+
+    A batch 400 CVs into 1,000 has already spent the GPU time, and halting it
+    would discard that while leaving 400 applicants assessed and unanswered.
+    Stopping a run stays its own deliberate act, on the run, called Abort.
+    """
+    run_id = make_run(client, "REQ-BUSY")
+    client.post(f"/runs/{run_id}/start")
+    position_id = client.get("/runs").json()[0]["position_id"]
+
+    assert client.post(f"/positions/{position_id}/close").status_code == 200
+
+    status = client.get(f"/runs/{run_id}/status").json()
+    assert status["status"] == "pending"  # claimable by the worker, unchanged
+    assert status["total"] == 3
+    assert status["pending"] == 3
+    # And it can still be worked to the end: rescan, abort and sign-off are all
+    # operations on the run, which knows nothing about the requisition's state.
+    assert client.post(f"/runs/{run_id}/rescan").status_code == 200
+
+
+def test_a_closed_requisition_is_still_resolvable_for_its_runs(client: TestClient) -> None:
+    """A run outlives its requisition, and has to be able to name it.
+
+    Without this the run screens show a raw `pos-…` id beside candidate results
+    the moment somebody closes a filled post.
+    """
+    run_id = make_run(client, "REQ-OUTLIVED")
+    position_id = client.get("/runs").json()[0]["position_id"]
+    client.post(f"/positions/{position_id}/close")
+
+    assert [p["id"] for p in client.get("/positions").json()] == []
+
+    everything = client.get("/positions?include_closed=true").json()
+    named = next(p for p in everything if p["id"] == position_id)
+    assert named["reference"] == "REQ-OUTLIVED"
+    assert named["status"] == "closed"
+    assert any(r["id"] == run_id for r in client.get("/runs").json())
+
+
+def test_closing_twice_is_not_an_error(client: TestClient) -> None:
+    """Arriving at the state you wanted is not a failure — but it is not a
+    second event either, so the log records one closure."""
+    position_id = make_position(client, "REQ-TWICE")
+
+    assert client.post(f"/positions/{position_id}/close").status_code == 200
+    assert client.post(f"/positions/{position_id}/close").status_code == 200
+
+    log = client.get("/audit?action=close_position", headers={"X-Actor-Roles": "auditor"}).json()
+    assert log["total"] == 1
+
+
+def test_closing_an_unknown_requisition_is_a_404(client: TestClient) -> None:
+    assert client.post("/positions/pos-nope/close").status_code == 404
+
+
+def test_a_closed_requisition_leaves_the_dashboard_count(client: TestClient) -> None:
+    position_id = make_position(client, "REQ-COUNTED")
+    assert client.get("/dashboard").json()["open_positions"] == 1
+
+    client.post(f"/positions/{position_id}/close")
+
+    assert client.get("/dashboard").json()["open_positions"] == 0

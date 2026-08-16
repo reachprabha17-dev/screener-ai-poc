@@ -26,11 +26,19 @@ export type Phase = 'judge' | 'verify' | 'done';
 export const DECISIONS = ['advance', 'hold', 'reject'] as const;
 export type RecordableDecision = (typeof DECISIONS)[number];
 
-/** `PositionResponse`. */
+/**
+ * `PositionResponse`.
+ *
+ * `status` is carried even though the list endpoint returns open requisitions
+ * only: a closed one disappearing from the list is indistinguishable from a
+ * deleted one, and this screen has to be able to say which happened.
+ */
 export interface Position {
   id: string;
   reference: string;
   title: string;
+  status: 'open' | 'closed';
+  closed_at: string | null;
   created_by: string;
   created_at: string;
 }

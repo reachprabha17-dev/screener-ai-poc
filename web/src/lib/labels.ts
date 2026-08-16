@@ -90,6 +90,7 @@ export const VERDICT_LABEL: Record<Verdict, string> = {
 /** The actions the audit search offers as a filter. */
 export const KNOWN_ACTIONS = [
   'create_position',
+  'close_position',
   'extract_rubric',
   'save_rubric',
   'approve_rubric',
@@ -143,6 +144,7 @@ type Detail = Record<string, unknown>;
 
 const EVENT_TEXT: Record<string, (d: Detail) => string> = {
   create_position: (d) => `Raised requisition **${text(d.reference, '?')}**.`,
+  close_position: (d) => `**Closed requisition ${text(d.reference, '?')}** — no longer recruiting.`,
   extract_rubric: (d) =>
     `Model drafted a rubric of **${text(d.criteria, '?')} criteria** (prompt \`${short(d.prompt_hash)}\`, model \`${short(d.judge_digest)}\`).`,
   save_rubric: (d) =>

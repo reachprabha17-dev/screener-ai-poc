@@ -466,7 +466,8 @@ The interface is a route tree over four concepts:
     /                            overview: three counts, and the runs holding
                                  the review queue
     /requisitions                the list, and the way into a new one
-    /requisitions/:positionId    rubric: draft, edit, approve, then start a run
+    /requisitions/:positionId    rubric: draft, edit, approve, then start a run;
+                                 close the requisition when the post is filled
     /runs                        every run, newest first
     /runs/:runId                 live progress, controls, failed files
     /runs/:runId/review          the three candidate groups and the decisions

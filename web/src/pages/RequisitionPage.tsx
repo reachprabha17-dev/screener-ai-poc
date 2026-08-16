@@ -8,10 +8,12 @@ import {
   usePositions,
   useRuns,
 } from '../api/queries';
+import { ClosePositionButton } from '../components/ClosePositionButton';
 import { QueryState } from '../components/QueryState';
 import { RubricEditor } from '../components/RubricEditor';
 import { RunList } from '../components/RunList';
 import { Alert } from '../ui/Alert';
+import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card, CardBody, CardHeader } from '../ui/Card';
 
@@ -25,7 +27,8 @@ import { Card, CardBody, CardHeader } from '../ui/Card';
  */
 export function RequisitionPage() {
   const { positionId = '' } = useParams();
-  const positions = usePositions();
+  // Includes closed requisitions: a run outlives the post it screened for.
+  const positions = usePositions(true);
   const latest = useLatestRubric(positionId);
   const approved = useApprovedRubric(positionId);
   const runs = useRuns();
@@ -44,15 +47,30 @@ export function RequisitionPage() {
         / {position?.reference ?? positionId}
       </p>
 
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {position?.title ?? 'Requisition'}
-        </h1>
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          <code>{position?.reference ?? positionId}</code>
-          {position ? ` · raised by ${position.created_by}` : null}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {position?.title ?? 'Requisition'}
+            </h1>
+            {position?.status === 'closed' ? <Badge tone="neutral">closed</Badge> : null}
+          </div>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            <code>{position?.reference ?? positionId}</code>
+            {position ? ` · raised by ${position.created_by}` : null}
+          </p>
+        </div>
+        {position ? <ClosePositionButton position={position} /> : null}
       </div>
+
+      {position?.status === 'closed' ? (
+        <Alert tone="info">
+          <p>
+            This requisition is closed and no longer counts as an active job posting. Its runs below
+            are unaffected — screening in progress continues, and results stay reviewable.
+          </p>
+        </Alert>
+      ) : null}
 
       <QueryState query={latest} loading="Loading the rubric…">
         {(rubric) =>

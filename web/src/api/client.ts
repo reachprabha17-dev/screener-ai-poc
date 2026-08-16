@@ -175,8 +175,20 @@ function query(params: Record<string, string | number>): string {
 export function createApi(identity: Identity) {
   return {
     // --- positions ---------------------------------------------------------
-    listPositions: (signal?: AbortSignal) =>
-      request<Position[]>('/positions', identity, { signal }),
+    /**
+     * Open requisitions by default.
+     *
+     * `includeClosed` is for the screens that name a *run's* requisition: a run
+     * outlives the requisition it belongs to — closing one does not stop it —
+     * and a closed one must not become a raw `pos-…` id beside candidate
+     * results.
+     */
+    listPositions: (includeClosed = false, signal?: AbortSignal) =>
+      request<Position[]>(
+        includeClosed ? '/positions?include_closed=true' : '/positions',
+        identity,
+        { signal },
+      ),
 
     /** One page of the folder picker. Paths are relative to the resume share. */
     listFolders: (
@@ -186,6 +198,12 @@ export function createApi(identity: Identity) {
 
     createPosition: (input: { reference: string; title: string; jd_text: string }) =>
       request<Position>('/positions', identity, { method: 'POST', body: input }),
+
+    /** Take a filled requisition off the working list. Deletes nothing. */
+    closePosition: (positionId: string) =>
+      request<Position>(`/positions/${encodeURIComponent(positionId)}/close`, identity, {
+        method: 'POST',
+      }),
 
     // --- rubrics -----------------------------------------------------------
     extractRubric: (positionId: string) =>

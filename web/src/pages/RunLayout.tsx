@@ -14,7 +14,8 @@ import { cn } from '../ui/cn';
 export function RunLayout() {
   const { runId = '' } = useParams();
   const runs = useRuns();
-  const positions = usePositions();
+  // Includes closed requisitions: a run outlives the post it screened for.
+  const positions = usePositions(true);
   const status = useRunStatus(runId);
 
   const run = runs.data?.find((r) => r.id === runId);

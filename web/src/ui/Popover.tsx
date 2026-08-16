@@ -14,14 +14,24 @@ import { cn } from './cn';
 export function Popover({
   trigger,
   className,
+  open,
+  onOpenChange,
   children,
 }: {
   trigger: ReactNode;
   className?: string;
+  /** Controlled only where the content decides when to close — a confirmation
+   * that has to stay open to show why the action was refused. Uncontrolled
+   * otherwise, so Radix keeps owning dismissal. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   return (
-    <RadixPopover.Root>
+    <RadixPopover.Root
+      {...(open === undefined ? {} : { open })}
+      {...(onOpenChange === undefined ? {} : { onOpenChange })}
+    >
       <RadixPopover.Trigger asChild>{trigger}</RadixPopover.Trigger>
       <RadixPopover.Portal>
         <RadixPopover.Content

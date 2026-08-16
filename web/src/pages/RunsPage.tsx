@@ -6,7 +6,8 @@ import { Card } from '../ui/Card';
 /** Every run, newest first. The way back into work already in progress. */
 export function RunsPage() {
   const runs = useRuns();
-  const positions = usePositions();
+  // Includes closed requisitions: a run outlives the post it screened for.
+  const positions = usePositions(true);
 
   return (
     <div className="space-y-4">

@@ -162,7 +162,7 @@ somewhere else:
 | `/ui/` | Overview: the three counts and where the review queue is |
 | `/ui/requisitions` | Open requisitions |
 | `/ui/requisitions/new` | Folder picker, title, job description |
-| `/ui/requisitions/:positionId` | Rubric: draft, edit, approve; runs for this requisition |
+| `/ui/requisitions/:positionId` | Rubric: draft, edit, approve; runs for this requisition; close it |
 | `/ui/runs` | Every run, newest first |
 | `/ui/runs/:runId` | Live progress, controls, failed files |
 | `/ui/runs/:runId/review?c=<sha256>` | The three groups, the candidate, the decision |
@@ -214,7 +214,39 @@ plot; a chart of them is decoration a reader has to decode to arrive back at the
 number. No delta and no sparkline either, because the system stores no history to
 compute one from and a trend drawn from a single figure is a picture of nothing.
 
-### 5.3 New: client-side rules
+### 5.3 New: the requisition lifecycle
+
+`positions.status` has been in the schema since migration 0001 and nothing read
+it. v7 makes it reachable: **`POST /positions/{id}/close`**, and a control on the
+requisition screen behind a confirmation.
+
+- **Closing deletes nothing.** The requisition leaves the working list and stops
+  counting as an active job posting. Its runs, candidates, decisions and audit
+  rows are untouched. The record of an adverse decision cannot depend on whether
+  somebody later tidied up the requisition it was made under.
+- **Runs already under way continue.** Closing is an administrative fact about
+  the requisition, not a stop signal — the worker's queue is keyed on the run and
+  nothing here reaches it. A batch 400 CVs into 1,000 has already spent the GPU
+  time, and halting it would discard that while leaving 400 applicants assessed
+  and unanswered. Stopping a run remains its own deliberate act, on the run,
+  called Abort.
+- **`GET /positions?include_closed=true`** exists because of the clause above: a
+  run outlives its requisition, so the screens that name a run's requisition have
+  to resolve a closed one. Without it a closed post turns into a raw `pos-…` id
+  beside candidate results. The requisitions list and the dashboard count stay
+  open-only — a closed post is not work anybody is doing.
+- **Idempotent.** Closing an already-closed requisition is not an error, and
+  writes no second audit row, because nothing changed.
+- **Reopening does not exist.** `positions_store` has no such function and v7
+  adds none. If a post is re-advertised, that is a new requisition with its own
+  rubric approval — which is the honest record of what happened.
+
+The confirmation exists for one reason: "Close" beside a list of candidates reads
+like a delete, and a reviewer who suspects it destroys an adverse-action record
+will never press it, leaving filled posts in the queue forever. The panel says
+what is kept and what continues, in the two sentences someone actually reads.
+
+### 5.4 New: client-side rules
 
 1. **No component fetches.** Server state belongs to the query cache; components
    hold view state only.
@@ -240,6 +272,8 @@ compute one from and a trend drawn from a single figure is a picture of nothing.
 Two additions, no changes to any existing endpoint:
 
 ```
+POST /positions/{id}/close → PositionResponse  (§5.3)
+GET  /positions?include_closed=true            (§5.3)
 GET /dashboard             → DashboardResponse (counts; §5.2)
 GET /ui                    → index.html
 GET /ui/{path:path}        → the built asset if it names one, index.html otherwise

@@ -186,9 +186,64 @@ class ScreenerService:
             )
         return position
 
-    def list_positions(self) -> list[Position]:
+    def list_positions(self, *, include_closed: bool = False) -> list[Position]:
+        """Open requisitions by default; everything when asked.
+
+        The default is the working list — what somebody is recruiting for now.
+        `include_closed` exists for the screens that resolve a run's requisition:
+        a run outlives the requisition it belongs to, and a closed one must not
+        become an unresolvable id on a screen showing candidate results.
+        """
         with self.uow_factory() as tx:
+            if include_closed:
+                return positions_store.list_all(tx)
             return positions_store.list_open(tx)
+
+    def close_position(self, position_id: str, actor: Actor) -> Position:
+        """Close a requisition: the post is filled, or it is not being filled.
+
+        **Nothing is deleted and no run is touched.** The requisition leaves the
+        working list, and every run it produced stays exactly where it is —
+        readable, exportable, and answerable to the audit log. A closed
+        requisition whose candidate records vanished would make the record of an
+        adverse decision depend on whether somebody later tidied up.
+
+        **Runs already under way continue.** Closing is an administrative fact
+        about the requisition, not a stop signal. The worker's queue is keyed on
+        the run, so nothing here reaches it — and that is the behaviour to want:
+        a batch 400 CVs into 1,000 has already spent the GPU time, and halting it
+        would discard that while leaving 400 applicants assessed and unanswered.
+        The reviewer works and signs off the run exactly as before; the
+        requisition is simply no longer recruiting. Stopping a run remains its
+        own deliberate act, on the run, called Abort.
+
+        This is why `list_positions` takes `include_closed`: a run outliving its
+        requisition still has to be able to name the requisition it belongs to.
+
+        Idempotent, deliberately: closing an already-closed requisition is not an
+        error, it is someone arriving at the state they wanted. It records no
+        second audit row, because nothing changed.
+        """
+        with self.uow_factory() as tx:
+            self._ensure_actor(tx, actor)
+            position = positions_store.get(tx, position_id)
+            if position is None:
+                raise NotFoundError(f"position {position_id}")
+            if position.status == "closed":
+                return position
+
+            positions_store.close(tx, position_id)
+            audit_store.append_for(
+                tx,
+                actor,
+                "close_position",
+                "position",
+                position_id,
+                {"reference": position.reference},
+            )
+            closed = positions_store.get(tx, position_id)
+        assert closed is not None  # noqa: S101 — just written in this transaction
+        return closed
 
     def list_resume_folders(
         self, subpath: str = "", query: str = "", offset: int = 0, limit: int = 15

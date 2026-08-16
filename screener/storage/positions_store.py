@@ -65,6 +65,18 @@ def list_open(tx: Tx) -> list[Position]:
     return [_to_position(row) for row in rows]
 
 
+def list_all(tx: Tx) -> list[Position]:
+    """Every requisition, open or closed, newest first.
+
+    Needed because a run outlives its requisition: closing one does not stop the
+    runs already screening for it, so the screens that name a run's requisition
+    have to be able to resolve a closed one. The requisitions list itself still
+    reads `list_open` — a closed post is not work anybody is doing.
+    """
+    rows = tx.execute("SELECT * FROM positions ORDER BY created_at DESC").fetchall()
+    return [_to_position(row) for row in rows]
+
+
 def count_open(tx: Tx) -> int:
     """How many requisitions are open, without loading them.
 
@@ -96,6 +108,8 @@ def _to_position(row: Any) -> Position:  # noqa: ANN401 — sqlite3.Row
         reference=row["reference"],
         title=row["title"],
         jd_text=row["jd_text"],
+        status=row["status"],
+        closed_at=row["closed_at"],
         created_by=row["created_by"],
         created_at=row["created_at"],
     )

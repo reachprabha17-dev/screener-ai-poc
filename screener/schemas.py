@@ -420,6 +420,12 @@ class PositionResponse(BaseModel):
     id: str
     reference: str
     title: str
+    # Carried even though `GET /positions` lists open requisitions only: a
+    # response that cannot express the state is one the client has to infer from
+    # the absence of a row, and "not in the list" is also what a deleted
+    # requisition looks like.
+    status: str
+    closed_at: datetime | None
     created_by: str
     created_at: datetime
 

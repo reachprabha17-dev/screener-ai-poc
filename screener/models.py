@@ -200,6 +200,12 @@ class Position(BaseModel):
     reference: str  # folder name under settings.resumes_dir
     title: str
     jd_text: str  # provenance for the rubric derived from it
+    # The requisition lifecycle, in the schema since 0001 and unread until now.
+    # Closing takes a filled post off the working list; it deletes nothing, and
+    # the runs it produced stay readable — the record of an adverse decision
+    # cannot depend on whether somebody later tidied up.
+    status: Literal["open", "closed"] = "open"
+    closed_at: datetime | None = None
     created_by: str
     created_at: datetime
 

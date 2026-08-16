@@ -112,6 +112,8 @@ def to_position(position: Position) -> PositionResponse:
         id=position.id,
         reference=position.reference,
         title=position.title,
+        status=position.status,
+        closed_at=position.closed_at,
         created_by=position.created_by,
         created_at=position.created_at,
     )

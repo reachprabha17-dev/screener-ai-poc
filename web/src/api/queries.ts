@@ -68,7 +68,8 @@ function useScope(): Identity {
 export const keys = {
   health: (id: Identity) => ['health', id] as const,
   dashboard: (id: Identity) => ['dashboard', id] as const,
-  positions: (id: Identity) => ['positions', id] as const,
+  positions: (id: Identity, includeClosed: boolean) =>
+    ['positions', id, { includeClosed }] as const,
   folders: (id: Identity, path: string, q: string, offset: number) =>
     ['folders', id, path, q, offset] as const,
   latestRubric: (id: Identity, positionId: string) => ['rubric', 'latest', id, positionId] as const,
@@ -118,12 +119,19 @@ export function useDashboard(): UseQueryResult<Dashboard> {
   });
 }
 
-export function usePositions(): UseQueryResult<Position[]> {
+/**
+ * Requisitions. Open ones by default; all of them where a run has to name its own.
+ *
+ * The flag is in the query key rather than filtered from one cached list: the
+ * two answers are different responses from the server, and sharing a key would
+ * mean whichever screen loaded first decided what the other one saw.
+ */
+export function usePositions(includeClosed = false): UseQueryResult<Position[]> {
   const api = useApi();
   const scope = useScope();
   return useQuery({
-    queryKey: keys.positions(scope),
-    queryFn: ({ signal }) => api.listPositions(signal),
+    queryKey: keys.positions(scope, includeClosed),
+    queryFn: ({ signal }) => api.listPositions(includeClosed, signal),
   });
 }
 
@@ -261,7 +269,25 @@ export function useCreatePosition(): UseMutationResult<
   return useMutation({
     mutationFn: (input) => api.createPosition(input),
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: keys.positions(scope) });
+      void client.invalidateQueries({ queryKey: ['positions', scope] });
+      void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
+    },
+  });
+}
+
+/**
+ * Closing a requisition removes it from every list that reads `/positions`, so
+ * the position list, the dashboard's count and any screen resolving a run's
+ * requisition label all have to be refetched together.
+ */
+export function useClosePosition(): UseMutationResult<Position, Error, string> {
+  const api = useApi();
+  const scope = useScope();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (positionId) => api.closePosition(positionId),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['positions', scope] });
       void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
     },
   });
