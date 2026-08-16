@@ -17,6 +17,11 @@ decision was made. This guide is a shortcut into it, not a replacement.
 (`screener_spec_v4.md` is the old version, kept for history. If the two ever
 disagree, v6 is correct.)
 
+`screener_spec_v7.md` amends v6 for one thing only: the reviewer interface, which
+is now React rather than Streamlit. Where they overlap — the process model, the
+tooling list, the folder structure, and what §15 says a reviewer must be shown —
+v7 is correct. Everything else in v6 stands untouched.
+
 ---
 
 ## Part 1 — What this app does
@@ -53,6 +58,7 @@ Read these three sections of the spec, in this order:
 | §24 (`screener_spec_v6.md:1917`) | One diagram of the whole system, job description to final CSV |
 | §13 (`screener_spec_v6.md:1286`) | The two main functions written as plain pseudocode |
 | §1 (`screener_spec_v6.md:16`) | The decisions that are locked and won't change |
+| §1 (`screener_spec_v7.md:16`) | The two of those decisions the React interface changed, and why |
 
 Then stop reading the spec. It's a reference book, not a tutorial. Go back to it
 by section number when the code raises a question.
@@ -67,8 +73,12 @@ access**. That one constraint chose most of the stack for us:
 * No internet means the AI model runs locally (Ollama), not through a cloud API.
 * One machine means a simple file-based database (SQLite), not a database
   cluster.
-* A small internal audience means a Python-based UI (Streamlit), not React and a
-  JavaScript build system.
+* A small internal audience originally meant a Python-based UI (Streamlit). That
+  was reversed: the interface is now React, built once into static files that the
+  API process serves. The build system is the cost; what it bought is a real
+  event model instead of "re-run the whole script on every click", one screen per
+  URL, and a UI that cannot open the database because it isn't a Python process
+  at all.
 * One machine again means plain Linux services (systemd), not Docker or
   Kubernetes.
 
@@ -84,8 +94,15 @@ access**. That one constraint chose most of the stack for us:
 | **SQLite** | A database that is just a single file on disk | `screener/storage/` |
 | **yoyo-migrations** | Applies database schema changes in order | `storage/migrations/sqlite/` |
 | **Ollama** | Runs AI models locally on this machine | `clients/ollama_client.py` |
-| **Streamlit** | Builds web UIs in pure Python, no JavaScript | `ui/` |
-| **httpx** | HTTP client library | `ui/api_client.py` |
+| **React 19 + TypeScript** | The reviewer interface | `web/src/` |
+| **Vite** | Builds the interface into static files | `web/vite.config.ts` |
+| **TanStack Query** | Owns everything the server knows: caching, polling, refetching | `web/src/api/queries.ts` |
+| **React Router** | One screen per URL, so a run can be linked to | `web/src/App.tsx` |
+| **Tailwind CSS** | Styling as utility classes; no bespoke design system | `web/src/index.css` |
+| **Radix, lucide, sonner** | Popovers, icons, toasts — the accessible details nobody should hand-roll | `web/src/ui/` |
+| **react-hook-form** | Form state and validation | `web/src/components/DecisionForm.tsx` |
+| **Vitest + Testing Library** | The interface's tests | `web/src/**/*.test.ts*` |
+| **httpx** | HTTP client library | `tests/` |
 | **Typer** | Builds command-line tools | `screener/cli.py` |
 | **structlog** | Writes logs as JSON instead of sentences | `screener/logging.py` |
 | **xberg** | Extracts text from PDFs and Word files, with OCR for scans | `intake/parse_worker.py` |
@@ -197,25 +214,31 @@ matching `.rollback.sql` file. One gotcha: yoyo reads one folder and does not
 look inside subfolders. Point it at the wrong level and it silently applies
 nothing.
 
-**6. How Streamlit works (about 2 hours) — before working in `ui/`**
+**6. How the reviewer interface works (about 3 hours) — before working in `web/`**
 
-There is one big idea, and everything else follows from it:
+There is one big idea, and most of the code follows from it:
 
-> **Every time the user clicks anything, Streamlit re-runs your entire script
-> from the top.**
+> **Anything the server knows belongs to TanStack Query. Components hold only
+> what is on the screen right now.**
 
-There is no event handling in the usual sense. Your script runs again, and
-`st.session_state` is the only thing that survives between runs.
+No component fetches in a `useEffect`. `web/src/api/queries.ts` declares every
+read and every write as a hook, each keyed by what it is *and by who is asking* —
+roles change what the API returns, so a cache keyed without the actor would hand
+the second reviewer the first one's view. Writes invalidate keys rather than
+patching the cache, because the server rejects decisions on escalated candidates
+and versions a rubric on save: a cache written from what the client hoped
+happened would show an outcome the system did not record.
 
-Learn: `session_state`, giving widgets a `key`, `on_change` callbacks,
-`st.navigation` and `st.Page` for multiple pages, and `st.rerun`.
+Learn, in order: TanStack Query (`useQuery`, `useMutation`, query keys,
+`invalidateQueries`, `refetchInterval`), then React Router (nested routes,
+`useParams`, `useSearchParams`), then enough Tailwind to read the markup.
 
-Read the comment on `adopt_run` in `ui/common.py` for a real example of why this
-matters. Three different pages have a "which run?" dropdown. An earlier version
-updated shared state by comparing values on each re-run, and the dropdowns ended
-up fighting each other: 1,207 script re-runs in 150 seconds, each one making an
-API call. The fix was to update state only when a human actually moves the
-dropdown.
+The other idea is that **the URL is the state**. The Streamlit version kept the
+selected run in a sidebar that every page read and three pages wrote, and the
+dropdowns fought each other: 1,207 script re-runs in 150 seconds, each one making
+an API call. That class of bug cannot occur here, because there is nothing to
+share — a run *is* `/runs/:runId`, so the back button works and a reviewer can
+send a colleague the exact screen they are looking at.
 
 **7. Ollama (about 2 hours) — before working in `clients/` or `llm/`**
 
@@ -420,7 +443,7 @@ worker could grab the same one.
     screener/intake/parse_worker.py    (102)   the actual PDF/DOCX extraction
     screener/schemas.py                (616)   the HTTP contract
     screener/api/                    (~450)    routes: parse, check permission, delegate
-    ui/                             (~1600)    the web UI
+    web/src/                        (~3400)    the reviewer interface (TypeScript)
 
 `schemas.py` deserves more attention than its position suggests. The rule that
 auditors see more fields than recruiters is a data-disclosure boundary, and it's
@@ -428,19 +451,28 @@ implemented by returning a *different class* to an auditor rather than by
 filtering a dictionary. Filtering is easy to forget in one place; returning the
 wrong type is caught by the type checker.
 
-The UI is four pages behind a shell:
+The interface is a route tree over four concepts:
 
-    ui/screener_app.py       (132)  shell: sidebar, health check, page navigation
-    ui/common.py             (152)  shared helpers, glossary, escalation meter
-    ui/api_client.py         (249)  the only way the UI reaches any data
-    ui/views/requisitions.py (232)  create a position, extract and approve a rubric
-    ui/views/runs.py         (193)  start a run, watch progress
-    ui/views/review.py       (386)  read candidates, make decisions
-    ui/views/audit.py        (578)  the audit trail
+    web/src/api/client.ts        the only module that performs network I/O
+    web/src/api/queries.ts       every read and write as a hook; caching and polling
+    web/src/api/types.ts         the wire contract, mirrored from schemas.py
+    web/src/lib/labels.ts        the words on screen: flag help, escalation reasons,
+                                 audit sentences. Each one is a decision, not a string
+    web/src/ui/                  Button, Alert, Card, Table… thin Tailwind wrappers
+    web/src/components/          the parts with domain meaning: rubric editor,
+                                 candidate detail, escalation meter, folder picker
+    web/src/pages/               one file per screen, matching the routes below
 
-The split into pages is not cosmetic. Streamlit tabs run *every* tab's code on
-every re-run; pages run only the one you're looking at. With three run-pickers
-sharing state, tabs were unworkable.
+    /requisitions                the list, and the way into a new one
+    /requisitions/:positionId    rubric: draft, edit, approve, then start a run
+    /runs                        every run, newest first
+    /runs/:runId                 live progress, controls, failed files
+    /runs/:runId/review          the three candidate groups and the decisions
+    /audit, /audit/record,       run story, one candidate's record, the searchable log
+    /audit/search
+
+Read `lib/labels.ts` early. It is where the judgement about what a reviewer is
+told when the system is uncertain actually lives.
 
 Read `sandbox.py` last, and only if hostile files interest you. It is the most
 specialised code here and teaches you nothing about the domain.
@@ -459,9 +491,11 @@ Three rules carry most of the weight:
 
 * `service.py` must not import `pipeline.py` — or a 1,000-CV batch runs inside
   one HTTP request.
-* `ui/` must not import `sqlite3` or anything from `screener` — this is what
-  actually enforces "the UI is only an HTTP client". You can't enforce it by
-  leaving a driver uninstalled, because `sqlite3` ships with Python itself.
+* the reviewer interface reaches data only over HTTP — `fetch` appears in exactly
+  one file, nothing renders raw HTML, and no absolute URL exists anywhere in it.
+  Under Streamlit this rule was about a Python process that could `import
+  sqlite3`; a browser tab cannot, so what is left to enforce is the app's own
+  discipline.
 * `core/` must not do any I/O — which is why all the scoring rules can be tested
   without a database or a GPU.
 
@@ -521,7 +555,10 @@ record something that actually went wrong on this system:
   than a fixed number (the fixed number killed every parse).
 * `storage/connection.py` — why each thread makes its own database connection,
   and why pointing yoyo at the wrong folder silently disables all migrations.
-* `ui/common.py` (`adopt_run`) — the 1,207-re-runs-in-150-seconds story.
+* `web/src/api/queries.ts` — why the query keys carry the actor, and why writes
+  invalidate rather than patch. The header of `web/README.md` carries the
+  1,207-re-runs-in-150-seconds story that the migration away from Streamlit
+  ended.
 * `config/settings.py` — why the parse memory limit is 2048 MB, why the timing
   estimate is 5.4 seconds per CV, and why the minimum evidence length is 16
   characters. All three were measured, not guessed. The 16 replaced a 25 that had
@@ -549,12 +586,12 @@ measured to pick it. `git grep -n "Measured"` finds them all.
 | `screener/worker_loop.py`, `worker.py` | The background service |
 | `screener/api/` | FastAPI. Parses requests, checks permission, delegates |
 | `screener/cli.py` | Typer. Do anything without the API or the UI |
-| `ui/` | Streamlit. Shell plus four pages. No database access at all |
+| `web/` | React + TypeScript. Built into static files the API serves at `/ui/` |
 | `config/settings.py` | All configuration in one typed object. Read the comments |
 | `eval/` | Tools for measuring whether a change actually improved anything |
 | `tests/` | 636 tests. 599 run anywhere; 37 need a real GPU and model |
-| `deploy/` | systemd service files for the API, worker, and UI |
-| `scripts/dev.sh` | Local runner: `start`, `stop`, `restart`, `status`, `logs`, `check` |
+| `deploy/` | systemd service files for the API (which also serves the UI) and the worker |
+| `scripts/dev.sh` | Local runner: `start`, `stop`, `restart`, `status`, `logs`, `build`, `check` |
 
 ---
 
@@ -583,9 +620,10 @@ calls and you pay the full cost twice.
 
 ## Part 8 — What you can skip
 
-`ui/views/audit.py` (578), `storage/results_store.py` (505), and `cli.py` (451)
-are the biggest files after `service.py`, and the least informative. They're
-display code and SQL over a domain you'll already understand.
+`web/src/pages/audit/DecisionRecordPage.tsx`, `storage/results_store.py` (505)
+and `cli.py` (451) are the biggest files after `service.py`, and the least
+informative. They're display code and SQL over a domain you'll already
+understand.
 
 `eval/` only matters when you need to prove a change made things better.
 
@@ -606,7 +644,7 @@ Read this before reporting any of it as a bug.
 * **`escalation_budget` is deliberately unset.** 3% was a guess, and a guessed
   budget is worse than none because it reads like a measurement in every report
   that quotes it. The worker warns on every run while it's unset, so "we'll
-  measure it later" can't quietly become "never". Note that `ui/common.py` has
+  measure it later" can't quietly become "never". Note that `web/src/lib/labels.ts` has
   its own 3% constant for the on-screen meter — that's a display value, not this
   setting.
 * **The labelled data set has one labeller, not the two required.** It says so in
@@ -636,6 +674,21 @@ database:
 
 ```bash
 ./scripts/dev.sh check          # formatting, linting, type checking, tests
+```
+
+That covers the reviewer interface too — prettier, eslint, tsc and vitest — when
+`web/node_modules` is present. It warns and skips them when it isn't, so a
+backend change is never blocked by a machine with no Node on it.
+
+To see the interface itself:
+
+```bash
+(cd web && npm install)         # once
+./scripts/dev.sh start          # API, worker, and the Vite dev server
+                                # → http://127.0.0.1:5173/ui/
+
+./scripts/dev.sh build          # what a deployment does instead:
+                                # builds web/dist, which the API serves at /ui/
 ```
 
 Then try to answer these from the code. Every one has a definite answer.

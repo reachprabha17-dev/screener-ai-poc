@@ -15,15 +15,18 @@ Three rules carry most of the weight:
 
 - **`service.py` must not import `pipeline.py`.** It enqueues; the worker
   executes. Collapse that and a 1,000-CV batch runs inside an HTTP request.
-- **`ui/` must not import `sqlite3` or `screener.*`.** This is the real
-  enforcement of decision #11 — 3.1's claim that the dependency graph does it is
-  wrong, because `sqlite3` ships with Python and cannot be uninstalled.
+- **The reviewer interface reaches the data only over HTTP.** Under Streamlit
+  that meant `ui/` importing neither `sqlite3` nor `screener.*`; the interface is
+  a React app now, so it means every request passes through one client module and
+  nothing renders raw HTML. The process that could have opened the database no
+  longer exists.
 - **`core/` must do no I/O.** It is why the scoring, ranking and evidence rules
   are testable without a GPU or a database.
 """
 
 import ast
 import importlib
+import re
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -138,34 +141,106 @@ def test_the_only_storage_import_in_the_api_is_the_startup_gate() -> None:
 
 
 # --- decision #11: the UI is an HTTP client and nothing else -----------------
+#
+# The reviewer interface is a React app under `web/`, so these four rules are
+# read from source text rather than from an import graph. That is a real
+# weakening of the method used everywhere else in this module and it is worth
+# stating plainly: a substring search cannot tell a violation from a comment
+# describing one — and the raw-HTML rule below caught its own explanatory comment
+# on the first run, which is step 15's `BackgroundTasks` lesson repeating itself.
+# The mitigation is to keep every pattern lexically unambiguous and to write
+# about the forbidden identifiers without naming them.
+#
+# What has *strengthened* is the boundary itself. Under Streamlit the UI was a
+# Python process that could `import sqlite3`; the test existed because the
+# dependency graph could not stop it. A browser cannot open the database under
+# any circumstances, so the rules below are about the app's own discipline
+# rather than about what it is capable of reaching.
+
+WEB_SRC = ROOT / "web" / "src"
+
+# The single module allowed to perform network I/O.
+API_CLIENT = "web/src/api/client.ts"
 
 
-def test_the_ui_imports_no_database_driver() -> None:
-    """The real enforcement of decision #11.
+def web_sources() -> dict[Path, str]:
+    """Every TypeScript source under `web/src`, as text."""
+    return {
+        path.relative_to(ROOT): path.read_text(encoding="utf-8")
+        for path in sorted(WEB_SRC.rglob("*.ts*"))
+    }
 
-    3.1 claims the dependency graph does this. It does not — `sqlite3` is in the
-    standard library and cannot be uninstalled. Omitting a driver from the `ui`
-    extra removes the temptation; **this test is what removes the possibility**.
+
+def test_the_reviewer_ui_is_not_a_python_process() -> None:
+    """Streamlit is gone, and nothing may quietly bring a server-side UI back.
+
+    The whole of decision #11's original risk was that the UI ran in a Python
+    process next to the database. It no longer runs one — and a `.py` file under
+    `web/`, or a `streamlit` import anywhere, is that risk returning.
     """
-    assert_forbidden(package_imports("ui"), ("sqlite3",))
+    assert not list(WEB_SRC.rglob("*.py")), "the reviewer interface is a browser app"
+
+    server_side = {
+        path: sorted(m for m in modules if m.startswith("streamlit"))
+        for path, modules in package_imports("screener", "config", "eval", "worker.py").items()
+    }
+    assert not {path: mods for path, mods in server_side.items() if mods}
 
 
-def test_the_ui_imports_nothing_from_the_screener_package() -> None:
-    """Stronger than 4 requires, and worth keeping.
+def test_every_network_call_goes_through_the_one_client() -> None:
+    """`fetch` appears in exactly one file.
 
-    Sharing domain models would tie UI deploys to server deploys and reopen a
-    transitive path to the storage layer.
+    This is the browser-side replacement for "the UI imports no database driver".
+    Every request has to pass through `api/client.ts`, because that is where an
+    unreachable API becomes a sentence a recruiter can act on instead of a
+    `TypeError: Failed to fetch` rendered over candidate data — and where the
+    identity headers are attached, which is what the audit log records.
     """
-    assert_forbidden(package_imports("ui"), ("screener", "config"))
+    # `\bfetch\(` and not `"fetch("`: the substring form matches TanStack Query's
+    # `refetch()`, which is a cache instruction rather than network I/O. The
+    # first run of this test failed on exactly that.
+    calls = re.compile(r"\bfetch\(|XMLHttpRequest|\baxios\b")
+    offenders = [
+        str(path)
+        for path, source in web_sources().items()
+        if str(path) != API_CLIENT
+        and not str(path).endswith((".test.ts", ".test.tsx"))
+        and calls.search(source)
+    ]
+
+    assert not offenders, f"network I/O outside {API_CLIENT}: {offenders}"
 
 
-def test_the_ui_talks_over_http() -> None:
-    """It has to reach the data somehow. HTTP is the only sanctioned route."""
-    combined: set[str] = set()
-    for modules in package_imports("ui").values():
-        combined |= modules
+def test_the_reviewer_ui_renders_no_raw_html() -> None:
+    """Candidate text, decision reasons and audit details all reach the screen.
 
-    assert "httpx" in combined
+    Every one of them is attacker-influenced — a resume is a hostile document by
+    assumption (8) — so nothing in this app is allowed to hand a string to the
+    DOM as markup. The evidence highlighting that used `unsafe_allow_html` under
+    Streamlit is React elements here.
+    """
+    offenders = [
+        str(path) for path, source in web_sources().items() if "dangerouslySetInnerHTML" in source
+    ]
+
+    assert not offenders, f"raw HTML injection in {offenders}"
+
+
+def test_the_reviewer_ui_only_talks_to_the_host_that_served_it() -> None:
+    """No absolute URLs, so there is no second host to configure or to leak to.
+
+    The Streamlit UI had an "API URL" box in its sidebar. An operator who can
+    point the interface at another machine can point candidate data at another
+    machine; same-origin removes the setting rather than documenting it.
+    """
+    offenders = [
+        str(path)
+        for path, source in web_sources().items()
+        if not str(path).endswith((".test.ts", ".test.tsx"))
+        and re.search(r"""["'`]https?://""", source)
+    ]
+
+    assert not offenders, f"absolute URLs in {offenders}"
 
 
 # --- core/ is pure -----------------------------------------------------------

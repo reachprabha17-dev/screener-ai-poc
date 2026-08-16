@@ -17,9 +17,10 @@ code expects (12.1).
 """
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from config.settings import settings
 from screener.api.routes import audit, candidates, health, positions, rubrics, runs
@@ -62,6 +63,53 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ServiceError)
     def _bad_request(request: Request, exc: ServiceError) -> JSONResponse:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
+
+
+def _mount_reviewer_ui(app: FastAPI) -> None:
+    """Serve the built React bundle at `/ui/`, when there is one.
+
+    **This is the whole of the UI's presence in this process.** Decision #11 is
+    unchanged and arguably stronger than it was under Streamlit: what is served
+    here is static files, and the reviewer interface is a browser tab that can
+    reach the data only through the same HTTP endpoints anything else uses. There
+    is no UI process holding a database handle, because there is no UI process.
+
+    **Mounted under `/ui/`, not `/`.** The SPA does client-side routing, so a
+    deep link like `/ui/audit/search` has to return `index.html` — and `/audit`
+    is an API route. A catch-all at the root would make which one answers depend
+    on registration order, which is the kind of thing that works until somebody
+    adds an endpoint whose path a reviewer had bookmarked.
+
+    **Absent in a source checkout that has not built the UI**, and that is not an
+    error: `npm run dev` serves the bundle itself and proxies the API here.
+    """
+    dist = Path(settings.web_dist_dir).resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        return
+
+    @app.get("/ui", include_in_schema=False)
+    @app.get("/ui/{asset_path:path}", include_in_schema=False)
+    def reviewer_ui(asset_path: str = "") -> FileResponse:
+        """A built asset if the path names one, `index.html` otherwise.
+
+        `StaticFiles(html=True)` is not enough on its own: it serves `index.html`
+        for a *directory*, and answers 404 for `/ui/runs/run-1/review`, which is
+        a route in the browser rather than a file on disk. The symptom is
+        specific and easy to miss — the app works until somebody reloads the page
+        or shares a link.
+
+        `asset_path` comes from the URL, so the resolved path is checked against
+        the bundle directory before anything is opened. It should be impossible
+        to escape a directory whose contents this process built, and that is
+        precisely the assumption worth not making.
+        """
+        candidate = (dist / asset_path).resolve()
+        if asset_path and candidate.is_file() and candidate.is_relative_to(dist):
+            # `FileResponse` picks the media type from the suffix, which is all
+            # a bundle of `.js`, `.css` and `.map` files needs.
+            return FileResponse(candidate)
+        return FileResponse(index, media_type="text/html")
 
 
 def create_app(*, check_migrations: bool = True) -> FastAPI:
@@ -109,5 +157,9 @@ def create_app(*, check_migrations: bool = True) -> FastAPI:
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    # After the routers and after the middleware, so the API paths are matched
+    # first and the bundle is covered by `no-store` like everything else.
+    _mount_reviewer_ui(app)
 
     return app

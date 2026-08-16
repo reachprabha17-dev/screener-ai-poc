@@ -19,12 +19,13 @@
 # and a terminal that looked like it had crashed.
 #
 # Usage:
-#   scripts/dev.sh start [api|worker|ui]
+#   scripts/dev.sh start [api|worker|ui]     # ui = the Vite dev server
 #   scripts/dev.sh stop  [api|worker|ui]
 #   scripts/dev.sh restart [api|worker|ui]
 #   scripts/dev.sh status
 #   scripts/dev.sh logs [api|worker|ui]
-#   scripts/dev.sh check          # the four gates, same as CI
+#   scripts/dev.sh build          # build the reviewer interface into web/dist
+#   scripts/dev.sh check          # the four gates plus the web gates, same as CI
 #
 # RELOAD=1 scripts/dev.sh start api   — uvicorn watches the source tree. Handy
 # while editing routes or prompts; never used for measurement, because a reload
@@ -36,13 +37,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VENV="$ROOT/.venv/bin"
+WEB="$ROOT/web"
 RUN_DIR="$ROOT/data/run"
 LOG_DIR="$ROOT/data/logs"
 
 # 8010, not 8000: `onprem-rag` already holds 8000 on this host, and the failure
 # mode of a clash is a UI that talks to the wrong service rather than an error.
 API_PORT="${SCREENER_API_PORT:-8010}"
-UI_PORT="${SCREENER_UI_PORT:-8501}"
+# 5173 is Vite's default. The reviewer interface is only served from here while
+# it is being worked on — a deployment reaches it at ${API_URL}/ui/.
+UI_PORT="${SCREENER_UI_PORT:-5173}"
 API_URL="http://127.0.0.1:${API_PORT}"
 
 SERVICES=(api worker ui)
@@ -99,20 +103,33 @@ start_worker() {
   say "worker  started (pid $(cat "$(pid_file worker)"))"
 }
 
+# The Vite dev server, for working on the reviewer interface. It serves the app
+# at /ui/ (the same path the API serves the built bundle from, so dev and
+# production resolve every route identically) and proxies the API calls to
+# $API_URL, which keeps the browser on one origin and the API free of CORS.
+#
+# A deployment does not run this at all: `scripts/dev.sh build` writes web/dist
+# and the API process serves it from ${API_URL}/ui/. Use that to check a change
+# against what will actually ship — the dev server is the only thing in the
+# system that behaves differently from production.
 start_ui() {
   pid_of ui >/dev/null && { warn "ui already running (pid $(pid_of ui))"; return; }
   port_busy "$UI_PORT" && die "port $UI_PORT is already in use by something this script did not start"
+  [[ -d "$WEB/node_modules" ]] || die "no node_modules — run: (cd web && npm install)"
   banner ui
-  # Streamlit resolves .streamlit/config.toml from the working directory, so the
-  # settings that matter are also passed as env vars (22.2, decision #1).
   SCREENER_API_URL="$API_URL" \
-  STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
-  STREAMLIT_SERVER_HEADLESS=true \
-  STREAMLIT_SERVER_PORT="$UI_PORT" \
-    nohup "$VENV/streamlit" run "$ROOT/ui/screener_app.py" \
+  SCREENER_UI_PORT="$UI_PORT" \
+    nohup npm --prefix "$WEB" run dev \
       >>"$(log_file ui)" 2>&1 &
   echo $! >"$(pid_file ui)"
-  say "ui      started → http://127.0.0.1:${UI_PORT}"
+  say "ui      started → http://127.0.0.1:${UI_PORT}/ui/  (hot reload)"
+}
+
+# The production path: type-check, build, and let the API serve the result.
+build_ui() {
+  [[ -d "$WEB/node_modules" ]] || die "no node_modules — run: (cd web && npm install)"
+  npm --prefix "$WEB" run build || die "the reviewer interface failed to build"
+  say "ui      built → ${API_URL}/ui/"
 }
 
 wait_for_health() {
@@ -196,23 +213,33 @@ cmd_logs() {
 }
 
 cmd_check() {
-  # The same four gates the build order runs at every step (20). Ordered
-  # cheapest-first so a formatting slip does not cost a full test run.
+  # The same four gates the build order runs at every step (20), plus the three
+  # the reviewer interface brings with it. Ordered cheapest-first so a formatting
+  # slip does not cost a full test run.
   "$VENV/ruff" format --check .
   "$VENV/ruff" check .
   # No path argument: a path overrides `files` in pyproject.toml, and `mypy .`
-  # then walks `ui/` twice under two module names and fails before checking
+  # then walks the tree twice under two module names and fails before checking
   # anything real.
   "$VENV/mypy"
   "$VENV/pytest" -q
+  # eslint, tsc and vitest. Skipped with a warning rather than a failure when
+  # the toolchain is absent: a backend change should not be blocked by a machine
+  # with no Node on it, and CI has one.
+  if [[ -d "$WEB/node_modules" ]]; then
+    npm --prefix "$WEB" run check
+  else
+    warn "web/node_modules missing — skipping the reviewer interface gates"
+  fi
 }
 
 case "${1:-}" in
   start)   shift; cmd_start "${1:-}" ;;
+  build)   build_ui ;;
   stop)    shift; cmd_stop  "${1:-}" ;;
   restart) shift; cmd_stop "${1:-}"; cmd_start "${1:-}" ;;
   status)  cmd_status ;;
   logs)    shift; cmd_logs "${1:-}" ;;
   check)   cmd_check ;;
-  *) die "usage: $0 {start|stop|restart|status|logs|check} [api|worker|ui]" ;;
+  *) die "usage: $0 {start|stop|restart|status|logs|build|check} [api|worker|ui]" ;;
 esac

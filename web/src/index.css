@@ -1,0 +1,64 @@
+/*
+ * Tailwind, plus the few things a utility class cannot express.
+ *
+ * Everything visual is a utility in the markup or a variant in `src/ui/`. What
+ * stays here is the theme (one palette, used by both), the base element styles
+ * that would otherwise be repeated on every input in the app, and the dark-mode
+ * wiring. There is no hand-rolled design system underneath: the components in
+ * `src/ui/` are thin `cva` wrappers over these utilities, which is the same shape
+ * shadcn/ui generates, without the generator or the vendored files.
+ */
+
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+
+  body {
+    @apply bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+  }
+
+  /* Form controls are the one place utilities genuinely repeat: every input in
+     the app wants the same border, radius, focus ring and dark variant, and
+     copying eight classes onto each is how two of them end up different. */
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    @apply w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm
+      text-neutral-900 placeholder:text-neutral-400
+      focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 focus:outline-none
+      dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    @apply size-4 accent-blue-600;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-blue-500;
+  }
+
+  code {
+    @apply rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.85em] dark:bg-neutral-800;
+  }
+
+  /* The evidence quote. `whitespace-pre-wrap` matters: resume text carries its
+     own line breaks and collapsing them turns a bulleted skills list into one
+     unreadable line. */
+  blockquote {
+    @apply my-2 rounded-r-lg border-l-2 border-neutral-300 bg-neutral-100 px-4 py-2
+      text-sm whitespace-pre-wrap dark:border-neutral-700 dark:bg-neutral-800/60;
+  }
+
+  mark {
+    @apply rounded-sm bg-amber-200 px-0.5 text-neutral-900 dark:bg-amber-500/40 dark:text-amber-50;
+  }
+}

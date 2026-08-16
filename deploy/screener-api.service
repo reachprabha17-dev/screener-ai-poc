@@ -1,5 +1,10 @@
 [Unit]
-Description=Screener API — control plane, enqueues only (spec 15)
+# Also serves the reviewer interface at /ui/ from web/dist. There is no separate
+# UI unit any more: the interface is a React bundle, so the thing that used to be
+# a Python process holding a socket is now a directory of static files. Same
+# origin as the API, which is why the API needs no CORS and the browser has no
+# second host to be pointed at.
+Description=Screener API — control plane and reviewer interface (spec 15)
 After=network.target
 
 [Service]
@@ -19,6 +24,12 @@ EnvironmentFile=-/opt/screener/.env
 # import side effect.
 ExecStart=/opt/screener/.venv/bin/uvicorn screener.api.app:create_app --factory \
     --host 127.0.0.1 --port 8000
+
+# The bundle is resolved relative to WorkingDirectory unless set absolutely.
+# Build it during deployment with `npm --prefix web ci && npm --prefix web run
+# build`; the API serves whatever is there at startup, and serves the API alone
+# if nothing is.
+Environment=WEB_DIST_DIR=/opt/screener/web/dist
 
 # No screening happens here, so a stop only has to drain in-flight HTTP requests.
 KillSignal=SIGTERM

@@ -18,9 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# No database driver here, deliberately. Decision #11 (Streamlit must not reach
-# the DB) is enforced by the dependency graph rather than by convention.
-ui = ["streamlit", "pandas", "httpx"]
+# There is no `ui` extra any more, and its absence is the point. The reviewer
+# interface is a React app under `web/`, served as static files by the API
+# process; it has no Python dependencies because it is not a Python process.
+# Decision #11 used to be a rule about what `ui/` was allowed to import — the
+# thing it was protecting against no longer exists.
 dev = ["pytest", "pytest-cov", "hypothesis", "ruff", "mypy", "httpx"]
 
 [project.scripts]

@@ -165,6 +165,16 @@ class Settings(BaseSettings):
     auth_mode: Literal["stub", "ldap", "local"] = "stub"
     dev_actor_id: str = "poc-operator"
 
+    # --- Reviewer interface (decision #11) ---
+    #
+    # The built React bundle, served by this process at `/ui/` when the directory
+    # exists. Same-origin is the point: the browser talks to the process that
+    # served it, so the API needs no CORS middleware and there is no configurable
+    # API host for an operator to point at another machine. Absent (a source
+    # checkout that has not run `npm run build`) the API serves its endpoints and
+    # nothing at `/ui/`, which is exactly what the Vite dev server wants.
+    web_dist_dir: str = "web/dist"
+
     # --- Worker (16) ---
     # **Unique per process, not a constant.** Startup reclaim resets every job
     # still `claimed` by this worker_id, on the reasoning that a process which
