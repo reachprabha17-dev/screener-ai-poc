@@ -17,6 +17,7 @@ import { IdentityMenu } from './IdentityMenu';
  * should already have answered.
  */
 const LINKS = [
+  { to: '/', label: 'Overview', end: true },
   { to: '/requisitions', label: 'Requisitions' },
   { to: '/runs', label: 'Runs' },
   { to: '/audit', label: 'Audit' },
@@ -27,7 +28,7 @@ export function AppShell() {
     <>
       <header className="sticky top-0 z-40 border-b border-neutral-200 bg-white/90 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/90">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-5 py-2.5">
-          <Link to="/requisitions" className="leading-tight">
+          <Link to="/" className="leading-tight">
             <span className="font-semibold tracking-tight">Enterprise Talent Screener</span>
             <span className="block text-xs text-neutral-500 dark:text-neutral-400">
               On-premise · no data leaves this host
@@ -39,6 +40,9 @@ export function AppShell() {
               <NavLink
                 key={link.to}
                 to={link.to}
+                // `end` on the index route only: without it "Overview" stays
+                // highlighted on every screen, because every path starts with /.
+                end={link.end ?? false}
                 className={({ isActive }) =>
                   cn(
                     'rounded-full px-3 py-1.5 text-sm font-medium transition-colors',

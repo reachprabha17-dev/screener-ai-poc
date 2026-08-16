@@ -402,6 +402,20 @@ def progress(tx: Tx, run_id: str, phase: str = "judge") -> RunProgress:
     )
 
 
+def count_unscreened(tx: Tx) -> int:
+    """Snapshotted files not yet judged, across every run.
+
+    Judge phase only, for the reason `progress` gives: one job per candidate is
+    what anyone means by "files waiting". It is what makes the applications
+    figure legible — a total that is not moving means something different when
+    there is nothing left in the queue.
+    """
+    row = tx.execute(
+        "SELECT COUNT(*) AS n FROM jobs WHERE phase = 'judge' AND status IN ('pending','claimed')"
+    ).fetchone()
+    return int(row["n"])
+
+
 def failed_jobs(tx: Tx, run_id: str) -> list[FailedJob]:
     """Files that exhausted `job_max_attempts` and were never screened (16.5).
 

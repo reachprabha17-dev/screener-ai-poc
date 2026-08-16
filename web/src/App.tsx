@@ -5,6 +5,7 @@ import { AppShell } from './components/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { lazy, Suspense } from 'react';
 import { AuditLayout } from './pages/AuditLayout';
+import { DashboardPage } from './pages/DashboardPage';
 import { NewRequisitionPage } from './pages/NewRequisitionPage';
 import { RequisitionPage } from './pages/RequisitionPage';
 import { RequisitionsPage } from './pages/RequisitionsPage';
@@ -14,15 +15,6 @@ import { RunProgressPage } from './pages/RunProgressPage';
 import { RunsPage } from './pages/RunsPage';
 import { SessionProvider } from './session/SessionProvider';
 
-/**
- * One `QueryClient` for the app.
- *
- * `retry: 1` rather than the default three: the API is on loopback, so a failure
- * is usually a stopped service or a rejected request, and retrying those twice
- * more only delays telling the reviewer. `staleTime` is short because a run in
- * progress genuinely changes underneath the screen — but not zero, so moving
- * between tabs does not re-fetch the same candidate list three times.
- */
 /**
  * The audit screens are loaded on demand.
  *
@@ -41,6 +33,15 @@ const AuditSearchPage = lazy(() =>
   import('./pages/audit/AuditSearchPage').then((m) => ({ default: m.AuditSearchPage })),
 );
 
+/**
+ * One `QueryClient` for the app.
+ *
+ * `retry: 1` rather than the default three: the API is on loopback, so a failure
+ * is usually a stopped service or a rejected request, and retrying those twice
+ * more only delays telling the reviewer. `staleTime` is short because a run in
+ * progress genuinely changes underneath the screen — but not zero, so moving
+ * between tabs does not re-fetch the same candidate list three times.
+ */
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -66,7 +67,7 @@ export function App() {
           <BrowserRouter basename={import.meta.env.BASE_URL}>
             <Routes>
               <Route element={<AppShell />}>
-                <Route index element={<Navigate to="/requisitions" replace />} />
+                <Route index element={<DashboardPage />} />
 
                 <Route path="requisitions">
                   <Route index element={<RequisitionsPage />} />
@@ -95,7 +96,7 @@ export function App() {
                   <Route path="search" element={<AuditSearchPage />} />
                 </Route>
 
-                <Route path="*" element={<Navigate to="/requisitions" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </BrowserRouter>

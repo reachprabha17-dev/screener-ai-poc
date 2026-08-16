@@ -29,6 +29,21 @@ export function date(value: string | null | undefined): string {
   return parsed ? format(parsed, 'yyyy-MM-dd') : '';
 }
 
+/**
+ * A count as a stat tile shows it: grouped up to five figures, compact beyond.
+ *
+ * `1,284` stays exact because a reviewer plans around it; `12.9K` is the point
+ * at which the exact figure stops being the thing anyone reads, and eight digits
+ * across a tile stop being one glance.
+ */
+export function compactCount(value: number): string {
+  return value < 100_000
+    ? new Intl.NumberFormat(undefined).format(value)
+    : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(
+        value,
+      );
+}
+
 export function percent(value: number, digits = 0): string {
   return `${(value * 100).toFixed(digits)}%`;
 }

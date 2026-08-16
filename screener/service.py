@@ -46,6 +46,7 @@ from screener.models import (
     AuditEntry,
     Candidate,
     Criterion,
+    DashboardSummary,
     Decision,
     DecisionRecord,
     EscalationReason,
@@ -54,6 +55,7 @@ from screener.models import (
     HealthReport,
     Position,
     RankedResult,
+    ReviewQueue,
     Rubric,
     Run,
     RunStatus,
@@ -997,6 +999,51 @@ class ScreenerService:
                 {"done": progress.done, "failed": progress.failed, "escalation_rate": rate},
             )
         return True
+
+    def dashboard(self) -> DashboardSummary:
+        """The three numbers, counted in one transaction.
+
+        **One transaction, not one per number.** A dashboard assembled from six
+        separate reads can show a candidate that has been decided since the count
+        above it was taken, and the arithmetic stops adding up on screen for no
+        reason a reader can see. Everything here is a snapshot of the same
+        instant.
+
+        **Counted in SQL, not by loading rows.** The obvious implementation —
+        `list_runs()` then `list_candidates()` per run — reads every résumé in the
+        database to produce three integers, because `Candidate` carries
+        `resume_text` and `sent_text` (~40 KB each). At a thousand candidates that
+        is tens of megabytes per page load.
+
+        **Writes no audit row.** Reading counts is not a mutation, and a log
+        entry per dashboard visit would bury the decisions an auditor is looking
+        for under refreshes — the same reasoning that keeps `search_audit`
+        silent.
+        """
+        with self.uow_factory() as tx:
+            queues = []
+            for run_id, count in results_store.awaiting_review_by_run(tx):
+                run = runs_store.get(tx, run_id)
+                position = positions_store.get(tx, run.position_id) if run else None
+                queues.append(
+                    ReviewQueue(
+                        run_id=run_id,
+                        # A run whose requisition has been deleted still holds a
+                        # real queue. Naming the run is more useful than dropping
+                        # the row, which would silently lose part of the total.
+                        position_reference=position.reference if position else "unknown",
+                        position_title=position.title if position else "",
+                        awaiting_review=count,
+                    )
+                )
+            return DashboardSummary(
+                open_positions=positions_store.count_open(tx),
+                applications=results_store.count_applications(tx),
+                awaiting_review=results_store.count_awaiting_review(tx),
+                runs_in_progress=runs_store.count_active(tx),
+                unscreened_files=jobs_store.count_unscreened(tx),
+                queues=queues,
+            )
 
     # --- operations ----------------------------------------------------------
 

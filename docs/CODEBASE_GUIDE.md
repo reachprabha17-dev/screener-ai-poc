@@ -463,6 +463,8 @@ The interface is a route tree over four concepts:
                                  candidate detail, escalation meter, folder picker
     web/src/pages/               one file per screen, matching the routes below
 
+    /                            overview: three counts, and the runs holding
+                                 the review queue
     /requisitions                the list, and the way into a new one
     /requisitions/:positionId    rubric: draft, edit, approve, then start a run
     /runs                        every run, newest first

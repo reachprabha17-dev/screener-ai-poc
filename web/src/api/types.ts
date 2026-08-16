@@ -205,6 +205,30 @@ export interface BulkDecisionResult {
   skipped: number[];
 }
 
+/** `ReviewQueueResponse` — one run's outstanding queue, named so it can be worked. */
+export interface ReviewQueue {
+  run_id: string;
+  position_reference: string;
+  position_title: string;
+  awaiting_review: number;
+}
+
+/**
+ * `DashboardResponse`.
+ *
+ * Counts only, and no field here names a person, a file or a reason — which is
+ * why this is the one read surface with no role gate on it. A field that would
+ * name one belongs behind the `auditor` check instead.
+ */
+export interface Dashboard {
+  open_positions: number;
+  applications: number;
+  awaiting_review: number;
+  runs_in_progress: number;
+  unscreened_files: number;
+  queues: ReviewQueue[];
+}
+
 /** `HealthResponse`. */
 export interface Health {
   ok: boolean;

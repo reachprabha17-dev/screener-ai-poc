@@ -334,6 +334,52 @@ def list_for_run(tx: Tx, run_id: str) -> list[Candidate]:
     return [_row_to_candidate(tx, row) for row in rows]
 
 
+# The review queue, as SQL. Written once and used for both the total and the
+# per-run breakdown so the two can never disagree — and mirroring
+# `sign_off_run`'s precondition exactly, because a dashboard that reads zero
+# while sign-off returns 400 teaches reviewers to distrust the screen.
+_AWAITING_REVIEW = (
+    "decision = 'undecided' AND (review_required = 1 OR verification_status = 'pending')"
+)
+
+
+def count_applications(tx: Tx) -> int:
+    """Distinct CVs received per requisition.
+
+    `COUNT(*)` would be wrong in one specific and ordinary case: re-running a
+    folder after fixing a parser failure writes a second candidate row for the
+    same file, and the dashboard would report that as new applicants arriving.
+    Counting distinct `(position_id, file_sha256)` pairs also keeps one person
+    applying for two requisitions as the two applications it is.
+    """
+    row = tx.execute(
+        "SELECT COUNT(DISTINCT position_id || ':' || file_sha256) AS n FROM candidates"
+    ).fetchone()
+    return int(row["n"])
+
+
+def count_awaiting_review(tx: Tx) -> int:
+    """Every candidate a human still has to answer for, across all runs."""
+    row = tx.execute(f"SELECT COUNT(*) AS n FROM candidates WHERE {_AWAITING_REVIEW}").fetchone()  # noqa: S608 — no caller input: the predicate is a module constant
+    return int(row["n"])
+
+
+def awaiting_review_by_run(tx: Tx, limit: int = 10) -> list[tuple[str, int]]:
+    """`(run_id, count)` for the runs holding a queue, largest first.
+
+    Bounded, and the bound is the point: the caller pairs each row with its
+    requisition, so an unbounded result is an unbounded number of lookups on a
+    screen that loads on every visit. The headline total is counted separately
+    and stays exact however many runs are omitted here.
+    """
+    rows = tx.execute(
+        f"SELECT run_id, COUNT(*) AS n FROM candidates WHERE {_AWAITING_REVIEW} "  # noqa: S608 — as above; `limit` is bound, not interpolated
+        "GROUP BY run_id ORDER BY n DESC, run_id LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [(str(row["run_id"]), int(row["n"])) for row in rows]
+
+
 def find_duplicates(tx: Tx, run_id: str, file_sha256: str) -> int:
     """Count of byte-identical files already seen in this run (12.6).
 

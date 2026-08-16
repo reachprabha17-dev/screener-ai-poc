@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from config.settings import settings
 from screener.api import deps as api_deps
 from screener.api.app import create_app
-from screener.api.routes import candidates, health, positions, rubrics, runs
+from screener.api.routes import candidates, dashboard, health, positions, rubrics, runs
 from screener.core.verify_evidence import align
 from screener.models import Candidate, Flag, ScoredCriterion
 from screener.ports import CacheKey
@@ -767,7 +767,7 @@ def test_no_handler_is_async() -> None:
     produces something slower than the sync version while looking more
     sophisticated.
     """
-    for module in (positions, rubrics, runs, candidates, health):
+    for module in (positions, rubrics, runs, candidates, health, dashboard):
         for route in module.router.routes:
             endpoint = route.endpoint  # type: ignore[attr-defined]
             assert not inspect.iscoroutinefunction(endpoint), endpoint.__name__
@@ -780,7 +780,7 @@ def test_handlers_stay_thin() -> None:
     the CLI and the worker can no longer reach it. The bound is generous; the
     property is that it does not drift.
     """
-    for module in (positions, rubrics, runs, candidates, health):
+    for module in (positions, rubrics, runs, candidates, health, dashboard):
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))  # type: ignore[arg-type]
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):
@@ -803,7 +803,7 @@ def test_no_route_module_can_screen_a_candidate() -> None:
     """
     forbidden = ("screener.pipeline", "screener.intake")
 
-    for module in (positions, rubrics, runs, candidates, health):
+    for module in (positions, rubrics, runs, candidates, health, dashboard):
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))  # type: ignore[arg-type]
         imported: set[str] = set()
         for node in ast.walk(tree):
@@ -1090,3 +1090,159 @@ def test_the_record_carries_both_the_judge_and_the_verifier(
             "absence_evidence",
         ):
             assert field in criterion, field
+
+
+# --- dashboard ---------------------------------------------------------------
+
+
+def test_dashboard_counts_nothing_on_an_empty_system(client: TestClient) -> None:
+    """Zeroes, not an error and not an empty body.
+
+    The first thing anyone sees is this screen on a system with nothing in it.
+    """
+    body = client.get("/dashboard").json()
+
+    assert body == {
+        "open_positions": 0,
+        "applications": 0,
+        "awaiting_review": 0,
+        "runs_in_progress": 0,
+        "unscreened_files": 0,
+        "queues": [],
+    }
+
+
+def test_dashboard_counts_open_requisitions_and_queued_files(client: TestClient) -> None:
+    make_position(client, "REQ-A")
+    run_id = make_run(client, "REQ-B")
+    client.post(f"/runs/{run_id}/start")
+
+    body = client.get("/dashboard").json()
+
+    assert body["open_positions"] == 2
+    # Snapshotted and queued, but not yet judged: they are applications the
+    # system has received and has not read, which is a different fact from an
+    # application it has assessed.
+    assert body["unscreened_files"] == 3
+    assert body["applications"] == 0
+    assert body["runs_in_progress"] == 1
+
+
+def test_dashboard_review_queue_matches_the_sign_off_gate(
+    client: TestClient,
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+) -> None:
+    """The count and the refusal have to agree.
+
+    A screen that reads zero while the sign-off button answers 400 teaches
+    reviewers to distrust the screen, so both read the same predicate: undecided,
+    and either escalated or not yet verified.
+    """
+    run_id, _ = _seed_scored_candidate(client, service, uow_factory)
+    _add_escalated_candidate(uow_factory, run_id)
+
+    body = client.get("/dashboard").json()
+    assert body["awaiting_review"] == 1
+    assert body["applications"] == 2
+
+    refused = client.post(f"/runs/{run_id}/sign-off")
+    assert refused.status_code == 400
+    assert "1 candidate(s) need review" in refused.json()["detail"]
+
+
+def test_dashboard_names_the_runs_holding_the_queue(
+    client: TestClient,
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+) -> None:
+    """A total alone is not actionable — review happens inside a run."""
+    run_id, _ = _seed_scored_candidate(client, service, uow_factory)
+    _add_escalated_candidate(uow_factory, run_id)
+
+    queues = client.get("/dashboard").json()["queues"]
+
+    assert len(queues) == 1
+    assert queues[0]["run_id"] == run_id
+    assert queues[0]["position_reference"] == "REQ-1"
+    assert queues[0]["awaiting_review"] == 1
+
+
+def test_dashboard_queue_empties_when_the_candidate_is_decided(
+    client: TestClient,
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+) -> None:
+    run_id, _ = _seed_scored_candidate(client, service, uow_factory)
+    escalated_id = _add_escalated_candidate(uow_factory, run_id)
+
+    client.post(
+        f"/candidates/{escalated_id}/decision",
+        json={"decision": "reject", "reason": "unreadable document, asked for a resend"},
+    )
+
+    body = client.get("/dashboard").json()
+    assert body["awaiting_review"] == 0
+    assert body["queues"] == []
+    # The application does not stop existing because somebody answered for it.
+    assert body["applications"] == 2
+
+
+def test_dashboard_counts_an_application_once_per_requisition(
+    client: TestClient,
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+) -> None:
+    """Re-screening is not a new applicant.
+
+    Rescanning after a parser failure writes a second candidate row for the same
+    file. Counting rows would report that as an application arriving.
+    """
+    run_id, _ = _seed_scored_candidate(client, service, uow_factory)
+    with uow_factory() as tx:
+        run = runs_store.get(tx, run_id)
+        assert run is not None
+        results_store.save(
+            tx,
+            run_id,
+            Candidate(
+                run_id=run_id,
+                filename="asha_nair.pdf",
+                file_sha256="sha-qualified",  # the same file, screened again
+                criteria=[],
+                scoreable=True,
+                verification_status="done",
+            ),
+            CacheKey(
+                file_sha256="sha-qualified",
+                position_id=run.position_id,
+                rubric_hash="r" * 64,
+                judge_digest="sha256:aaa",
+                prompt_hash="p" * 64,
+                redaction_on=True,
+                num_ctx=settings.num_ctx,
+                app_version="v0.1.0",
+            ),
+        )
+
+    assert client.get("/dashboard").json()["applications"] == 1
+
+
+def test_dashboard_writes_no_audit_row(
+    client: TestClient,
+    service: ScreenerService,
+    uow_factory: Callable[[], UnitOfWork],
+) -> None:
+    """Reading counts is not a mutation.
+
+    A row per dashboard visit would bury the decisions an auditor is looking for
+    under refreshes — the same reasoning that keeps `search_audit` silent.
+    """
+    make_position(client, "REQ-AUDIT")
+    before = client.get("/audit", headers={"X-Actor-Roles": "auditor"}).json()["total"]
+
+    client.get("/dashboard")
+    client.get("/dashboard")
+
+    after = client.get("/audit", headers={"X-Actor-Roles": "auditor"}).json()["total"]
+    assert after == before

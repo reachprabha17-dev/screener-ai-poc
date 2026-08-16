@@ -27,6 +27,7 @@ from screener.models import (
     AdverseActionRecord,
     AuditEntry,
     Candidate,
+    DashboardSummary,
     FolderInfo,
     HealthReport,
     Position,
@@ -40,11 +41,13 @@ from screener.schemas import (
     AdverseActionResponse,
     AuditEntryResponse,
     CandidateResponse,
+    DashboardResponse,
     DecisionRecordResponse,
     FolderResponse,
     HealthResponse,
     PositionResponse,
     RankedResponse,
+    ReviewQueueResponse,
     RubricResponse,
     RunResponse,
     RunStatusResponse,
@@ -178,6 +181,13 @@ def to_ranked(result: RankedResult, actor: Actor) -> RankedResponse:
 
 def to_health(report: HealthReport) -> HealthResponse:
     return HealthResponse(**report.model_dump())
+
+
+def to_dashboard(summary: DashboardSummary) -> DashboardResponse:
+    return DashboardResponse(
+        **summary.model_dump(exclude={"queues"}),
+        queues=[ReviewQueueResponse(**q.model_dump()) for q in summary.queues],
+    )
 
 
 def to_audit_entry(entry: AuditEntry) -> AuditEntryResponse:

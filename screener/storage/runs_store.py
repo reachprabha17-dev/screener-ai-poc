@@ -133,6 +133,14 @@ def list_active(tx: Tx) -> list[Run]:
     return [_to_record(row) for row in rows]
 
 
+def count_active(tx: Tx) -> int:
+    """Runs that can still change, matching `list_active`'s definition."""
+    row = tx.execute(
+        "SELECT COUNT(*) AS n FROM runs WHERE status IN ('pending','running')"
+    ).fetchone()
+    return int(row["n"])
+
+
 def list_all(tx: Tx) -> list[Run]:
     rows = tx.execute("SELECT * FROM runs ORDER BY created_at DESC").fetchall()
     return [_to_record(row) for row in rows]

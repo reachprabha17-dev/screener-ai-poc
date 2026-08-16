@@ -520,6 +520,34 @@ class CountResponse(BaseModel):
     count: int
 
 
+class ReviewQueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    position_reference: str
+    position_title: str
+    awaiting_review: int
+
+
+class DashboardResponse(BaseModel):
+    """Counts only.
+
+    Nothing here is role-scoped, and that is a property to keep rather than an
+    oversight: the moment a name, a filename or a reason appears on this
+    response it becomes a read surface that needs the gate `GET /audit` has.
+    Sizes of queues are not disclosures about the people in them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    open_positions: int
+    applications: int
+    awaiting_review: int
+    runs_in_progress: int
+    unscreened_files: int
+    queues: list[ReviewQueueResponse] = Field(default_factory=list)
+
+
 class AuditEntryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -65,6 +65,19 @@ def list_open(tx: Tx) -> list[Position]:
     return [_to_position(row) for row in rows]
 
 
+def count_open(tx: Tx) -> int:
+    """How many requisitions are open, without loading them.
+
+    `list_open` already exists and its `len()` is the same number today. It is
+    counted in SQL because the dashboard asks for this on every load and a
+    requisition carries its full job description text — reading a hundred of them
+    to discard everything but the count is the kind of cost nobody notices until
+    the share has a hundred requisitions on it.
+    """
+    row = tx.execute("SELECT COUNT(*) AS n FROM positions WHERE status = 'open'").fetchone()
+    return int(row["n"])
+
+
 def close(tx: Tx, position_id: str) -> None:
     """No `actor` parameter: stores do not audit, the service layer does (12.2).
 

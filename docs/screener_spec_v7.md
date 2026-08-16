@@ -159,6 +159,7 @@ somewhere else:
 
 | Route | Screen |
 |---|---|
+| `/ui/` | Overview: the three counts and where the review queue is |
 | `/ui/requisitions` | Open requisitions |
 | `/ui/requisitions/new` | Folder picker, title, job description |
 | `/ui/requisitions/:positionId` | Rubric: draft, edit, approve; runs for this requisition |
@@ -174,7 +175,46 @@ one shared key, and the correction each made on re-run triggered another re-run 
 There is now nothing to share. A reviewer can also link a colleague to the exact
 screen they are looking at, which the previous interface could not do at all.
 
-### 5.2 New: client-side rules
+### 5.2 New: the overview screen
+
+The landing screen answers "what is the state of hiring right now" in three
+counts, and each has a definition that had to be chosen rather than assumed:
+
+| Count | Definition | Why not the obvious one |
+|---|---|---|
+| **Active job postings** | `positions` with `status = 'open'` | The requisition lifecycle already exists in the schema; "active" means what `list_open` has always meant |
+| **Total applications** | distinct `(position_id, file_sha256)` in `candidates` | `COUNT(*)` counts a re-run of the same folder as new applicants arriving. Rescanning after a parser failure is ordinary, not exotic |
+| **Candidates to review** | `decision = 'undecided' AND (review_required OR verification_status = 'pending')` | This is `sign_off_run`'s own precondition. Any looser definition produces a dashboard reading zero while the sign-off button returns 400, which teaches reviewers to distrust both |
+
+Two supporting figures carry context the headline numbers need: `runs_in_progress`
+(the counts are still moving) and `unscreened_files` (applications received but
+not yet read, which is a different fact from applications assessed).
+
+**A total is not actionable, so the queue is named.** Review happens inside a
+run, so the response carries the runs holding the queue — bounded server-side,
+largest first, with the screen saying how many candidates the bound omits. Same
+reasoning as grouping escalations by reason rather than reporting one count
+(§15.4).
+
+**`GET /dashboard` counts in SQL, in one transaction.** The client-side
+alternative — `/positions`, `/runs`, then a candidate list per run — reads every
+résumé in the database to produce three integers (`Candidate` carries
+`resume_text` and `sent_text`, ~40 KB each), and shows numbers taken at three
+different instants that visibly fail to add up. The endpoint writes no audit row:
+reading counts is not a mutation, and a row per dashboard visit would bury the
+decisions an auditor is looking for.
+
+**No role gate, and that is a property to keep.** Nothing on the response names a
+person, a file or a reason — the size of a queue is not a disclosure about the
+people in it. A field that would be belongs behind the `auditor` check that
+`GET /audit` uses.
+
+**A KPI row of stat tiles, not charts.** Three current values have no shape to
+plot; a chart of them is decoration a reader has to decode to arrive back at the
+number. No delta and no sparkline either, because the system stores no history to
+compute one from and a trend drawn from a single figure is a picture of nothing.
+
+### 5.3 New: client-side rules
 
 1. **No component fetches.** Server state belongs to the query cache; components
    hold view state only.
@@ -197,9 +237,10 @@ screen they are looking at, which the previous interface could not do at all.
 
 ## 6. Amended §16 — the API surface
 
-One addition, no changes to any existing endpoint:
+Two additions, no changes to any existing endpoint:
 
 ```
+GET /dashboard             → DashboardResponse (counts; §5.2)
 GET /ui                    → index.html
 GET /ui/{path:path}        → the built asset if it names one, index.html otherwise
 ```

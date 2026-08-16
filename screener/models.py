@@ -707,6 +707,51 @@ class RunStatus(BaseModel):
         return self.total > 0 and self.pending == 0 and self.claimed == 0
 
 
+class ReviewQueue(BaseModel):
+    """One run's outstanding review queue, named so it can be worked.
+
+    A total on its own is not actionable: review happens inside a run, so
+    "31 candidates to review" is only a number until it says *which* runs hold
+    them. This is the same reasoning that grouped escalations by reason rather
+    than reporting one count (15.4).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    position_reference: str
+    position_title: str
+    awaiting_review: int
+
+
+class DashboardSummary(BaseModel):
+    """The three numbers a manager opens the system to see, and how to act on them.
+
+    **`awaiting_review` uses the sign-off predicate, not a looser one.** A
+    candidate counts when it is undecided *and* either escalated or still
+    unverified — exactly the condition `sign_off_run` refuses on. Any other
+    definition produces a dashboard that reads zero while the sign-off button
+    returns 400, which teaches reviewers to distrust both.
+
+    **`applications` counts a CV once per requisition it was sent to**, however
+    many runs screened it. Re-running a folder after fixing a parser failure
+    creates a second candidate row for the same file; counting rows would report
+    that as new applicants arriving.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    open_positions: int = 0
+    applications: int = 0
+    awaiting_review: int = 0
+    # Context for the other three rather than headline numbers: applications
+    # rises while these are non-zero, and a queue that is not moving is a
+    # different problem from one that has not been screened yet.
+    runs_in_progress: int = 0
+    unscreened_files: int = 0
+    queues: list[ReviewQueue] = Field(default_factory=list)
+
+
 class HealthReport(BaseModel):
     """What `/health` and `/ready` report (15.1, 17).
 

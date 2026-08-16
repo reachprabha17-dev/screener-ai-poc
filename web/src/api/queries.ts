@@ -34,6 +34,7 @@ import type {
   BulkDecisionResult,
   CandidateSummary,
   Criterion,
+  Dashboard,
   FolderPage,
   Health,
   Identity,
@@ -66,6 +67,7 @@ function useScope(): Identity {
  */
 export const keys = {
   health: (id: Identity) => ['health', id] as const,
+  dashboard: (id: Identity) => ['dashboard', id] as const,
   positions: (id: Identity) => ['positions', id] as const,
   folders: (id: Identity, path: string, q: string, offset: number) =>
     ['folders', id, path, q, offset] as const,
@@ -95,6 +97,24 @@ export function useHealth(): UseQueryResult<Health> {
     // enough to notice a restarted API without adding traffic to every click.
     refetchInterval: 30_000,
     retry: false,
+  });
+}
+
+/**
+ * The overview counts.
+ *
+ * Polled on the same cadence as a live run, because that is when the numbers
+ * move: a screening in progress changes `applications` and `awaiting_review`
+ * underneath whoever is watching. `refetchOnWindowFocus` (on by default) covers
+ * the ordinary case of coming back to a tab left open over lunch.
+ */
+export function useDashboard(): UseQueryResult<Dashboard> {
+  const api = useApi();
+  const scope = useScope();
+  return useQuery({
+    queryKey: keys.dashboard(scope),
+    queryFn: ({ signal }) => api.dashboard(signal),
+    refetchInterval: (query) => (query.state.data?.runs_in_progress ? POLL_MS : false),
   });
 }
 
@@ -240,7 +260,10 @@ export function useCreatePosition(): UseMutationResult<
   const client = useQueryClient();
   return useMutation({
     mutationFn: (input) => api.createPosition(input),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.positions(scope) }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.positions(scope) });
+      void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
+    },
   });
 }
 
@@ -294,7 +317,10 @@ export function useCreateRun(): UseMutationResult<
   const client = useQueryClient();
   return useMutation({
     mutationFn: (input) => api.createRun(input),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.runs(scope) }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.runs(scope) });
+      void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
+    },
   });
 }
 
@@ -320,6 +346,7 @@ export function useRunControl(runId: string): UseMutationResult<number, Error, R
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.runStatus(scope, runId) });
       void client.invalidateQueries({ queryKey: keys.runs(scope) });
+      void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
     },
   });
 }
@@ -341,6 +368,8 @@ export function useDecide(
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.candidates(scope, runId) });
       void client.invalidateQueries({ queryKey: keys.runStatus(scope, runId) });
+      // A decision empties part of the review queue the dashboard is counting.
+      void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
     },
   });
 }
@@ -360,6 +389,8 @@ export function useDecideBulk(
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.candidates(scope, runId) });
       void client.invalidateQueries({ queryKey: keys.runStatus(scope, runId) });
+      // A decision empties part of the review queue the dashboard is counting.
+      void client.invalidateQueries({ queryKey: keys.dashboard(scope) });
     },
   });
 }

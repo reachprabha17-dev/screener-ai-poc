@@ -25,6 +25,7 @@ import type {
   AuditPage,
   BulkDecisionResult,
   Criterion,
+  Dashboard,
   FolderPage,
   Health,
   Identity,
@@ -305,6 +306,9 @@ export function createApi(identity: Identity) {
 
     // --- ops ---------------------------------------------------------------
     health: (signal?: AbortSignal) => request<Health>('/health', identity, { signal }),
+
+    /** The overview counts, in one request rather than assembled client-side. */
+    dashboard: (signal?: AbortSignal) => request<Dashboard>('/dashboard', identity, { signal }),
   };
 }
 
