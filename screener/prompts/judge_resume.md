@@ -12,6 +12,8 @@ Return exactly one verdict object for every criterion listed under CRITERIA, usi
 - `partial` — the skill or requirement is mentioned, but without evidence of depth, scope, or duration.
 - `none` — absent from the resume, or present only as aspiration, interest, or training exposure.
 
+**Depth, scope and duration apply to skills and experience. They do not apply to a credential.** A certificate, diploma, degree or licence either exists or it does not — there is no "duration" of one to ask for. If the resume names the specific credential a criterion asks for — the qualification and, where given, the issuing institution — that is `strong` on its own. Do not withhold `strong` from a named credential for lacking dates, coursework detail, or anything else beyond the credential itself.
+
 Judge only from the resume text. Never infer a skill that is not written. A related technology is not the technology asked for, and a job title is not evidence of the work unless the resume says so.
 
 ## Judge the facts, not the writing

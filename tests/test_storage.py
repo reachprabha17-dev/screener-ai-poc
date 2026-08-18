@@ -182,6 +182,7 @@ def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> Non
         "0002.judge-digest-rename",
         "0003.v6-schema",
         "0004.position-reference-unique-while-open",
+        "0005.backfill-run-file-counts",
     ]
     assert pending_migrations(path) == []
     require_current_schema(path)

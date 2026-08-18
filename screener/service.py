@@ -465,6 +465,7 @@ class ScreenerService:
                 app_version=settings.app_version,
             )
             queued = jobs_store.snapshot_folder(tx, run_id, folder)
+            runs_store.set_file_count(tx, run_id, queued)
             if queued == 0:
                 # Distinct from `completed` (17.6). A run over an empty folder
                 # otherwise reaches sign-off as a blank results screen that is
@@ -496,6 +497,10 @@ class ScreenerService:
             if run is None:
                 raise NotFoundError(f"run {run_id}")
             added = jobs_store.snapshot_folder(tx, run_id, Path(run.folder))
+            # Recomputed from the jobs actually snapshotted, not `run.file_count
+            # + added`: a run created before this accounting existed still reads
+            # 0, and adding to a wrong number keeps it wrong.
+            runs_store.set_file_count(tx, run_id, jobs_store.progress(tx, run_id, "judge").total)
             if added and run.phase == "done":
                 # New files are phase-1 work, so a finished run re-enters phase 1.
                 # Without this the jobs sit in a queue nothing is draining: the

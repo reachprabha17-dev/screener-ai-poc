@@ -870,6 +870,11 @@ def test_create_run_snapshots_the_folder(service: ScreenerService, uow_factory) 
 
     assert status.total == 5
     assert status.pending == 5
+    # Regression: `runs_store.create` defaults `file_count` to 0, and the real
+    # number is only known after the folder is snapshotted — a second call, once
+    # the run row already exists. Every run read `file_count = 0` on the runs
+    # list until `create_run` was made to write it back.
+    assert run.file_count == 5
 
 
 def test_create_run_freezes_the_reproducibility_inputs(service: ScreenerService) -> None:
@@ -899,6 +904,10 @@ def test_files_added_later_need_an_explicit_rescan(service: ScreenerService) -> 
     assert service.run_status(run.id).total == 2  # unchanged until asked
     assert service.rescan_run(run.id, ACTOR) == 1
     assert service.run_status(run.id).total == 3
+    # `file_count` follows the same total the rescan just grew, not the count
+    # frozen at creation.
+    rescanned = next(r for r in service.list_runs() if r.id == run.id)
+    assert rescanned.file_count == 3
 
 
 def test_starting_an_empty_run_is_refused(service: ScreenerService) -> None:

@@ -72,6 +72,20 @@ def create(
     )
 
 
+def set_file_count(tx: Tx, run_id: str, file_count: int) -> None:
+    """How many files this run covers — what the runs list shows as `Files`.
+
+    Written explicitly rather than trusted to `create`'s default: the count is
+    only known once the folder is actually snapshotted into jobs, which happens
+    in a second call after the run row already exists (`jobs.run_id` is a
+    foreign key into this table). Skipping this call is exactly how every run
+    in a database can end up reading `file_count = 0` regardless of what it
+    actually screened — the row was written once, at 0, and the real number
+    was computed later but never sent back.
+    """
+    tx.execute("UPDATE runs SET file_count = ? WHERE id = ?", (file_count, run_id))
+
+
 def set_phase(tx: Tx, run_id: str, phase: str) -> None:
     """Advance a run between the judge and verify passes (17.4).
 
