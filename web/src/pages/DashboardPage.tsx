@@ -33,7 +33,7 @@ export function DashboardPage() {
           className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:text-neutral-950 dark:hover:bg-blue-400"
         >
           <Plus className="size-4" aria-hidden />
-          New requisition
+          New job posting
         </Link>
       </div>
 
@@ -57,10 +57,10 @@ function Summary({ data }: { data: Dashboard }) {
           hint={
             data.open_positions > 0 ? (
               <Link to="/requisitions" className="text-blue-600 hover:underline dark:text-blue-400">
-                Open requisitions →
+                Open job postings →
               </Link>
             ) : (
-              'No requisitions raised yet.'
+              'No job postings yet.'
             )
           }
         />
@@ -71,11 +71,11 @@ function Summary({ data }: { data: Dashboard }) {
           icon={FileText}
           // Said plainly, because the number is not simply "rows in a table":
           // a re-run of the same folder screens the same CV again, and counting
-          // that as a new applicant would overstate every requisition.
+          // that as a new applicant would overstate every job posting.
           hint={
             data.unscreened_files > 0
               ? `${String(data.unscreened_files)} more waiting to be screened`
-              : 'CVs screened, counted once per requisition'
+              : 'CVs screened, counted once per job posting'
           }
         />
 
@@ -107,7 +107,7 @@ function Summary({ data }: { data: Dashboard }) {
       {nothingYet ? (
         <Card className="p-10 text-center">
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            Nothing has been screened yet. Raise a requisition, approve its rubric, and start a run.
+            Nothing has been screened yet. Post a job, approve its rubric, and start a run.
           </p>
         </Card>
       ) : null}
@@ -127,7 +127,7 @@ function Queues({ data }: { data: Dashboard }) {
       <Table caption="Runs holding candidates that need a decision">
         <thead>
           <tr>
-            <Th>Requisition</Th>
+            <Th>Job posting</Th>
             <Th>Run</Th>
             <Th className="w-32">To review</Th>
           </tr>

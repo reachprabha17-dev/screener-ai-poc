@@ -180,6 +180,12 @@ class ScreenerService:
         )
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
+            # `reference` is unique only while a requisition using it is open
+            # (0004) — checked here rather than left to the index so a clash
+            # reads as a 409 a reviewer can act on, not an unhandled 500 from a
+            # raw `IntegrityError`.
+            if positions_store.get_open_by_reference(tx, reference) is not None:
+                raise ConflictError(f"a requisition with reference '{reference}' is already open")
             positions_store.create(tx, position)
             audit_store.append_for(
                 tx, actor, "create_position", "position", position.id, {"reference": reference}
@@ -994,13 +1000,22 @@ class ScreenerService:
             if run is None:
                 return None
 
+            # Closes out verify jobs a cache hit or a crash left permanently
+            # unclaimable — see `close_verified_jobs`. Unconditional and cheap:
+            # the UPDATE matches nothing on a run that never had any.
+            jobs_store.close_verified_jobs(tx, run_id)
+
             if run.phase == "judge":
                 if not jobs_store.no_pending(tx, run_id, "judge"):
                     return None
                 enqueued = (
                     jobs_store.enqueue_verify_jobs(tx, run_id) if run.verification_enabled else 0
                 )
-                phase = "verify" if enqueued else "done"
+                # A judge-phase cache hit can enqueue verify jobs that are
+                # already verified before a worker ever sees them — close
+                # those immediately rather than waiting for the next call.
+                jobs_store.close_verified_jobs(tx, run_id)
+                phase = "verify" if not jobs_store.no_pending(tx, run_id, "verify") else "done"
                 runs_store.set_phase(tx, run_id, phase)
                 if phase == "done":
                     # Nothing will ever verify these, so they must not be left

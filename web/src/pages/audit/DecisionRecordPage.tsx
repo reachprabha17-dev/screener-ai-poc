@@ -89,7 +89,7 @@ function Record({ record }: { record: AdverseActionRecord }) {
           title={`${record.filename} — ${outcome}`}
           hint={
             <>
-              Requisition <strong>{record.position_reference}</strong> · run{' '}
+              Job posting <strong>{record.position_reference}</strong> · run{' '}
               <code>{record.run_id}</code> · screened {dateTime(record.scored_at)}
             </>
           }

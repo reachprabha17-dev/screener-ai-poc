@@ -92,7 +92,7 @@ describe('dashboard', () => {
     renderWithProviders(<DashboardPage />);
 
     expect(await screen.findByText(/Nothing has been screened yet/)).toBeInTheDocument();
-    expect(screen.getByText('No requisitions raised yet.')).toBeInTheDocument();
+    expect(screen.getByText('No job postings yet.')).toBeInTheDocument();
     expect(screen.getByText('Nothing is waiting on a person')).toBeInTheDocument();
   });
 

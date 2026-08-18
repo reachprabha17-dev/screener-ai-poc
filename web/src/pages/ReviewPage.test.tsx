@@ -158,4 +158,55 @@ describe('review screen', () => {
       expect(screen.getByRole('button', { name: /sign off this run/i })).toBeEnabled();
     });
   });
+
+  it('explains why the bulk box is absent when every candidate needs individual review', async () => {
+    // Silence here used to look identical to a broken control — a reviewer
+    // opening the group and finding nothing below the table, with no way to
+    // tell "nothing to bulk-act on" from "this is broken" (11.11).
+    mockCandidates({
+      missing_must_have: [
+        candidate({
+          filename: 'ravi-kumar.docx',
+          file_sha256: 'sha-ravi',
+          must_haves_met: false,
+          review_required: true,
+          escalation_reasons: ['suspected_injection'],
+        }),
+      ],
+      escalation_rate: 0.5,
+    });
+
+    renderReview();
+
+    await screen.findByRole('button', { name: 'ravi-kumar.docx' });
+    expect(screen.queryByRole('button', { name: /decide on all/i })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/every candidate in this group needs review/i),
+    ).toBeInTheDocument();
+  });
+
+  it('still shows the individual decision box for an escalated missing-must-have candidate', async () => {
+    mockCandidates({
+      missing_must_have: [
+        candidate({
+          filename: 'ravi-kumar.docx',
+          file_sha256: 'sha-ravi',
+          must_haves_met: false,
+          review_required: true,
+          escalation_reasons: ['suspected_injection'],
+        }),
+      ],
+      escalation_rate: 0.5,
+    });
+
+    renderReview();
+
+    const row = await screen.findByRole('button', { name: 'ravi-kumar.docx' });
+    row.click();
+
+    await screen.findByText('Your decision');
+    expect(screen.getAllByRole('radio')).toHaveLength(3);
+    screen.getByRole('textbox', { name: /reason/i });
+    screen.getByRole('button', { name: /record decision/i });
+  });
 });

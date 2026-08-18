@@ -143,8 +143,8 @@ function pct(value: unknown): string {
 type Detail = Record<string, unknown>;
 
 const EVENT_TEXT: Record<string, (d: Detail) => string> = {
-  create_position: (d) => `Raised requisition **${text(d.reference, '?')}**.`,
-  close_position: (d) => `**Closed requisition ${text(d.reference, '?')}** — no longer recruiting.`,
+  create_position: (d) => `Posted job **${text(d.reference, '?')}**.`,
+  close_position: (d) => `**Closed job posting ${text(d.reference, '?')}** — no longer recruiting.`,
   extract_rubric: (d) =>
     `Model drafted a rubric of **${text(d.criteria, '?')} criteria** (prompt \`${short(d.prompt_hash)}\`, model \`${short(d.judge_digest)}\`).`,
   save_rubric: (d) =>

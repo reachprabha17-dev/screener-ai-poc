@@ -1,8 +1,10 @@
 """Requisitions and their users (spec 12.4).
 
-`positions.reference` is the folder name under `data/resumes/` and is UNIQUE.
-That constraint is what stops two requisitions pointing at the same folder and
-each snapshotting the other's candidates into their own run.
+`positions.reference` is the folder name under `data/resumes/`, unique among
+**open** positions (`idx_positions_open_reference`, 0004). That is what stops
+two requisitions pointing at the same folder at once, each snapshotting the
+other's candidates into their own run — not what stops a folder from being
+recruited against again after the requisition using it is closed.
 """
 
 import json
@@ -53,8 +55,17 @@ def get(tx: Tx, position_id: str) -> Position | None:
     return _to_position(row) if row else None
 
 
-def get_by_reference(tx: Tx, reference: str) -> Position | None:
-    row = tx.execute("SELECT * FROM positions WHERE reference = ?", (reference,)).fetchone()
+def get_open_by_reference(tx: Tx, reference: str) -> Position | None:
+    """The open requisition on this folder, if any. Mirrors `idx_positions_open_reference`.
+
+    Closed positions are not candidates here on purpose: a reference is only
+    taken while its requisition is open, so a closed one sharing this reference
+    (there can be at most one, but there may be several across history) must
+    not block a new requisition from claiming the folder.
+    """
+    row = tx.execute(
+        "SELECT * FROM positions WHERE reference = ? AND status = 'open'", (reference,)
+    ).fetchone()
     return _to_position(row) if row else None
 
 

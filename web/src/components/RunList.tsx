@@ -28,7 +28,7 @@ export function RunList({ runs, positions }: { runs: Run[]; positions?: Position
       <thead>
         <tr>
           <Th>Run</Th>
-          {positions ? <Th>Requisition</Th> : null}
+          {positions ? <Th>Job posting</Th> : null}
           <Th>State</Th>
           <Th>Files</Th>
           <Th>Needing review</Th>

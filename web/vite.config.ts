@@ -21,7 +21,16 @@ const BASE = '/ui/';
  * point at another host. The UI can only ever talk to the process that served
  * it, which is the browser-side half of decision #11.
  */
-const API_PATHS = ['/positions', '/runs', '/rubrics', '/candidates', '/audit', '/health', '/ready'];
+const API_PATHS = [
+  '/positions',
+  '/runs',
+  '/rubrics',
+  '/candidates',
+  '/audit',
+  '/health',
+  '/ready',
+  '/dashboard',
+];
 
 const API_TARGET = process.env.SCREENER_API_URL ?? 'http://127.0.0.1:8010';
 

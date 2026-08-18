@@ -34,7 +34,7 @@ export function RunLayout() {
     <div className="space-y-4">
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
         <Link to="/requisitions" className="hover:underline">
-          Requisitions
+          Job Postings
         </Link>
         {position ? (
           <>

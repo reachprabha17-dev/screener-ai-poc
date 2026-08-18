@@ -27,7 +27,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('closing a requisition', () => {
+describe('closing a job posting', () => {
   it('confirms first, and says what is kept', async () => {
     // "Close" beside a list of candidates reads like a delete. A reviewer who
     // believes it destroys an adverse-action record will never press it.
@@ -35,7 +35,7 @@ describe('closing a requisition', () => {
     const user = userEvent.setup();
 
     renderWithProviders(<ClosePositionButton position={OPEN} />);
-    await user.click(screen.getByRole('button', { name: /close requisition/i }));
+    await user.click(screen.getByRole('button', { name: /close job posting/i }));
 
     expect(await screen.findByText(/Close ENG-114\?/)).toBeInTheDocument();
     expect(screen.getByText(/Nothing is deleted/)).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe('closing a requisition', () => {
     const user = userEvent.setup();
 
     renderWithProviders(<ClosePositionButton position={OPEN} />);
-    await user.click(screen.getByRole('button', { name: /close requisition/i }));
+    await user.click(screen.getByRole('button', { name: /close job posting/i }));
     await screen.findByText(/Close ENG-114\?/);
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -70,18 +70,18 @@ describe('closing a requisition', () => {
     const user = userEvent.setup();
 
     renderWithProviders(<ClosePositionButton position={OPEN} />);
-    await user.click(screen.getByRole('button', { name: /close requisition/i }));
+    await user.click(screen.getByRole('button', { name: /close job posting/i }));
     await user.click(await screen.findByRole('button', { name: 'Close it' }));
 
     expect(await screen.findByText(/may have been deleted/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close it' })).toBeInTheDocument();
   });
 
-  it('offers nothing on a requisition that is already closed', () => {
+  it('offers nothing on a job posting that is already closed', () => {
     renderWithProviders(
       <ClosePositionButton position={{ ...OPEN, status: 'closed', closed_at: '2026-05-02' }} />,
     );
 
-    expect(screen.queryByRole('button', { name: /close requisition/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /close job posting/i })).not.toBeInTheDocument();
   });
 });

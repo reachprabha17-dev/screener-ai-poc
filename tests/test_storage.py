@@ -9,12 +9,16 @@ in-memory fake would prove nothing about the triggers, the partial index, or WAL
 — which is where all the behaviour under test actually lives.
 """
 
+import os
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from yoyo.exceptions import LockTimeout
 
 from config.settings import settings
 from screener.models import (
@@ -177,9 +181,64 @@ def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> Non
         "0001.initial-schema",
         "0002.judge-digest-rename",
         "0003.v6-schema",
+        "0004.position-reference-unique-while-open",
     ]
     assert pending_migrations(path) == []
     require_current_schema(path)
+
+
+def _dead_pid() -> int:
+    """A pid guaranteed to belong to no running process."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])  # noqa: S603
+    child.wait(timeout=10)
+    return child.pid
+
+
+def test_a_lock_row_left_by_a_dead_process_is_cleared_automatically(tmp_path: Path) -> None:
+    """Regression. `yoyo` acquires its advisory lock with a retrying connection
+    but releases it with a single unretried `DELETE`
+    (`DatabaseBackend._delete_lock_row`), over a connection that — unlike ours —
+    carries no `busy_timeout`. Api and worker each call `require_current_schema`
+    independently at their own startup, so two of those landing within the same
+    instant is enough for one release to hit "database is locked" and leave the
+    row behind — reporting a current schema as permanently pending until a
+    human runs `yoyo break-lock` by hand.
+
+    Self-healed here: the row is cleared the next time anything touches
+    migrations, as long as the pid that left it is provably no longer running.
+    """
+    path = tmp_path / "fresh.db"
+    apply_migrations(path)
+
+    with connect(path) as connection:
+        connection.execute(
+            "INSERT INTO yoyo_lock (locked, ctime, pid) VALUES (1, datetime('now'), ?)",
+            (_dead_pid(),),
+        )
+
+    # Would raise LockTimeout without the self-heal.
+    assert pending_migrations(path) == []
+    require_current_schema(path)
+
+
+def test_a_lock_row_held_by_a_live_process_is_left_alone(tmp_path: Path) -> None:
+    """The other half: a lock genuinely in use must still block (12.1) — the
+    self-heal only clears rows nobody could possibly still be holding.
+    """
+    from screener.storage.connection import _backend  # noqa: PLC0415 — test-only reach-in
+
+    path = tmp_path / "fresh.db"
+    apply_migrations(path)
+
+    with connect(path) as connection:
+        connection.execute(
+            "INSERT INTO yoyo_lock (locked, ctime, pid) VALUES (1, datetime('now'), ?)",
+            (os.getpid(),),
+        )
+
+    with pytest.raises(LockTimeout):
+        with _backend(path).lock(timeout=0.5):
+            pass
 
 
 def test_every_migration_lives_where_yoyo_will_read_it() -> None:

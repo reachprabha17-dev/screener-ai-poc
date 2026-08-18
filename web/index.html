@@ -7,6 +7,22 @@
     <!-- Candidate names and verdicts render here. Nothing indexes or archives them. -->
     <meta name="robots" content="noindex, nofollow" />
     <title>Enterprise Talent Screener</title>
+    <script>
+      // Applies the remembered theme (or the OS setting) before the first paint,
+      // synchronously and before any stylesheet — `src/lib/theme.ts` re-applies
+      // the same logic on load and on every change, this only exists so the page
+      // never flashes the wrong theme first. Kept in lockstep with that file's
+      // storage key and fallback by hand, since it cannot import it.
+      (function () {
+        var stored = localStorage.getItem('screener-theme');
+        var dark =
+          stored === 'dark' ||
+          ((stored === null || stored === 'system') &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

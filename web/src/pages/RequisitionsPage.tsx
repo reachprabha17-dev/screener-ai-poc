@@ -19,13 +19,13 @@ export function RequisitionsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Requisitions</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Job Postings</h1>
         <Link
           to="/requisitions/new"
           className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:text-neutral-950 dark:hover:bg-blue-400"
         >
           <Plus className="size-4" aria-hidden />
-          New requisition
+          New job posting
         </Link>
       </div>
 
@@ -34,24 +34,24 @@ export function RequisitionsPage() {
           rows.length === 0 ? (
             <Card className="p-10 text-center">
               <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
-                No open requisitions yet.
+                No open job postings yet.
               </p>
               <Link
                 to="/requisitions/new"
                 className="inline-flex rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:text-neutral-950"
               >
-                Raise the first one
+                Post the first one
               </Link>
             </Card>
           ) : (
             <Card className="overflow-hidden">
-              <Table caption="Open requisitions">
+              <Table caption="Open job postings">
                 <thead>
                   <tr>
                     <Th>Reference</Th>
                     <Th>Title</Th>
-                    <Th>Raised by</Th>
-                    <Th>Raised</Th>
+                    <Th>Posted by</Th>
+                    <Th>Posted</Th>
                   </tr>
                 </thead>
                 <tbody>

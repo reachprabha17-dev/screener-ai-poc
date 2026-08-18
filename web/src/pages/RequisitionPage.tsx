@@ -42,7 +42,7 @@ export function RequisitionPage() {
     <div className="space-y-4">
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
         <Link to="/requisitions" className="hover:underline">
-          Requisitions
+          Job Postings
         </Link>{' '}
         / {position?.reference ?? positionId}
       </p>
@@ -51,13 +51,13 @@ export function RequisitionPage() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {position?.title ?? 'Requisition'}
+              {position?.title ?? 'Job Posting'}
             </h1>
             {position?.status === 'closed' ? <Badge tone="neutral">closed</Badge> : null}
           </div>
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
             <code>{position?.reference ?? positionId}</code>
-            {position ? ` · raised by ${position.created_by}` : null}
+            {position ? ` · posted by ${position.created_by}` : null}
           </p>
         </div>
         {position ? <ClosePositionButton position={position} /> : null}
@@ -66,8 +66,8 @@ export function RequisitionPage() {
       {position?.status === 'closed' ? (
         <Alert tone="info">
           <p>
-            This requisition is closed and no longer counts as an active job posting. Its runs below
-            are unaffected — screening in progress continues, and results stay reviewable.
+            This job posting is closed and no longer counts as active. Its runs below are unaffected
+            — screening in progress continues, and results stay reviewable.
           </p>
         </Alert>
       ) : null}
@@ -117,7 +117,7 @@ export function RequisitionPage() {
               approvedRubric === null ? (
                 <Alert tone="info">
                   <p>
-                    No approved rubric for this requisition yet. Approve one above before starting a
+                    No approved rubric for this job posting yet. Approve one above before starting a
                     run.
                   </p>
                 </Alert>

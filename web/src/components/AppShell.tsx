@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { cn } from '../ui/cn';
 import { HealthBadge } from './HealthBadge';
 import { IdentityMenu } from './IdentityMenu';
+import { ThemeToggle } from './ThemeToggle';
 
 /**
  * Three destinations, and nothing else in the chrome.
@@ -18,7 +19,7 @@ import { IdentityMenu } from './IdentityMenu';
  */
 const LINKS = [
   { to: '/', label: 'Overview', end: true },
-  { to: '/requisitions', label: 'Requisitions' },
+  { to: '/requisitions', label: 'Job Postings' },
   { to: '/runs', label: 'Runs' },
   { to: '/audit', label: 'Audit' },
 ];
@@ -59,6 +60,7 @@ export function AppShell() {
 
           <div className="ml-auto flex items-center gap-3">
             <HealthBadge />
+            <ThemeToggle />
             <IdentityMenu />
           </div>
         </div>

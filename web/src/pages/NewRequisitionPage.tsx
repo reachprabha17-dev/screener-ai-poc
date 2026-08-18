@@ -37,7 +37,7 @@ export function NewRequisitionPage() {
     // Checked on submit rather than by disabling the button, so the reason is
     // stated. A disabled control with no explanation is a dead end.
     if (!folder) {
-      setFolderProblem('Choose the resume folder this requisition screens.');
+      setFolderProblem('Choose the resume folder this job posting screens.');
       return;
     }
     setFolderProblem('');
@@ -59,17 +59,17 @@ export function NewRequisitionPage() {
     <div className="space-y-4">
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
         <Link to="/requisitions" className="hover:underline">
-          Requisitions
+          Job Postings
         </Link>{' '}
         / New
       </p>
-      <h1 className="text-2xl font-semibold tracking-tight">New requisition</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">New job posting</h1>
 
       <form onSubmit={(event) => void onSubmit(event)} className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
             title="1. Resume folder"
-            hint="Folders on the screener host's resume share. The folder name becomes the requisition's reference."
+            hint="Folders on the screener host's resume share. The folder name becomes the job posting's reference."
           />
           <CardBody>
             <FolderPicker value={folder} onChange={setFolder} />
@@ -114,7 +114,7 @@ export function NewRequisitionPage() {
 
             <div className="flex gap-2">
               <Button type="submit" variant="primary" busy={create.isPending}>
-                Create requisition
+                Create job posting
               </Button>
               <Link
                 to="/requisitions"

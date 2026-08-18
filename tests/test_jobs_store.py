@@ -631,6 +631,22 @@ def test_aborting_a_run_returns_in_flight_jobs_to_pending(uow: UnitOfWork) -> No
         assert jobs_store.progress(tx, "run1").pending == 3
 
 
+def test_count_unscreened_ignores_jobs_from_an_aborted_run(uow: UnitOfWork) -> None:
+    """Regression. Aborted runs keep their jobs so they stay resumable (16.4),
+    but nobody is ever going to resume most of them — an aborted test run over a
+    two-file folder used to read as "2 more waiting to be screened" forever, on
+    a dashboard where `runs_in_progress` correctly showed zero.
+    """
+    seed_run(uow, "run1")
+    add_jobs(uow, "run1", 2)
+    with uow as tx:
+        assert jobs_store.count_unscreened(tx) == 2
+        runs_store.set_status(tx, "run1", "aborted")
+
+    with uow as tx:
+        assert jobs_store.count_unscreened(tx) == 0
+
+
 def test_queue_depth_counts_only_work_served_earlier(uow: UnitOfWork) -> None:
     seed_run(uow, "first", position_id="p1", reference="A", created_at=minutes_ago(60))
     seed_run(uow, "second", position_id="p2", reference="B", created_at=minutes_ago(30))
@@ -741,6 +757,52 @@ def test_resuming_mid_verification_re_verifies_nothing(uow: UnitOfWork) -> None:
 
     assert len(claimed) == 1, "a verified candidate was claimed again"
     assert claimed[0].candidate_id != first
+
+
+def test_close_verified_jobs_retires_a_job_claim_next_will_never_offer_again(
+    uow: UnitOfWork,
+) -> None:
+    """A cache-hit candidate arrives already `verification_status='done'`.
+
+    `enqueue_verify_jobs` queues phase 2 for it anyway (it only checks
+    `scoreable`), and `claim_next` then refuses it forever (12.9) — a job stuck
+    `pending` with nothing that will ever claim it. Without a way to close it,
+    the phase never drains and the run never reaches `completed`.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    cached = save_candidate(uow, "run1", "sha-a")
+    with uow as tx:
+        tx.execute("UPDATE candidates SET verification_status = 'done' WHERE id = ?", (cached,))
+        jobs_store.enqueue_verify_jobs(tx, "run1")
+        assert jobs_store.no_pending(tx, "run1", "verify") is False
+
+        closed = jobs_store.close_verified_jobs(tx, "run1")
+        assert closed == 1
+        assert jobs_store.no_pending(tx, "run1", "verify") is True
+
+
+def test_close_verified_jobs_leaves_a_claimed_job_alone(uow: UnitOfWork) -> None:
+    """A job mid-flight is not orphaned — `complete_verify_job` will close it.
+
+    Force-closing a `claimed` row here would race the worker that owns it: if
+    that worker's `save_verification` lands between this check and its own
+    `complete_verify_job`, forcing status to `done` a second time is harmless,
+    but doing it *before* the worker has finished is not — the job would read
+    complete while a resume is still being judged against it.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    cached = save_candidate(uow, "run1", "sha-a")
+    with uow as tx:
+        jobs_store.enqueue_verify_jobs(tx, "run1")
+        job = jobs_store.claim_next(tx, WORKER, phase="verify")
+        assert job is not None
+        # The worker's `save_verification` landed; `complete_verify_job` has not.
+        tx.execute("UPDATE candidates SET verification_status = 'done' WHERE id = ?", (cached,))
+
+        assert jobs_store.close_verified_jobs(tx, "run1") == 0
+        assert jobs_store.no_pending(tx, "run1", "verify") is False
 
 
 def test_enqueueing_twice_adds_nothing(uow: UnitOfWork) -> None:

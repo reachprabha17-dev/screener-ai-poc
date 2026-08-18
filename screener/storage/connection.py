@@ -17,6 +17,7 @@ database holding candidate decisions is a data-integrity incident: the process
 refuses to start rather than writing rows that half-match the schema it expects.
 """
 
+import os
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -113,10 +114,55 @@ def temporary_connection(path: Path) -> Iterator[sqlite3.Connection]:
 # --- migrations --------------------------------------------------------------
 
 
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness check, the same technique `scripts/dev.sh` uses.
+
+    Can be wrong in the narrow window where the OS has reused `pid` for an
+    unrelated process since the lock row was written — accepted here for the
+    same reason it is accepted there: the alternative, an absolute expiry, is
+    wrong in the other direction on a clock that stepped (16.5's `reclaim_orphaned`
+    makes the same trade for job leases).
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just owned by someone else
+    return True
+
+
+def _clear_dead_migration_lock(path: Path) -> None:
+    """Self-heals the false "schema pending" report a crashed lock-holder leaves.
+
+    `yoyo`'s advisory lock (`yoyo_lock`, one row, holding the pid that owns it)
+    is acquired with a retrying connection but *released* with a single
+    unretried `DELETE` (`DatabaseBackend._delete_lock_row`). Every api and worker
+    start calls `require_current_schema` independently, each opening its own
+    connection to `yoyo_lock` with **no `busy_timeout`** — SQLite's default is
+    0, fail-instantly — so two of those checks landing within the same
+    millisecond is enough for one release to hit "database is locked" and
+    leave the row behind forever. Nothing was actually pending; the row is bad.
+
+    Checked with our own connection, which carries `_configure`'s busy_timeout
+    and so tolerates the exact contention `yoyo`'s does not. Only clears rows
+    whose pid is provably dead — a lock genuinely held by a live migration is
+    left alone.
+    """
+    try:
+        with temporary_connection(path) as connection:
+            for row in connection.execute("SELECT pid FROM yoyo_lock").fetchall():
+                if not _pid_alive(row["pid"]):
+                    connection.execute("DELETE FROM yoyo_lock WHERE pid = ?", (row["pid"],))
+    except sqlite3.OperationalError:
+        pass  # No `yoyo_lock` table yet — nothing has ever been migrated.
+
+
 def _backend(path: Path) -> Any:  # noqa: ANN401 — yoyo ships no type information
     from yoyo import get_backend  # type: ignore[import-untyped]
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    _clear_dead_migration_lock(path)
     return get_backend(f"sqlite:///{path.resolve()}")
 
 

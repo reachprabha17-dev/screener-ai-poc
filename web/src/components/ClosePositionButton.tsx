@@ -36,14 +36,14 @@ export function ClosePositionButton({ position }: { position: Position }) {
       trigger={
         <Button size="sm">
           <Archive className="size-3.5" aria-hidden />
-          Close requisition
+          Close job posting
         </Button>
       }
     >
       <div className="space-y-3">
         <p className="text-sm font-semibold">Close {position.reference}?</p>
         <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          It leaves the requisitions list and stops counting as an active job posting.
+          It leaves the job postings list and stops counting as active.
         </p>
         <p className="text-sm text-neutral-600 dark:text-neutral-300">
           Runs already screening for it <strong>carry on</strong>, and can be reviewed and signed

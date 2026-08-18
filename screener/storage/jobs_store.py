@@ -284,6 +284,39 @@ def complete(tx: Tx, job_id: int, file_sha256: str | None = None) -> None:
     )
 
 
+def close_verified_jobs(tx: Tx, run_id: str) -> int:
+    """Retire phase-2 jobs whose candidate is verified but the job never will be.
+
+    Two paths leave a verify job `pending` forever with no worker able to claim
+    it, because `claim_next` deliberately excludes any candidate whose
+    `verification_status` is no longer `'pending'` (12.9):
+
+    - A judge-phase cache hit re-stamps an already-verified candidate from an
+      earlier run onto this one (`worker_loop._cached`), and `enqueue_verify_jobs`
+      queues phase 2 for it anyway because it only checks `scoreable`.
+    - A worker crashes between `save_verification` and `complete_verify_job`
+      (`worker_loop._verify`): the candidate reads `done`, but `reclaim_orphaned`
+      only knows how to reopen the *job*, which then can never be reclaimed by
+      `claim_next` either.
+
+    Without this, `no_pending` never sees the phase drain, the run never leaves
+    `verify`, and it never reaches `completed` — stuck exactly where a reviewer
+    who already decided every candidate finds it.
+
+    `claimed` jobs are left alone: one may be mid-flight on this exact
+    candidate, and `complete_verify_job` will close it normally in a moment.
+    """
+    cursor = tx.execute(
+        "UPDATE jobs SET status = 'done', updated_at = ? "
+        "WHERE run_id = ? AND phase = 'verify' AND status = 'pending' "
+        "AND candidate_id IN ("
+        "  SELECT id FROM candidates WHERE run_id = ? AND verification_status != 'pending'"
+        ")",
+        (now().isoformat(), run_id, run_id),
+    )
+    return cursor.rowcount or 0
+
+
 def fail(tx: Tx, job_id: int, error: str, retryable: bool) -> None:
     """Return a job to the queue, or retire it.
 
@@ -403,15 +436,28 @@ def progress(tx: Tx, run_id: str, phase: str = "judge") -> RunProgress:
 
 
 def count_unscreened(tx: Tx) -> int:
-    """Snapshotted files not yet judged, across every run.
+    """Snapshotted files not yet judged, across every **active** run.
 
     Judge phase only, for the reason `progress` gives: one job per candidate is
     what anyone means by "files waiting". It is what makes the applications
     figure legible — a total that is not moving means something different when
     there is nothing left in the queue.
+
+    **Scoped to `_ACTIVE_RUN_STATUSES`, matching `claim_next` and
+    `queue_depth_ahead`.** An aborted run keeps its jobs — they are how it stays
+    resumable (16.4) — so without this an aborted test run over a two-file folder
+    reads as "2 more waiting to be screened" forever, on a dashboard nobody is
+    ever going to resume it from.
     """
+    placeholders = ",".join("?" for _ in _ACTIVE_RUN_STATUSES)
     row = tx.execute(
-        "SELECT COUNT(*) AS n FROM jobs WHERE phase = 'judge' AND status IN ('pending','claimed')"
+        f"""
+        SELECT COUNT(*) AS n FROM jobs j
+        JOIN runs r ON r.id = j.run_id
+        WHERE j.phase = 'judge' AND j.status IN ('pending','claimed')
+          AND r.status IN ({placeholders})
+        """,  # noqa: S608 — fragment is a module-local constant, never caller input
+        _ACTIVE_RUN_STATUSES,
     ).fetchone()
     return int(row["n"])
 

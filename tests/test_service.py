@@ -13,7 +13,6 @@ transaction semantics are the behaviour under test, and none of them exist in a
 fake.
 """
 
-import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -30,7 +29,7 @@ from screener.service import (
     ScreenerService,
     ServiceError,
 )
-from screener.storage import audit_store, results_store, runs_store
+from screener.storage import audit_store, jobs_store, results_store, runs_store
 from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
 
@@ -253,7 +252,7 @@ def test_a_failed_mutation_leaves_no_audit_row(
     """
     position = service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
 
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(ConflictError):
         service.create_position(reference="REQ-1", title="duplicate", jd_text=JD, actor=ACTOR)
 
     with uow_factory() as tx:
@@ -486,6 +485,35 @@ def test_a_run_with_verification_off_does_not_block_sign_off_forever(
     with uow_factory() as tx:
         statuses = {c.verification_status for c in results_store.list_for_run(tx, run_id)}
     assert statuses == {"skipped"}, statuses
+
+
+def test_a_run_of_only_cache_hits_reaches_done_instead_of_sticking_in_verify(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """Regression for a run stuck `running`/`verify` forever with nothing to claim.
+
+    A judge-phase cache hit re-stamps an already-verified candidate onto this
+    run (`worker_loop._cached`) with `verification_status='done'` already set.
+    `enqueue_verify_jobs` queues phase 2 for it anyway — it only checks
+    `scoreable` — and `claim_next` then refuses that job forever, because phase
+    2 deliberately skips any candidate that is not still `pending` (12.9). A run
+    where every scoreable candidate arrived this way used to advance to
+    `verify` and then never leave it: nothing pending drains, but nothing
+    claimable ever will either.
+    """
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        tx.execute("UPDATE jobs SET status = 'done' WHERE run_id = ?", (run_id,))
+        # Both scoreable candidates arrived pre-verified, as a cache hit would.
+        tx.execute(
+            "UPDATE candidates SET verification_status = 'done' WHERE run_id = ? AND scoreable = 1",
+            (run_id,),
+        )
+
+    assert service.advance_phase_if_complete(run_id) == "done"
+
+    with uow_factory() as tx:
+        assert jobs_store.no_pending(tx, run_id, "verify")
 
 
 def test_a_candidate_still_awaiting_verification_blocks_sign_off(
@@ -723,6 +751,41 @@ def test_create_position_unsafe_reference_raises_service_error(service: Screener
         service.create_position(reference="../../etc", title="t", jd_text=JD, actor=ACTOR)
     positions = service.list_positions()
     assert not any(p.reference == "../../etc" for p in positions)
+
+
+def test_create_position_with_an_open_taken_reference_is_a_clean_conflict_not_a_500(
+    service: ScreenerService,
+) -> None:
+    """Regression. Two requisitions open on the same resume folder would each
+    snapshot the other's candidates into their own run — the thing
+    `idx_positions_open_reference` (0004) exists to prevent.
+
+    Left unchecked, the second `create_position` reached the index as a raw
+    `sqlite3.IntegrityError`, which the API had no handler for and which
+    reached the browser as an unexplained 500. `ConflictError` is mapped to 409
+    with a message a reviewer can act on.
+    """
+    service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
+
+    with pytest.raises(ConflictError, match="REQ-1"):
+        service.create_position(reference="REQ-1", title="also open", jd_text=JD, actor=ACTOR)
+
+
+def test_closing_a_position_frees_its_reference_for_reuse(service: ScreenerService) -> None:
+    """A closed requisition must not permanently squat its folder (0004).
+
+    Recruiting against the same resume folder again later — the ordinary case
+    for a role that gets refilled — is a new requisition, not something the old
+    closed one has any way to reopen into.
+    """
+    first = service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
+    service.close_position(first.id, ACTOR)
+
+    second = service.create_position(reference="REQ-1", title="reopened", jd_text=JD, actor=ACTOR)
+
+    assert second.id != first.id
+    assert second.reference == "REQ-1"
+    assert second.status == "open"
 
 
 def test_list_resume_folders_reflects_configured_directory(

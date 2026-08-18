@@ -39,7 +39,19 @@ export function BulkDecisionForm({
     (candidate): candidate is CandidateSummary & { id: number } =>
       !candidate.review_required && candidate.id !== null,
   );
-  if (eligible.length === 0) return null;
+
+  if (candidates.length === 0) return null;
+
+  if (eligible.length === 0) {
+    // Not nothing: every candidate here needs review, so bulk has nothing to
+    // offer — but rendering nothing looks identical to the control being
+    // broken. Say why, and point at the way to actually decide them (11.11).
+    return (
+      <Alert tone="info">
+        <p>Every candidate in this group needs review — open each one to decide.</p>
+      </Alert>
+    );
+  }
 
   const onSubmit = handleSubmit((values) => {
     bulk.mutate(
