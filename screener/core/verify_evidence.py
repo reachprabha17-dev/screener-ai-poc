@@ -100,20 +100,43 @@ def align(evidence: str, document: str) -> tuple[float, int, int]:
     *alignment*: ordering is what distinguishes a quotation from a word cloud,
     which is why token-set overlap and Jaccard were rejected.
     """
-    ev = normalize_tokens(evidence)
-    doc = normalize_tokens(document)
-    if not ev:
-        return 0.0, 0, 0
+    return _QuoteAligner(document).align(evidence)
 
-    matcher = difflib.SequenceMatcher(None, ev, doc, autojunk=False)
-    min_block = settings.evidence_min_block_tokens
-    blocks = [b for b in matcher.get_matching_blocks() if b.size >= min_block]
 
-    matched_tokens = sum(b.size for b in blocks)
-    longest_span = max((b.size for b in blocks), default=0)
-    matched_chars = sum(len(t) for b in blocks for t in ev[b.a : b.a + b.size])
+class _QuoteAligner:
+    """Aligns many quotes against one fixed document.
 
-    return matched_tokens / len(ev), longest_span, matched_chars
+    Same arithmetic as ``align``, hoisted so the two per-*document* costs are
+    paid once per resume instead of once per criterion: ``normalize_tokens``
+    over the full text, and difflib's ``b2j`` index of it. With up to twelve
+    criteria that was up to twelve identical normalizations of the same resume,
+    measured at ~44% of ``verify_evidence``.
+
+    Comparing one fixed sequence against many others is the shape difflib
+    documents ``set_seq1`` for — the ``b`` index survives a change of ``a``,
+    which is why the two sequences have separate setters at all.
+    """
+
+    __slots__ = ("_matcher",)
+
+    def __init__(self, document: str) -> None:
+        self._matcher = difflib.SequenceMatcher(None, b=normalize_tokens(document), autojunk=False)
+
+    def align(self, evidence: str) -> tuple[float, int, int]:
+        """``(match_ratio, longest_span, matched_chars)`` — see ``align``."""
+        ev = normalize_tokens(evidence)
+        if not ev:
+            return 0.0, 0, 0
+
+        self._matcher.set_seq1(ev)
+        min_block = settings.evidence_min_block_tokens
+        blocks = [b for b in self._matcher.get_matching_blocks() if b.size >= min_block]
+
+        matched_tokens = sum(b.size for b in blocks)
+        longest_span = max((b.size for b in blocks), default=0)
+        matched_chars = sum(len(t) for b in blocks for t in ev[b.a : b.a + b.size])
+
+        return matched_tokens / len(ev), longest_span, matched_chars
 
 
 # Words that carry no topic. Deliberately short: this list is subtracted from the
@@ -242,6 +265,8 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
     review_required = False
 
     returned: dict[str, CriterionVerdict] = {c.id: c for c in output.criteria}
+    # Built once: every criterion below aligns against this same resume.
+    aligner = _QuoteAligner(sent_text)
 
     for criterion in rubric.criteria:
         cv = returned.get(criterion.id)
@@ -251,7 +276,7 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
             # here but must never look like a real judgment.
             continue
 
-        ratio, longest_span, matched_chars = align(cv.evidence, sent_text)
+        ratio, longest_span, matched_chars = aligner.align(cv.evidence)
         verified = _is_verified(ratio, longest_span, matched_chars)
         verdict = cv.verdict
 
