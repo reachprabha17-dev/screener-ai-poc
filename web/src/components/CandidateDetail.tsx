@@ -7,6 +7,7 @@ import { Alert } from '../ui/Alert';
 import { BandPill } from './BandPill';
 import { CriterionBlock } from './CriterionBlock';
 import { DecisionForm } from './DecisionForm';
+import { ParsedResumeText } from './ParsedResumeText';
 
 /**
  * One candidate, in the order the decision is actually made.
@@ -65,6 +66,8 @@ export function CandidateDetail({
           </a>
         )}
       </div>
+
+      <ParsedResumeText resumeText={candidate.resume_text} />
 
       {candidate.verification_status === 'pending' ? (
         // A half-verified result that renders like a finished one is how someone

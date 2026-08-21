@@ -83,7 +83,7 @@ def confirm_absence(
     # candidate is flagged — the alternative is Ollama truncating the resume
     # without an error and the model confirming an absence from a document it
     # was only shown half of.
-    budget = settings.verifier_num_ctx - settings.num_predict
+    budget = settings.verifier_num_ctx - settings.verifier_num_predict
     if client.count_prompt_tokens(settings.verifier_model, system, user) > budget:
         return AbsenceResult(checks=[], skipped_over_budget=True)
 

@@ -551,8 +551,17 @@ class ScreenerService:
         who discovers a 200-item queue only when the run completes has already
         lost 78 minutes, and 18.2 exists because that is when the control
         silently stops working.
+
+        **Read-only transaction.** The UI polls this every 5 s while a run is
+        live (`POLL_MS`, web/src/api/queries.ts) — the same window the worker is
+        claiming and completing jobs in. `uow_factory()`'s default `BEGIN
+        IMMEDIATE` takes the single write-reservation lock even for a pure read,
+        so a poll and a worker write compete for it; under any pile-up that is
+        enough to exceed `busy_timeout` and crash the worker with `database is
+        locked` — observed in practice. Nothing below writes, so `.read_only()`
+        is safe here.
         """
-        with self.uow_factory() as tx:
+        with self.uow_factory().read_only() as tx:
             run = runs_store.get(tx, run_id)
             if run is None:
                 raise NotFoundError(f"run {run_id}")
@@ -1034,6 +1043,13 @@ class ScreenerService:
 
             if run.phase == "verify" and jobs_store.no_pending(tx, run_id, "verify"):
                 runs_store.set_phase(tx, run_id, "done")
+                # Unscoreable candidates never get a verify job queued at all
+                # (`enqueue_verify_jobs` is `scoreable = 1` only), so `no_pending`
+                # on `verify` can be true while they still sit at the initial
+                # `verification_status='pending'`. Left alone that reads
+                # "not checked yet" forever, the same failure this call already
+                # prevents when verification never starts for the whole run.
+                results_store.mark_unverified_as_skipped(tx, run_id)
                 audit_store.append(tx, None, "advance_phase", "run", run_id, {"phase": "done"})
                 return "done"
 

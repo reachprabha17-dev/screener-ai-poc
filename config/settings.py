@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     # 10.6 B sends the whole resume plus every `none` criterion in one call, so
     # the verifier needs materially more room than the judge.
     verifier_num_ctx: int = 16384
+    # verify_support (10.6 A) batches a support judgment, a suggested verdict,
+    # and up to a 200-char rationale *per criterion in scope* into one call —
+    # strictly more per-item output than the judge's own verdict+evidence, over
+    # the same set of criteria. Sharing the judge's 1536-token budget truncates
+    # that response mid-JSON on any candidate with more than a handful of
+    # in-scope criteria (observed in practice: SCHEMA_INVALID, "output hit
+    # num_predict=1536", identical on every retry since the overflow is
+    # deterministic). Kept well under `verifier_num_ctx` so the prompt still has
+    # room for a full resume.
+    verifier_num_predict: int = 4096
     temperature: float = 0.0
     top_k: int = 1
     seed: int = 42

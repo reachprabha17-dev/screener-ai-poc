@@ -54,15 +54,32 @@ class UnitOfWork:
     partial work.
     """
 
-    def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+    def __init__(
+        self, connection: sqlite3.Connection | None = None, *, read_only: bool = False
+    ) -> None:
         self._connection = connection or get_connection()
         self._depth = 0
+        self._read_only = read_only
+
+    def read_only(self) -> "UnitOfWork":
+        """A sibling transaction on the same connection that never writes.
+
+        `BEGIN DEFERRED` instead of `IMMEDIATE`: it takes no lock up front, so a
+        poller using this cannot contend with the worker's writes for the single
+        write-reservation slot the way `run_status` did (12.2, service.py). Safe
+        only because nothing in the block may write — a write here would upgrade
+        to the write lock mid-transaction, which can itself raise `SQLITE_BUSY`
+        after work has already been done, exactly the failure `IMMEDIATE` exists
+        to avoid everywhere else. Call sites that write must keep using the
+        factory's default.
+        """
+        return UnitOfWork(self._connection, read_only=True)
 
     def __enter__(self) -> Tx:
         if self._depth:
             raise RuntimeError("UnitOfWork is not re-entrant; SQLite has no nested transactions")
         self._depth = 1
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._connection.execute("BEGIN DEFERRED" if self._read_only else "BEGIN IMMEDIATE")
         return Tx(self._connection)
 
     def __exit__(

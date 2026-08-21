@@ -516,6 +516,33 @@ def test_a_run_of_only_cache_hits_reaches_done_instead_of_sticking_in_verify(
         assert jobs_store.no_pending(tx, run_id, "verify")
 
 
+def test_an_unscoreable_candidate_is_not_left_reading_not_verified_forever(
+    service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """Regression. `enqueue_verify_jobs` only queues `scoreable = 1` candidates, so
+    an unscoreable one never gets a verify job at all. If the run's verify phase
+    still drains — because every *scoreable* candidate arrived pre-verified, e.g.
+    a cache hit — and the run reaches `done`, the unscoreable candidate must not
+    be left reading `verification_status='pending'` ("not checked yet") forever:
+    the same failure `mark_unverified_as_skipped` already prevents when
+    verification never starts for the whole run.
+    """
+    run_id = _seed_run_with_candidates(service, uow_factory)
+    with uow_factory() as tx:
+        tx.execute("UPDATE jobs SET status = 'done' WHERE run_id = ?", (run_id,))
+        tx.execute(
+            "UPDATE candidates SET verification_status = 'done' WHERE run_id = ? AND scoreable = 1",
+            (run_id,),
+        )
+
+    assert service.advance_phase_if_complete(run_id) == "done"
+
+    with uow_factory() as tx:
+        candidates = results_store.list_for_run(tx, run_id)
+    unscoreable = [c for c in candidates if not c.scoreable]
+    assert unscoreable and all(c.verification_status == "skipped" for c in unscoreable)
+
+
 def test_a_candidate_still_awaiting_verification_blocks_sign_off(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:

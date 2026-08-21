@@ -45,8 +45,19 @@ export function CriterionBlock({
             {context.after}
             {context.truncatedEnd ? '…' : ''}
           </blockquote>
-        ) : (
+        ) : criterion.evidence_status === 'not_applicable' ? (
+          // Verdict is `none` — nothing was quoted, so this is an honest "not
+          // found" answer, not a claim that needs to be told apart from a real one.
           <blockquote>{criterion.evidence}</blockquote>
+        ) : (
+          // No highlight means nothing in the document backs this up — never a
+          // `<blockquote>`, which would tell the reviewer it came from the resume
+          // when it did not. Seen in practice: the model echoed the criterion's
+          // own wording back as its "quote".
+          <Alert tone="warn" title="Not found in the resume">
+            <p>The model gave this as its evidence, but it does not appear in the document:</p>
+            <p className="italic">&ldquo;{criterion.evidence}&rdquo;</p>
+          </Alert>
         )
       ) : null}
 

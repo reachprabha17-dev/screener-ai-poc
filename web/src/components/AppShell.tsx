@@ -31,9 +31,6 @@ export function AppShell() {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-5 py-2.5">
           <Link to="/" className="leading-tight">
             <span className="font-semibold tracking-tight">Enterprise Talent Screener</span>
-            <span className="block text-xs text-neutral-500 dark:text-neutral-400">
-              On-premise · no data leaves this host
-            </span>
           </Link>
 
           <nav className="flex gap-1" aria-label="Sections">

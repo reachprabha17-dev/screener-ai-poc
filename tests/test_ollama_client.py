@@ -121,6 +121,39 @@ def test_decoding_options_are_fixed_by_settings() -> None:
     assert options["num_predict"] == settings.num_predict
 
 
+def test_the_verifier_gets_its_own_context_and_output_budget() -> None:
+    """`num_ctx` and `num_predict` are keyed on the model, not shared.
+
+    The verifier batches a judgment per in-scope criterion into one reply —
+    strictly more per-item output than the judge's own verdict+evidence over the
+    same set — so sharing the judge's budget truncates it on any candidate with
+    more than a handful of criteria in scope. Regression coverage for that fix.
+    """
+    llm, fake = client(chat_payload())
+    llm.chat_json(settings.verifier_model, "system", "resume", SCHEMA)
+
+    options = fake.calls[0]["options"]
+    assert options["num_ctx"] == settings.verifier_num_ctx
+    assert options["num_predict"] == settings.verifier_num_predict
+    assert settings.verifier_num_predict > settings.num_predict
+
+
+def test_truncation_is_measured_against_the_model_specific_budget() -> None:
+    """A verifier reply is only "truncated" once it hits *its* larger budget."""
+    llm, fake = client(
+        chat_payload(
+            '{"support_checks": [{"id": "C1"', output_tokens=settings.verifier_num_predict
+        )
+    )
+
+    with pytest.raises(SchemaInvalidError) as excinfo:
+        llm.chat_json(settings.verifier_model, "system", "resume", SCHEMA)
+
+    assert excinfo.value.truncated is True
+    assert f"num_predict={settings.verifier_num_predict}" in str(excinfo.value)
+    assert len(fake.calls) == 1
+
+
 def test_the_schema_is_sent_as_a_grammar_constraint() -> None:
     llm, fake = client(chat_payload())
     llm.chat_json(MODEL, "system", "resume", SCHEMA)

@@ -281,13 +281,24 @@ class OllamaClient:
         """
         return settings.verifier_num_ctx if model == settings.verifier_model else settings.num_ctx
 
+    @staticmethod
+    def _num_predict_for(model: str) -> int:
+        """The verifier batches a judgment per in-scope criterion into one reply.
+
+        Same reasoning as `_context_for`: a property of what the model is asked
+        to produce, not something a caller should be free to vary per call.
+        """
+        return (
+            settings.verifier_num_predict if model == settings.verifier_model else settings.num_predict
+        )
+
     def _options(self, model: str) -> dict[str, Any]:
         return {
             "temperature": settings.temperature,
             "top_k": settings.top_k,
             "seed": settings.seed,
             "num_ctx": self._context_for(model),
-            "num_predict": settings.num_predict,
+            "num_predict": self._num_predict_for(model),
         }
 
     def chat_json(
@@ -335,21 +346,22 @@ class OllamaClient:
             # 10.1: reconcile against the pre-check. Raised rather than logged
             # because a candidate judged on a truncated prompt must not be
             # scored — the model returns a confident verdict either way.
-            limit = self._context_for(model) - settings.num_predict
+            num_predict = self._num_predict_for(model)
+            limit = self._context_for(model) - num_predict
             if prompt_tokens > limit:
                 raise BudgetBugError(
                     f"prompt_eval_count {prompt_tokens} exceeds num_ctx - num_predict ({limit})"
                 )
 
             content = payload.get("message", {}).get("content", "")
-            truncated = output_tokens >= settings.num_predict
+            truncated = output_tokens >= num_predict
 
             try:
                 parsed = json.loads(content)
             except (json.JSONDecodeError, TypeError) as exc:
                 last = SchemaInvalidError(
                     f"unparseable model output ({exc})"
-                    + (f"; output hit num_predict={settings.num_predict}" if truncated else ""),
+                    + (f"; output hit num_predict={num_predict}" if truncated else ""),
                     truncated=truncated,
                     raw_output=content if isinstance(content, str) else repr(content),
                 )

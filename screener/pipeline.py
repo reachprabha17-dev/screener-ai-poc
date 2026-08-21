@@ -48,7 +48,7 @@ from screener.llm.confirm_absence import targets as absence_targets
 from screener.llm.judge_resume import PROMPT_NAME, build_user_message, judge_resume
 from screener.llm.verify_support import targets as support_targets
 from screener.llm.verify_support import verify_support
-from screener.models import Candidate, Flag, Rubric, ScoredCriterion, VerifyOutput, now
+from screener.models import Candidate, Flag, Rubric, ScoredCriterion, Span, VerifyOutput, now
 from screener.ports import LLMClient, ResumeParser
 
 _HASH_CHUNK = 1024 * 1024
@@ -105,6 +105,9 @@ def _unscoreable(
     acc: _Accumulator,
     summary: str = "",
     criteria: list[ScoredCriterion] | None = None,
+    text: str = "",
+    sent: str = "",
+    span_map: list[Span] | None = None,
 ) -> Candidate:
     """The single shape every failure returns.
 
@@ -117,11 +120,22 @@ def _unscoreable(
     `match_ratio` that explains why verification failed. Dropping them would make
     the review queue unactionable, which is the 18.2 failure where oversight
     collapses into rubber-stamping.
+
+    `text`/`sent`/`span_map` are carried whenever parsing succeeded before the
+    failure happened. A reviewer deciding an unscoreable candidate needs to read
+    the document the same as any other — omitting it here just because scoring
+    stopped is what silently blanked "Parsed resume text" for every escalated
+    candidate who wasn't rejected at intake, which was never the intent (15.3).
+    Callers earlier than parsing (8.2, 8.4) have nothing to pass and default to
+    empty, which is correct: there is no text to show.
     """
     return Candidate(
         run_id=run_id,
         filename=path.name,
         file_sha256=sha,
+        resume_text=text,
+        sent_text=sent,
+        redaction_map=span_map or [],
         score=None,
         band=None,
         must_haves_met=False,
@@ -223,6 +237,9 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
             sha=sha,
             acc=acc,
             summary=f"prompt {budget.prompt_tokens} tokens exceeds limit {budget.limit}",
+            text=text,
+            sent=sent,
+            span_map=span_map,
         )
 
     # --- 11 + 10.3 judge, with one corrective retry on a verdict-set mismatch
@@ -230,7 +247,14 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
     if judged.output is None or not judged.check.ok:
         acc.add(*judged.flags, review=True)
         return _unscoreable(
-            run_id=run_id, path=path, sha=sha, acc=acc, summary=judged.check.describe()
+            run_id=run_id,
+            path=path,
+            sha=sha,
+            acc=acc,
+            summary=judged.check.describe(),
+            text=text,
+            sent=sent,
+            span_map=span_map,
         )
 
     # --- 10.7 free-text screening, before anything is shown or scored -------
@@ -255,6 +279,9 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
             acc=acc,
             summary=screened.output.summary,
             criteria=verified.criteria,
+            text=text,
+            sent=sent,
+            span_map=span_map,
         )
 
     # --- 10.5 C negation, over the blocks stage B just aligned ---------------
