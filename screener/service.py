@@ -73,6 +73,9 @@ from screener.storage import (
     runs_store,
 )
 from screener.storage.connection import pending_migrations
+from screener.storage.connection import (
+    require_current_schema as _require_current_schema,
+)
 from screener.storage.uow import Tx, UnitOfWork, unit_of_work
 
 
@@ -96,6 +99,22 @@ class RubricNotApprovedError(ServiceError):
     lacks something the job never asked for — across the whole run, leaving no
     trace in any individual result.
     """
+
+
+def require_current_schema() -> None:
+    """Refuse to run against a schema the code does not match (12.1).
+
+    Raises rather than warns, and does not auto-migrate: applying a schema
+    change as a side effect of starting a process means it runs at an unplanned
+    time, on a database nobody has backed up, possibly from two processes at
+    once.
+
+    Exposed here so `create_app` can gate on it without reaching past the
+    service layer — 4 is `api/ → service.py, schemas.py, models.py`, and a
+    bootstrap check is not a reason to make an exception to that. Importing this
+    module constructs nothing, so the gate still runs before anything is wired.
+    """
+    _require_current_schema()
 
 
 def _mark_stale_claims(criteria: list[Criterion], previous: Rubric | None) -> list[Criterion]:

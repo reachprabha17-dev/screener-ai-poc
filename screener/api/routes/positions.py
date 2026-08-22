@@ -8,7 +8,13 @@ something slower than the sync version while looking more sophisticated (15.3).
 
 from fastapi import APIRouter, Depends
 
-from screener.api.deps import get_actor, get_service, to_folder, to_position, to_rubric
+from screener.api.deps import (
+    get_actor,
+    get_service,
+    to_folder,
+    to_position,
+    to_rubric,
+)
 from screener.models import Actor
 from screener.schemas import (
     CreatePositionRequest,

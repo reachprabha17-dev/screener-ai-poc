@@ -5,7 +5,12 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 
-from screener.api.deps import get_actor, get_service, to_adverse_action, to_candidate
+from screener.api.deps import (
+    get_actor,
+    get_service,
+    to_adverse_action,
+    to_candidate,
+)
 from screener.models import Actor
 from screener.schemas import (
     AUDITOR_ROLE,

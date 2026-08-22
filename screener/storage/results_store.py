@@ -113,7 +113,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
         "flags_json, position_id, rubric_hash, judge_digest, verifier_digest, "
         "prompt_hash, redaction_on, num_ctx, app_version, scored_at"
         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-        "?, ?, ?, ?, ?)",
+        "?, ?, ?, ?, ?) RETURNING id",
         (
             run_id,
             candidate.filename,
@@ -145,7 +145,11 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
             candidate.scored_at.isoformat(),
         ),
     )
-    candidate_id = int(cursor.lastrowid or 0)
+    # `RETURNING`, not `lastrowid`: the latter is a DBAPI-level SQLite
+    # affordance with no Postgres equivalent. Both SQLite 3.35+ and Postgres
+    # support this form.
+    inserted = cursor.fetchone()
+    candidate_id = int(inserted["id"]) if inserted else 0
 
     if candidate.criteria:
         tx.executemany(

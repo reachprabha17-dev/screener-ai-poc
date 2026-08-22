@@ -31,7 +31,7 @@ from screener.models import Candidate, Flag, ScoredCriterion
 from screener.ports import CacheKey
 from screener.service import ScreenerService
 from screener.storage import results_store, runs_store
-from screener.storage.connection import apply_migrations, close_connection
+from screener.storage.connection import apply_migrations, dispose_engine
 from screener.storage.uow import UnitOfWork, unit_of_work
 
 JD = "Senior Backend Engineer. Required: 5+ years backend. Kubernetes essential."
@@ -95,7 +95,7 @@ def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
     test a topology the deployment never runs.
     """
     yield unit_of_work
-    close_connection()
+    dispose_engine()
 
 
 @pytest.fixture

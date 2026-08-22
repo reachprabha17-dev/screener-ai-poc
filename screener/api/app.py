@@ -37,8 +37,8 @@ from screener.service import (
     NotFoundError,
     RubricNotApprovedError,
     ServiceError,
+    require_current_schema,
 )
-from screener.storage.connection import require_current_schema
 
 
 def _install_error_handlers(app: FastAPI) -> None:

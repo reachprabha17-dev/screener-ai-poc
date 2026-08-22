@@ -10,7 +10,6 @@ in-memory fake would prove nothing about the triggers, the partial index, or WAL
 """
 
 import os
-import sqlite3
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -18,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from yoyo.exceptions import LockTimeout
 
 from config.settings import settings
@@ -213,10 +213,11 @@ def test_a_lock_row_left_by_a_dead_process_is_cleared_automatically(tmp_path: Pa
     apply_migrations(path)
 
     with connect(path) as connection:
-        connection.execute(
+        connection.exec_driver_sql(
             "INSERT INTO yoyo_lock (locked, ctime, pid) VALUES (1, datetime('now'), ?)",
             (_dead_pid(),),
         )
+        connection.commit()
 
     # Would raise LockTimeout without the self-heal.
     assert pending_migrations(path) == []
@@ -233,10 +234,11 @@ def test_a_lock_row_held_by_a_live_process_is_left_alone(tmp_path: Path) -> None
     apply_migrations(path)
 
     with connect(path) as connection:
-        connection.execute(
+        connection.exec_driver_sql(
             "INSERT INTO yoyo_lock (locked, ctime, pid) VALUES (1, datetime('now'), ?)",
             (os.getpid(),),
         )
+        connection.commit()
 
     with pytest.raises(LockTimeout):
         with _backend(path).lock(timeout=0.5):
@@ -278,15 +280,15 @@ def test_pragmas_are_set_per_connection(db: Path) -> None:
     """
     connection = connect(db)
     try:
-        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.exec_driver_sql("PRAGMA journal_mode").fetchone()[0] == "wal"
     finally:
         connection.close()
 
 
 def test_foreign_keys_are_actually_enforced(uow: UnitOfWork) -> None:
     seed(uow)
-    with pytest.raises(sqlite3.IntegrityError), uow as tx:
+    with pytest.raises(IntegrityError), uow as tx:
         runs_store.create(
             tx,
             run_id="bad",
@@ -477,7 +479,7 @@ def test_audit_rows_cannot_be_updated(uow: UnitOfWork) -> None:
     with uow as tx:
         audit_store.append_for(tx, ACTOR, "override", "candidate", "1")
 
-    with pytest.raises(sqlite3.IntegrityError, match="append-only"), uow as tx:
+    with pytest.raises(IntegrityError, match="append-only"), uow as tx:
         tx.execute("UPDATE audit_log SET action = 'nothing happened'")
 
 
@@ -486,7 +488,7 @@ def test_audit_rows_cannot_be_deleted(uow: UnitOfWork) -> None:
     with uow as tx:
         audit_store.append_for(tx, ACTOR, "purge", "candidate", "1")
 
-    with pytest.raises(sqlite3.IntegrityError, match="append-only"), uow as tx:
+    with pytest.raises(IntegrityError, match="append-only"), uow as tx:
         tx.execute("DELETE FROM audit_log")
 
 
@@ -556,7 +558,7 @@ def test_a_failure_rolls_back_both_writes(uow: UnitOfWork) -> None:
     with uow as tx:
         candidate_id = results_store.save(tx, "run1", candidate(), key())
 
-    with pytest.raises(sqlite3.IntegrityError), uow as tx:
+    with pytest.raises(IntegrityError), uow as tx:
         tx.execute(
             "INSERT INTO overrides (candidate_id, actor_id, old_score, old_band, "
             "new_decision, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -651,7 +653,7 @@ def test_reordering_criteria_changes_the_hash() -> None:
 
 def test_rubric_versions_are_unique_per_position(uow: UnitOfWork) -> None:
     seed(uow)
-    with pytest.raises(sqlite3.IntegrityError), uow as tx:
+    with pytest.raises(IntegrityError), uow as tx:
         rubrics_store.create(tx, rubric(version=1, rubric_id="r2"))
 
 
@@ -699,10 +701,12 @@ def test_started_at_survives_a_resume(uow: UnitOfWork) -> None:
     make_run(uow)
     with uow as tx:
         runs_store.set_status(tx, "run1", "running")
-        first = tx.execute("SELECT started_at FROM runs WHERE id = 'run1'").fetchone()[0]
+        first = tx.execute("SELECT started_at FROM runs WHERE id = 'run1'").fetchone()["started_at"]
         runs_store.set_status(tx, "run1", "aborted")
         runs_store.set_status(tx, "run1", "running")
-        second = tx.execute("SELECT started_at FROM runs WHERE id = 'run1'").fetchone()[0]
+        second = tx.execute("SELECT started_at FROM runs WHERE id = 'run1'").fetchone()[
+            "started_at"
+        ]
 
     assert first == second
 

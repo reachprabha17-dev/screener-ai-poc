@@ -149,9 +149,7 @@ def test_the_verifier_gets_its_own_context_and_output_budget() -> None:
 def test_truncation_is_measured_against_the_model_specific_budget() -> None:
     """A verifier reply is only "truncated" once it hits *its* larger budget."""
     llm, fake = client(
-        chat_payload(
-            '{"support_checks": [{"id": "C1"', output_tokens=settings.verifier_num_predict
-        )
+        chat_payload('{"support_checks": [{"id": "C1"', output_tokens=settings.verifier_num_predict)
     )
 
     with pytest.raises(SchemaInvalidError) as excinfo:

@@ -15,6 +15,7 @@ dependencies = [
   "defusedxml",          # XXE-safe XML (spec 8.3)
   "structlog",           # spec 17
   "yoyo-migrations",     # spec 12.1
+  "sqlalchemy>=2.0",     # engine + connection pool (spec 12.3)
 ]
 
 [project.optional-dependencies]

@@ -117,9 +117,11 @@ def search(
 
     where = " AND ".join(clauses) if clauses else "1=1"
 
-    query_count = f"SELECT COUNT(*) FROM audit_log WHERE {where}"  # noqa: S608
+    # Named rather than positional: rows arrive as mappings, and `COUNT(*)`
+    # without an alias has no portable column name to look up.
+    query_count = f"SELECT COUNT(*) AS total FROM audit_log WHERE {where}"  # noqa: S608
     total_row = tx.execute(query_count, tuple(params)).fetchone()
-    total = total_row[0] if total_row else 0
+    total = total_row["total"] if total_row else 0
 
     query = f"SELECT ts, actor_id, action, entity, entity_id, detail_json FROM audit_log WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?"  # noqa: S608, E501
     rows = tx.execute(query, tuple([*params, limit, offset])).fetchall()

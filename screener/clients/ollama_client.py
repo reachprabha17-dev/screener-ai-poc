@@ -289,7 +289,9 @@ class OllamaClient:
         to produce, not something a caller should be free to vary per call.
         """
         return (
-            settings.verifier_num_predict if model == settings.verifier_model else settings.num_predict
+            settings.verifier_num_predict
+            if model == settings.verifier_model
+            else settings.num_predict
         )
 
     def _options(self, model: str) -> dict[str, Any]:

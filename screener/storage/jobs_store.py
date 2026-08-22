@@ -98,7 +98,7 @@ def snapshot_folder(tx: Tx, run_id: str, folder: Path) -> int:
     the result reproducible. Files added later need an explicit rescan — nothing
     is ever silently added mid-run.
 
-    `INSERT OR IGNORE` against `UNIQUE(run_id, phase, file_path)` makes this
+    `ON CONFLICT DO NOTHING` against `UNIQUE(run_id, phase, file_path)` makes this
     idempotent, so rescan is the same call and inserts only what is new. The
     phase is part of that key: without it, the verify job for a resume collides
     with the judge job that produced the candidate, and phase 2 silently
@@ -109,8 +109,9 @@ def snapshot_folder(tx: Tx, run_id: str, folder: Path) -> int:
 
     for path in _eligible_files(folder):
         cursor = tx.execute(
-            "INSERT OR IGNORE INTO jobs (run_id, phase, file_path, status, created_at, "
-            "updated_at) VALUES (?, 'judge', ?, 'pending', ?, ?)",
+            "INSERT INTO jobs (run_id, phase, file_path, status, created_at, "
+            "updated_at) VALUES (?, 'judge', ?, 'pending', ?, ?) "
+            "ON CONFLICT DO NOTHING",
             (run_id, str(path), timestamp, timestamp),
         )
         inserted += cursor.rowcount or 0
@@ -131,10 +132,11 @@ def enqueue_verify_jobs(tx: Tx, run_id: str) -> int:
     """
     timestamp = now().isoformat()
     cursor = tx.execute(
-        "INSERT OR IGNORE INTO jobs (run_id, phase, file_path, file_sha256, candidate_id, "
+        "INSERT INTO jobs (run_id, phase, file_path, file_sha256, candidate_id, "
         "status, created_at, updated_at) "
         "SELECT c.run_id, 'verify', c.filename, c.file_sha256, c.id, 'pending', ?, ? "
-        "FROM candidates c WHERE c.run_id = ? AND c.scoreable = 1",
+        "FROM candidates c WHERE c.run_id = ? AND c.scoreable = 1 "
+        "ON CONFLICT DO NOTHING",
         (timestamp, timestamp, run_id),
     )
     return cursor.rowcount or 0

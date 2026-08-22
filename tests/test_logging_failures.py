@@ -136,12 +136,13 @@ def everything_in(db: Path) -> str:
     connection = connect(db)
     try:
         tables = [
-            r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            r[0]
+            for r in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
         ]
         return "".join(
             str(value)
             for table in tables
-            for row in connection.execute(f"SELECT * FROM {table}")  # noqa: S608 — table names from sqlite_master
+            for row in connection.exec_driver_sql(f"SELECT * FROM {table}")  # noqa: S608 — table names from sqlite_master
             for value in row
             if value is not None
         )

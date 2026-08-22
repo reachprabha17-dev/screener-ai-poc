@@ -25,8 +25,8 @@ def seed_user(
     part that is expensive to retrofit.
     """
     tx.execute(
-        "INSERT OR IGNORE INTO users (id, display_name, roles_json, active, created_at) "
-        "VALUES (?, ?, ?, 1, ?)",
+        "INSERT INTO users (id, display_name, roles_json, active, created_at) "
+        "VALUES (?, ?, ?, 1, ?) ON CONFLICT DO NOTHING",
         (actor_id, display_name, json.dumps(list(roles)), now().isoformat()),
     )
 

@@ -24,7 +24,7 @@ from typer.testing import CliRunner
 from config.settings import settings
 from screener.cli import app
 from screener.storage import audit_store, results_store
-from screener.storage.connection import close_connection
+from screener.storage.connection import dispose_engine
 from screener.storage.uow import unit_of_work
 
 CLI_SOURCE = Path(__file__).resolve().parent.parent / "screener" / "cli.py"
@@ -119,9 +119,9 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]
     monkeypatch.setattr("screener.clients.ollama_client.OllamaClient", lambda *a, **k: FakeLLM())
     monkeypatch.setattr("screener.intake.sandbox.SandboxedParser", lambda *a, **k: FakeParser())
 
-    close_connection()
+    dispose_engine()
     yield tmp_path
-    close_connection()
+    dispose_engine()
 
 
 @pytest.fixture

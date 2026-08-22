@@ -231,8 +231,30 @@ class Settings(BaseSettings):
     # not cosmetic: migrations live one directory per backend because yoyo reads
     # a single directory without recursing, so the wrong value here means every
     # migration is silently skipped rather than failing loudly.
-    db_backend: Literal["sqlite", "mssql"] = "sqlite"
+    db_backend: Literal["sqlite", "postgres"] = "sqlite"
     db_path: str = "data/screener.db"
+    # Used when `db_backend` is not sqlite. SQLAlchemy URL, e.g.
+    # `postgresql+psycopg://user:pass@host:5432/screener`. Kept out of the
+    # repository: put it in `.env` as SCREENER_DB_URL, because it carries a
+    # password and `db_path` deliberately does not.
+    db_url: str = ""
+    # Connection pool, per process (12.3). `pool_size` is the number kept open;
+    # `max_overflow` how many extra may be opened under burst before callers
+    # queue. The API serves sync handlers from a threadpool, so the ceiling that
+    # matters is threads-in-flight, not requests/second.
+    #
+    # SQLite ignores the size in practice — it is one local file, and the real
+    # limit is its single writer — but the pool still bounds descriptors, which
+    # is what a hand-rolled thread-local cache failed to do (it leaked one
+    # connection per thread, forever, until the worker died `database is
+    # locked`).
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    # Seconds to wait for a free connection before failing rather than hanging.
+    db_pool_timeout: int = 30
+    # Recycle before a server-side idle timeout closes a connection underneath
+    # us. Irrelevant to SQLite; it is Postgres/pgbouncer that drops idle ones.
+    db_pool_recycle_s: int = 1800
     # Override per deployment via RESUMES_DIR in `.env` — point it at the mount
     # when the share is available. **Prefer an absolute path there:** a relative
     # one resolves against each process's working directory, so `./resumes`

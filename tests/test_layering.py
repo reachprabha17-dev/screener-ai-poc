@@ -118,18 +118,24 @@ def test_the_api_reaches_storage_only_through_the_service() -> None:
     )
 
 
-def test_the_only_storage_import_in_the_api_is_the_startup_gate() -> None:
-    """One documented exception, and it is not request handling.
+def test_no_api_module_imports_storage_at_all() -> None:
+    """4's `api/ → service.py, schemas.py, models.py`, with no exceptions.
 
-    `create_app` calls `require_current_schema()` before serving anything: the
-    process must refuse to start against a stale schema, and a schema/code
-    mismatch on candidate decisions is an integrity incident, not a warning
-    (12.1). That is a **bootstrap** concern, the same category as
-    `cli.py migrate` — it necessarily precedes the service layer rather than
-    routing around it.
+    There used to be one: `app.py` imported `require_current_schema` directly,
+    on the reasoning that a startup gate is a bootstrap concern that precedes
+    the service layer. That did not survive examination — `service.py` already
+    imports `storage.connection`, and importing a module constructs nothing, so
+    the gate runs just as early behind `service.require_current_schema`. The
+    exception bought nothing and cost the rule its absoluteness.
 
-    Pinned narrowly so the exception cannot widen: `connection` only, `app.py`
-    only, and the routes are held to the strict rule above.
+    An absolute rule is worth more than a narrow one here. A pinned exception
+    invites the next one to argue it is the same category — which is exactly the
+    argument that was made for putting the per-request connection release in
+    `deps.py`, and it was wrong too: that went behind
+    `service.release_connection` instead (`screener/api/routing.py`).
+
+    So: nothing under `screener/api` imports `screener.storage`. If this test
+    fails, the fix is a delegate on `service.py`, not an entry in a list here.
     """
     storage = {
         path: sorted(m for m in modules if m.startswith("screener.storage"))
@@ -137,7 +143,7 @@ def test_the_only_storage_import_in_the_api_is_the_startup_gate() -> None:
     }
     offenders = {path: modules for path, modules in storage.items() if modules}
 
-    assert offenders == {Path("screener/api/app.py"): ["screener.storage.connection"]}
+    assert offenders == {}
 
 
 # --- decision #11: the UI is an HTTP client and nothing else -----------------
