@@ -1,6 +1,6 @@
 import type { CriterionView } from '../api/types';
 import { quoteInContext } from '../lib/highlight';
-import { EVIDENCE_BADGE, VERDICT_LABEL } from '../lib/labels';
+import { EVIDENCE_BADGE, EVIDENCE_BADGE_WEAK_MATCH, VERDICT_LABEL } from '../lib/labels';
 import { Alert } from '../ui/Alert';
 import { Badge } from '../ui/Badge';
 
@@ -16,7 +16,13 @@ export function CriterionBlock({
   resumeText: string;
 }) {
   const context = quoteInContext(resumeText, criterion.highlights);
-  const badge = EVIDENCE_BADGE[criterion.evidence_status];
+  // A highlight alongside `unverified` means a real fragment was found in the
+  // document but didn't clear the verification bar — not that nothing was
+  // found at all. The two read very differently to a reviewer.
+  const badge =
+    criterion.evidence_status === 'unverified' && context
+      ? EVIDENCE_BADGE_WEAK_MATCH
+      : EVIDENCE_BADGE[criterion.evidence_status];
 
   return (
     <article className="space-y-2 border-t border-neutral-100 py-3 first:border-t-0 dark:border-neutral-800">

@@ -92,6 +92,16 @@ export const EVIDENCE_BADGE: Record<EvidenceStatus, string> = {
   not_applicable: '',
 };
 
+/**
+ * `unverified` covers two different situations the single badge above cannot
+ * tell apart on its own: nothing in the document resembles the quote, versus
+ * a real fragment was found but was too short or weak to clear the
+ * verification bar. `CriterionBlock` already knows which one it is — it has
+ * to, to decide whether there is a highlight to render — so it picks this
+ * wording instead whenever a highlight exists alongside `unverified`.
+ */
+export const EVIDENCE_BADGE_WEAK_MATCH = 'found, but too weak to confirm';
+
 export const VERIFICATION_BADGE: Record<VerificationStatus, string> = {
   done: 'verified',
   pending: 'provisional',

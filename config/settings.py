@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     # a fully independent second opinion either. Revisit if `verify_scope` is
     # ever turned back on: that check is the one this tradeoff actually costs.
     ollama_host: str = "http://localhost:11434"
-    judge_model: str = "gemma4:12b"
-    verifier_model: str = "gemma4:12b"
+    judge_model: str = "bvassie/gemma4:12b-it-qat-mtp"
+    verifier_model: str = "bvassie/gemma4:12b-it-qat-mtp"
     judge_digest_pin: str | None = None
     verifier_digest_pin: str | None = None
     num_ctx: int = 8192

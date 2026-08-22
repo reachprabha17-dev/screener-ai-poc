@@ -61,6 +61,27 @@ describe('criterion block evidence rendering', () => {
     );
   });
 
+  it('badges a short-but-real quote as weak, not as "not found"', () => {
+    // "State of Qatar" — a real fragment the fuzzy match found and highlighted,
+    // just below the character floor that decides `verified`. Rendered as a
+    // genuine blockquote (it is one), so the badge must not claim nothing was
+    // found — that reads as the opposite of what happened.
+    render(
+      <CriterionBlock
+        criterion={criterion({
+          evidence: 'State of Qatar',
+          evidence_status: 'unverified',
+          highlights: [{ start: 0, end: 14 }],
+        })}
+        resumeText={'State of Qatar. Experienced Python engineer.'}
+      />,
+    );
+
+    expect(document.querySelector('blockquote')).not.toBeNull();
+    expect(screen.getByText(/too weak to confirm/i)).toBeInTheDocument();
+    expect(screen.queryByText(/not found in the resume/i)).not.toBeInTheDocument();
+  });
+
   it('renders an honest "not found" answer plainly, not as a warning', () => {
     render(
       <CriterionBlock
