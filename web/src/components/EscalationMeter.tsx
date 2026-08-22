@@ -13,9 +13,13 @@ import { Badge } from '../ui/Badge';
  */
 export function EscalationMeter({
   rate,
+  count,
+  total,
   breakdown,
 }: {
   rate: number;
+  count?: number;
+  total?: number;
   breakdown?: Record<string, number>;
 }) {
   const over = rate > ESCALATION_BUDGET;
@@ -28,7 +32,14 @@ export function EscalationMeter({
           <p className="text-xs font-semibold tracking-wide text-neutral-500 uppercase dark:text-neutral-400">
             Needing review
           </p>
-          <p className="text-2xl font-semibold">{percent(rate)}</p>
+          <p className="text-2xl font-semibold">
+            {percent(rate)}
+            {count !== undefined && total !== undefined ? (
+              <span className="ml-1.5 text-sm font-normal text-neutral-500 dark:text-neutral-400">
+                ({count} of {total})
+              </span>
+            ) : null}
+          </p>
         </div>
         <Badge tone={over ? 'warn' : 'ok'}>
           {delta >= 0 ? '+' : ''}

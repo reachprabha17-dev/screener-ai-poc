@@ -1,13 +1,18 @@
 import { ExternalLink } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useApi } from '../api/queries';
-import type { CandidateSummary } from '../api/types';
+import type { CandidateSummary, Verdict } from '../api/types';
 import { escalationLabel, flagHelp, VERIFICATION_BADGE } from '../lib/labels';
 import { Alert } from '../ui/Alert';
 import { BandPill } from './BandPill';
 import { CriterionBlock } from './CriterionBlock';
 import { DecisionForm } from './DecisionForm';
 import { ParsedResumeText } from './ParsedResumeText';
+
+// Met, then partial, then not found — the order a reviewer actually wants to
+// scan in, not the rubric's own C1..Cn order. Stable within a verdict, so
+// criteria sharing one keep the rubric's order among themselves.
+const VERDICT_ORDER: Record<Verdict, number> = { strong: 0, partial: 1, none: 2 };
 
 /**
  * One candidate, in the order the decision is actually made.
@@ -126,7 +131,9 @@ export function CandidateDetail({
           resume faithfully — it cannot tell a true claim from a false one, and it is not fraud
           detection.
         </p>
-        {candidate.criteria.map((criterion) => (
+        {[...candidate.criteria]
+          .sort((a, b) => VERDICT_ORDER[a.verdict] - VERDICT_ORDER[b.verdict])
+          .map((criterion) => (
           <CriterionBlock
             key={criterion.id}
             criterion={criterion}

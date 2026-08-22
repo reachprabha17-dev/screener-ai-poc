@@ -113,6 +113,19 @@ describe('review screen', () => {
     expect(screen.getByText(/negation suspected/)).toBeInTheDocument();
   });
 
+  it('shows the raw count behind the escalation rate, not only the percentage', async () => {
+    mockCandidates({
+      meets_must_haves: [candidate({ file_sha256: 'a' }), candidate({ file_sha256: 'b' })],
+      needs_review: [candidate({ file_sha256: 'c' }), candidate({ file_sha256: 'd' })],
+      escalation_rate: 0.5,
+    });
+
+    renderReview();
+
+    expect(await screen.findByText('50%')).toBeInTheDocument();
+    expect(screen.getByText('(2 of 4)')).toBeInTheDocument();
+  });
+
   it('warns when the escalation rate is over the design budget', async () => {
     mockCandidates({ meets_must_haves: [candidate()], escalation_rate: 0.2 });
 

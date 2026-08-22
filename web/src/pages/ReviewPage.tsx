@@ -87,6 +87,8 @@ function Review({ runId, result }: { runId: string; result: RankedCandidates }) 
         <CardBody>
           <EscalationMeter
             rate={result.escalation_rate}
+            count={result.needs_review.length}
+            total={everyone.length}
             breakdown={countEscalations(result.needs_review.map((c) => c.escalation_reasons))}
           />
         </CardBody>
