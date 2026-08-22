@@ -121,7 +121,29 @@ start_ui() {
   SCREENER_UI_PORT="$UI_PORT" \
     nohup npm --prefix "$WEB" run dev \
       >>"$(log_file ui)" 2>&1 &
-  echo $! >"$(pid_file ui)"
+  local npm_pid=$!
+  # Not `echo $! >pid_file` — npm hands off to vite and then exits itself,
+  # often within a second (confirmed: vite was already up and serving here
+  # while npm's own pid was already gone) — leaving the pid file pointing at
+  # a dead process while vite (npm's child, still holding the port) runs on
+  # untracked. The symptom: `status` reports "stopped" for a server that is
+  # answering fine, and the next `start` sees the port occupied by a pid it
+  # does not recognise and refuses to run at all.
+  #
+  # So npm's own liveness is not a usable signal here — it is expected to die
+  # right after a successful start, not only after a failed one. Wait for the
+  # port itself, on a timeout, then track whoever actually ends up listening
+  # on it rather than npm's wrapper.
+  local waited=0
+  until port_busy "$UI_PORT"; do
+    (( waited < 100 )) || die "ui did not open port $UI_PORT in 20s — see $(log_file ui)"
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  local real_pid
+  real_pid="$(ss -tlnp 2>/dev/null | awk -v port=":$UI_PORT" '$4 ~ port"$"' \
+    | grep -oP 'pid=\K[0-9]+' | head -1)"
+  echo "${real_pid:-$npm_pid}" >"$(pid_file ui)"
   say "ui      started → http://127.0.0.1:${UI_PORT}/ui/  (hot reload)"
 }
 

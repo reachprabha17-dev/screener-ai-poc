@@ -76,6 +76,12 @@ class Alignment:
     longest_span: int
     matched_chars: int
     blocks: list[MatchBlock] = field(default_factory=list)
+    # The quote's own token count. `_is_verified` needs it to cap the
+    # `longest_span` requirement the same way `align` already caps the block
+    # filter — otherwise a quote shorter than `evidence_min_block_tokens`
+    # passes `align` but is rejected here regardless, by the same threshold
+    # `align` was just capped to not apply to it.
+    evidence_tokens: int = 0
 
 
 def tokenize_with_offsets(text: str) -> tuple[list[str], list[tuple[int, int]]]:
@@ -146,6 +152,19 @@ def align(evidence: str, document: str) -> Alignment:
     resume — fabrication passing verification by a different route than the
     single-longest-match hole it replaced.
 
+    **Capped at the evidence's own length.** A quote genuinely shorter than
+    ``evidence_min_block_tokens`` — a single skills-list item like "Technical
+    Documentation", two tokens — could otherwise never verify at all: even a
+    perfect, 100%-real match tops out at a block the size of the whole quote,
+    which is smaller than the filter demands. Observed in practice: a verbatim
+    two-word quote scoring `ratio=0.0` against a resume that contained it
+    exactly. Capping does not reopen the confetti hole above — that attack
+    needs *many* scattered short blocks to sum toward 1.0 across a long
+    fabricated quote, and a quote too short to need capping is too short to
+    stage it. ``evidence_match_min_chars`` is the independent backstop either
+    way: a short match still has to clear a real character count, not just a
+    token count.
+
     Blocks are monotonically increasing in both sequences, so this stays an
     *alignment*: ordering is what distinguishes a quotation from a word cloud,
     which is why token-set overlap and Jaccard were rejected.
@@ -156,7 +175,7 @@ def align(evidence: str, document: str) -> Alignment:
         return Alignment(ratio=0.0, longest_span=0, matched_chars=0)
 
     matcher = difflib.SequenceMatcher(None, ev, doc, autojunk=False)
-    min_block = settings.evidence_min_block_tokens
+    min_block = min(settings.evidence_min_block_tokens, len(ev))
     blocks = [b for b in matcher.get_matching_blocks() if b.size >= min_block]
 
     matched_tokens = sum(b.size for b in blocks)
@@ -167,6 +186,7 @@ def align(evidence: str, document: str) -> Alignment:
         ratio=matched_tokens / len(ev),
         longest_span=longest_span,
         matched_chars=matched_chars,
+        evidence_tokens=len(ev),
         blocks=[
             MatchBlock(
                 ev_start=ev_offsets[b.a][0],
@@ -284,10 +304,16 @@ def _is_verified(alignment: Alignment) -> bool:
 
     An earlier draft used ``ratio OR 25 chars``, which let a single short
     fragment verify an otherwise fabricated quote.
+
+    The `longest_span` bar is capped at the quote's own length, mirroring the
+    cap `align` already applies to its block filter — a two-token quote cannot
+    produce a block of 3 no matter how real it is, so holding it to that bar
+    here regardless would undo the cap `align` just made.
     """
+    required_span = min(settings.evidence_min_block_tokens, alignment.evidence_tokens)
     return (
         alignment.ratio >= settings.evidence_match_ratio
-        and alignment.longest_span >= settings.evidence_min_block_tokens
+        and alignment.longest_span >= required_span
         and alignment.matched_chars >= settings.evidence_match_min_chars
     )
 

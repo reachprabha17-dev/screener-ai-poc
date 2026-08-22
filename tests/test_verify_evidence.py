@@ -119,6 +119,44 @@ def test_stopword_confetti_is_rejected() -> None:
     assert result.ratio < 0.60
 
 
+def test_a_genuinely_short_quote_still_verifies() -> None:
+    """A quote shorter than `evidence_min_block_tokens` (3) must not be held to
+    a block-size bar it can never reach.
+
+    Regression, observed in practice: a verbatim two-word quote from a
+    skills-list bullet ("Technical Documentation") scored `ratio=0.0` against
+    a resume that contained it exactly — the perfect match topped out at a
+    block the size of the whole quote (2), smaller than the filter demanded
+    (3), so it was silently indistinguishable from no match at all.
+    """
+    resume = (
+        "SKILLS: Aviation Safety & Compliance, Technical Documentation, "
+        "Maintenance Software. WORK EXPERIENCE: Aircraft Maintenance Engineer."
+    )
+    result = align("Technical Documentation", resume)
+    assert result.ratio == 1.0
+    assert result.evidence_tokens == 2
+    assert result.longest_span == 2
+    assert result.matched_chars >= 16
+
+    rubric = make_rubric(
+        ("C1", True, 3, "Ability to write technical reports and documentation"),
+        ("C2", True, 2, "Backend engineering experience"),
+        ("C3", False, 1, "Python and Go"),
+        ("C4", False, 1, "Migration to microservices"),
+    )
+    out = judge(
+        ("C1", "strong", "Technical Documentation"),
+        ("C2", "none", "not found"),
+        ("C3", "none", "not found"),
+        ("C4", "none", "not found"),
+    )
+    verified = verify_evidence(out, resume, rubric)
+    assert verified.criteria[0].verified is True
+    assert verified.scoreable is True
+    assert Flag.EVIDENCE_UNVERIFIED not in verified.flags
+
+
 def test_short_fragment_is_rejected_despite_perfect_ratio() -> None:
     """`ratio OR 25 chars` let a tiny fragment verify a fabricated quote.
 
