@@ -80,6 +80,24 @@ pid_of() {
   if kill -0 "$pid" 2>/dev/null; then echo "$pid"; else rm -f "$file"; return 1; fi
 }
 
+# `npm` on PATH is `/snap/bin/npm`, a `snap run` wrapper — observed on this
+# host to exit 0 while producing no output and starting nothing (a broken
+# snap confinement, not anything under our control). That failure is silent:
+# `start_ui` would wait the full 20s for a port that was never going to open
+# and blame Vite. Detected once, here, rather than on every invocation.
+resolve_npm() {
+  [[ -n "${NPM_BIN:-}" ]] && return
+  if [[ -n "$(npm -v 2>/dev/null)" ]]; then
+    NPM_BIN=npm
+  else
+    local fallback; fallback="$(echo /snap/node/current/bin/npm)"
+    [[ -x "$fallback" && -n "$("$fallback" -v 2>/dev/null)" ]] \
+      || die "npm is not working (checked PATH and $fallback) — is the node snap mid-refresh?"
+    NPM_BIN="$fallback"
+    warn "PATH's npm produced no output — using $NPM_BIN instead"
+  fi
+}
+
 # --- start -------------------------------------------------------------------
 
 start_api() {
@@ -116,10 +134,11 @@ start_ui() {
   pid_of ui >/dev/null && { warn "ui already running (pid $(pid_of ui))"; return; }
   port_busy "$UI_PORT" && die "port $UI_PORT is already in use by something this script did not start"
   [[ -d "$WEB/node_modules" ]] || die "no node_modules — run: (cd web && npm install)"
+  resolve_npm
   banner ui
   SCREENER_API_URL="$API_URL" \
   SCREENER_UI_PORT="$UI_PORT" \
-    nohup npm --prefix "$WEB" run dev \
+    nohup "$NPM_BIN" --prefix "$WEB" run dev \
       >>"$(log_file ui)" 2>&1 &
   local npm_pid=$!
   # Not `echo $! >pid_file` — npm hands off to vite and then exits itself,
@@ -150,7 +169,8 @@ start_ui() {
 # The production path: type-check, build, and let the API serve the result.
 build_ui() {
   [[ -d "$WEB/node_modules" ]] || die "no node_modules — run: (cd web && npm install)"
-  npm --prefix "$WEB" run build || die "the reviewer interface failed to build"
+  resolve_npm
+  "$NPM_BIN" --prefix "$WEB" run build || die "the reviewer interface failed to build"
   say "ui      built → ${API_URL}/ui/"
 }
 
@@ -249,7 +269,8 @@ cmd_check() {
   # the toolchain is absent: a backend change should not be blocked by a machine
   # with no Node on it, and CI has one.
   if [[ -d "$WEB/node_modules" ]]; then
-    npm --prefix "$WEB" run check
+    resolve_npm
+    "$NPM_BIN" --prefix "$WEB" run check
   else
     warn "web/node_modules missing — skipping the reviewer interface gates"
   fi
