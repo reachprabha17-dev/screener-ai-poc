@@ -85,6 +85,33 @@ export function escalationLabel(reason: string): string {
   return ESCALATION_LABELS[reason] ?? reason;
 }
 
+/**
+ * Why the reason applies, alongside its short label (mirrors `FLAG_HELP`).
+ *
+ * `PARTIAL_MUST_HAVE` needs this the most: on its own, "partial evidence on a
+ * must-have" reads as a contradiction next to "Meets all must-haves" — as if
+ * the requirement was not actually met. It was: `partial` on a must-have still
+ * counts as met (10.4) — an unmet one goes to its own partition instead, with
+ * no escalation at all. This is a human check on evidence *strength* for a
+ * requirement the candidate already cleared, not a dispute about eligibility.
+ */
+export const ESCALATION_HELP: Record<string, string> = {
+  PARTIAL_MUST_HAVE:
+    'A must-have was scored partial rather than strong. It still counts as met — an unmet must-have would place the candidate in a different group entirely — but a human should confirm the evidence is strong enough on its own.',
+  UNVERIFIED_EVIDENCE:
+    'The quoted evidence could not be matched back to the document. The system could not verify its own output.',
+  JUDGE_DISAGREEMENT: 'A second model read this evidence differently from the first.',
+  ABSENCE_FOUND:
+    'The first model said this was absent; a second pass found what looks like real evidence for it.',
+  NEGATION: 'A negation appears just before a quote. It may deny what it was offered to support.',
+  UNPROCESSABLE: 'The document could not be read or judged — see the flags below.',
+  SUSPECTED_INJECTION: 'The document contains instruction-like text.',
+};
+
+export function escalationHelp(reason: string): string {
+  return ESCALATION_HELP[reason] ?? 'See the run log.';
+}
+
 export const EVIDENCE_BADGE: Record<EvidenceStatus, string> = {
   verified: 'verified',
   partial: 'partially matched',

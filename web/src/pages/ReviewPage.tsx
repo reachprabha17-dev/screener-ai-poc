@@ -49,7 +49,10 @@ function Review({ runId, result }: { runId: string; result: RankedCandidates }) 
   const groups = [
     {
       key: 'needs-review',
-      title: 'Needs review',
+      // Not "needs review" — that language is reserved for the row-level flag a
+      // ranked candidate can also carry (a partial must-have, say). This group is
+      // a different, more severe thing: no score and no rank exist at all.
+      title: 'Could not be scored',
       candidates: result.needs_review,
       unranked: true,
       note: 'The system could not produce a reliable result for these. They are not ranked and not scored — that is a statement about the system, not about the candidate.',
@@ -196,7 +199,14 @@ function CandidateTable({
             aria-current={candidate.file_sha256 === selectedHash ? 'true' : undefined}
             className={cn(
               'hover:bg-neutral-50 dark:hover:bg-neutral-800/50',
-              candidate.file_sha256 === selectedHash && 'bg-blue-50 dark:bg-blue-950/40',
+              // Selection wins when both apply — two same-specificity background
+              // utilities would otherwise depend on stylesheet order, not this list.
+              // A candidate can carry `review_required` inside the qualified or
+              // unqualified groups too (10.4) — a partial must-have, say — so this
+              // cannot rely on group placement alone to surface it.
+              candidate.file_sha256 === selectedHash
+                ? 'bg-blue-50 dark:bg-blue-950/40'
+                : candidate.review_required && 'bg-amber-50 dark:bg-amber-950/30',
             )}
           >
             <Td>

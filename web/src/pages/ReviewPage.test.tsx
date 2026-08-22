@@ -126,6 +126,27 @@ describe('review screen', () => {
     expect(screen.getByText('(2 of 4)')).toBeInTheDocument();
   });
 
+  it('highlights a row that needs a human decision, even inside a ranked group', async () => {
+    // `review_required` can be true on a candidate placed in `meets_must_haves`
+    // (a partial must-have, say) — the highlight cannot depend on which group
+    // rendered the row.
+    mockCandidates({
+      meets_must_haves: [
+        candidate({ filename: 'needs-a-look.pdf', file_sha256: 'sha-look', review_required: true }),
+        candidate({ filename: 'clean.pdf', file_sha256: 'sha-clean' }),
+      ],
+      escalation_rate: 0.01,
+    });
+
+    renderReview();
+
+    const flagged = await screen.findByRole('button', { name: 'needs-a-look.pdf' });
+    const clean = screen.getByRole('button', { name: 'clean.pdf' });
+
+    expect(flagged.closest('tr')?.className).toMatch(/bg-amber-50/);
+    expect(clean.closest('tr')?.className).not.toMatch(/bg-amber-50/);
+  });
+
   it('warns when the escalation rate is over the design budget', async () => {
     mockCandidates({ meets_must_haves: [candidate()], escalation_rate: 0.2 });
 

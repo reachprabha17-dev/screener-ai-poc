@@ -2,7 +2,7 @@ import { ExternalLink } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useApi } from '../api/queries';
 import type { CandidateSummary, Verdict } from '../api/types';
-import { escalationLabel, flagHelp, VERIFICATION_BADGE } from '../lib/labels';
+import { escalationHelp, escalationLabel, flagHelp, VERIFICATION_BADGE } from '../lib/labels';
 import { Alert } from '../ui/Alert';
 import { BandPill } from './BandPill';
 import { CriterionBlock } from './CriterionBlock';
@@ -98,9 +98,14 @@ export function CandidateDetail({
 
       {candidate.escalation_reasons.length > 0 ? (
         <Alert tone="warn" title="Needs a human decision because">
-          <ul className="list-disc pl-4">
+          <ul className="list-disc space-y-1 pl-4">
             {candidate.escalation_reasons.map((reason) => (
-              <li key={reason}>{escalationLabel(reason)}</li>
+              <li key={reason}>
+                <span className="font-medium">{escalationLabel(reason)}</span>
+                <span className="block text-xs text-neutral-500 dark:text-neutral-400">
+                  {escalationHelp(reason)}
+                </span>
+              </li>
             ))}
           </ul>
         </Alert>
