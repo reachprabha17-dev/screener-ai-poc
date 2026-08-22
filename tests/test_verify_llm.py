@@ -84,10 +84,30 @@ def criterion(
 # --- who gets checked --------------------------------------------------------
 
 
-def test_every_verified_criterion_is_checked_by_default() -> None:
+def test_every_verified_criterion_is_checked_under_scope_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "verify_scope", "all")
     criteria = [criterion("C1", "Python listed in skills"), criterion("C2", "Managed EKS clusters")]
 
     assert [c.id for c in support_targets(criteria)] == ["C1", "C2"]
+
+
+def test_scope_none_checks_nothing_regardless_of_must_have_or_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default. Measured this session as adding no catch beyond Stage B's
+    Python check at the cost of a full second-model call per candidate
+    (`eval/compare_verifiers.py`) — off until re-measured against a bigger
+    corpus, or turned back on via `verify_scope`.
+    """
+    monkeypatch.setattr(settings, "verify_scope", "none")
+    must_have = criterion("C1", "Python listed in skills", must_have=True)
+    borderline = criterion("C2", "Managed EKS clusters").model_copy(update={"match_ratio": 0.1})
+
+    assert in_scope(must_have) is False
+    assert in_scope(borderline) is False
+    assert support_targets([must_have, borderline]) == []
 
 
 def test_narrowed_scope_keeps_must_haves_and_borderline_quotes(

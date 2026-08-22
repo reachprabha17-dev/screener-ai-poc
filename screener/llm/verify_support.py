@@ -33,12 +33,17 @@ CONTEXT_CHARS = 400
 def in_scope(criterion: ScoredCriterion) -> bool:
     """Which criteria stage D looks at (10.6, scope selection).
 
-    Under `verify_scope="all"` every verified criterion. Under
-    `must_have_and_borderline`, the ones where being wrong costs most: a hard
-    requirement, or a quote that only just cleared stage B.
+    Under `verify_scope="none"` nothing — this stage is off, and `targets()`
+    returning empty is what makes `verify_support` a no-op call with zero LLM
+    cost rather than code that needs to be routed around. Under `"all"` every
+    verified criterion. Under `"must_have_and_borderline"`, the ones where
+    being wrong costs most: a hard requirement, or a quote that only just
+    cleared stage B.
 
     Absence checking is **not** governed by this — see `confirm_absence`.
     """
+    if settings.verify_scope == "none":
+        return False
     if settings.verify_scope == "all":
         return True
     return criterion.must_have or criterion.match_ratio <= settings.borderline_ratio_max

@@ -21,7 +21,22 @@ from screener.models import Flag
 
 
 def test_context_limit_reserves_the_output() -> None:
-    """Generation shares the window; a prompt sized to num_ctx truncates the JSON."""
+    """Generation shares the window; a prompt sized to num_ctx truncates the JSON.
+
+    Uses the verifier's (larger) budget under the shipped default, where judge
+    and verifier share one model — that is what the client actually grants a
+    judge-phase call once the two model settings are equal.
+    """
+    assert settings.judge_model == settings.verifier_model
+    assert context_limit() == settings.verifier_num_ctx - settings.verifier_num_predict
+    assert context_limit() < settings.verifier_num_ctx
+
+
+def test_context_limit_uses_the_judges_own_budget_when_models_differ(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "judge_model", "some-other-judge-model")
+
     assert context_limit() == settings.num_ctx - settings.num_predict
     assert context_limit() < settings.num_ctx
 
@@ -83,7 +98,7 @@ def test_resume_component_check_is_not_a_substitute_for_the_prompt_check() -> No
     estimates; the prompt check is what actually holds.
     """
     assert resume_fits(settings.max_resume_tokens) is True
-    assert check_budget(settings.num_ctx).fits is False
+    assert check_budget(context_limit() + 1).fits is False
 
 
 # --- post-call reconciliation ------------------------------------------------

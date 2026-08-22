@@ -57,13 +57,27 @@ class BudgetCheck:
 
 
 def context_limit() -> int:
-    """Tokens available to the prompt: ``num_ctx`` minus the reserved output.
+    """Tokens available to the prompt: the judge's context minus its reserved output.
 
     ``num_predict`` is subtracted rather than trusted to fit in the slack.
     Generation shares the context window, so a prompt sized to ``num_ctx``
     truncates the JSON mid-object and surfaces as a schema error whose real
     cause is invisible.
+
+    Uses the *verifier's* larger ``num_ctx``/``num_predict`` whenever
+    ``judge_model == verifier_model`` (the shipped default): the client
+    (`ollama_client._context_for`/`_num_predict_for`) picks a call's budget by
+    matching the model name against ``verifier_model``, so once the two model
+    settings are equal, every call — including the judge's — actually gets the
+    verifier-sized budget. A pre-check still sized off the smaller judge-only
+    pair would reject prompts the client would in fact have handled fine —
+    over-cautious, not unsafe, but a real yield loss on longer resumes. This
+    module still owns no client and no model identity (12.2) — it is a
+    property of the *configuration*, checked here rather than duplicating the
+    client's dispatch.
     """
+    if settings.judge_model == settings.verifier_model:
+        return settings.verifier_num_ctx - settings.verifier_num_predict
     return settings.num_ctx - settings.num_predict
 
 

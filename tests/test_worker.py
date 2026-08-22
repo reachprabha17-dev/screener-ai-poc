@@ -569,26 +569,39 @@ def _only_run(service: ScreenerService) -> str:
 def test_a_run_loads_two_models_not_two_thousand(
     worker: Worker, service: ScreenerService, llm: FakeLLM
 ) -> None:
-    """**The gate.** Two loads per run, not two per resume.
+    """**The gate.** One model, loaded once per run, not once per resume.
 
-    12 GB of VRAM does not hold `granite4.1:8b` and `gemma4:12b` together, so the
-    two passes are phased over the whole run. Swapping per candidate would cost a
-    10–20 s model load on every one of them — the difference between two loads
-    and two thousand on a 1,000-CV batch, which is hours.
+    Historically two loads: 12 GB of VRAM did not hold `granite4.1:8b` and
+    `gemma4:12b` together, so the two passes were phased over the whole run to
+    avoid a 10-20s model load per candidate. Judge and verifier now share one
+    model (`config/settings.py`), so there is nothing left to swap between —
+    the gate this protects is "not once per resume", not "exactly two loads".
+
+    `llm.verified` stays 0: the shipped `verify_scope` default is `"none"`
+    (support verification off), and this run's candidates have no `none`
+    verdicts for `confirm_absence` to check either — see
+    `test_the_verifier_records_a_disagreement_without_moving_the_score` for
+    phase 2 actually doing something.
     """
     seed_run(service, count=5)
 
     drain(worker)
 
     assert llm.judged == 5
-    assert llm.verified == 5
-    assert llm.loads == [settings.judge_model, settings.verifier_model], llm.loads
+    assert llm.verified == 0
+    assert llm.loads == [settings.judge_model], llm.loads
 
 
 def test_the_verifier_records_a_disagreement_without_moving_the_score(
-    worker: Worker, service: ScreenerService, llm: FakeLLM
+    worker: Worker, service: ScreenerService, llm: FakeLLM, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """1.9 end to end: the second model escalates and proposes, never overrules."""
+    """1.9 end to end: the second model escalates and proposes, never overrules.
+
+    `verify_scope="all"` explicitly: the shipped default is `"none"` (support
+    verification is off by default this session — see `config/settings.py`),
+    which would make this scenario unreachable end to end.
+    """
+    monkeypatch.setattr(settings, "verify_scope", "all")
     run_id = seed_run(service, count=1)
     llm.verify_reply = {
         "support_checks": [

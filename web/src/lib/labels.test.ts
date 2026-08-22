@@ -48,7 +48,29 @@ describe('reviewer-facing vocabulary', () => {
     expect(flagHelp('SOMETHING_NEW')).toBe('See the run log.');
   });
 
+  it('explains every flag the backend can actually send, not just the common ones', () => {
+    // Regression: EVIDENCE_IRRELEVANT, NEGATION_SUSPECTED, JUDGE_DISAGREES and
+    // UNVERIFIED_ABSENCE had no entry and silently fell back to "See the run
+    // log." — a real `Flag` reading as an unhandled one.
+    for (const flag of [
+      'EVIDENCE_IRRELEVANT',
+      'NEGATION_SUSPECTED',
+      'JUDGE_DISAGREES',
+      'UNVERIFIED_ABSENCE',
+    ]) {
+      expect(flagHelp(flag)).not.toBe('See the run log.');
+    }
+  });
+
   it('spells out an escalation reason', () => {
-    expect(escalationLabel('judge_disagreement')).toBe('judge disagreement');
+    // Regression: `EscalationReason` is a Python StrEnum whose wire value is
+    // the upper-case member name itself — the backend sends "JUDGE_DISAGREEMENT",
+    // never "judge_disagreement". A lower-case lookup key here matched nothing
+    // and silently fell through to the raw reason on every real response.
+    expect(escalationLabel('JUDGE_DISAGREEMENT')).toBe('judge disagreement');
+  });
+
+  it('falls back to the raw reason for one it does not know', () => {
+    expect(escalationLabel('SOMETHING_NEW')).toBe('SOMETHING_NEW');
   });
 });

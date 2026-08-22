@@ -183,6 +183,7 @@ def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> Non
         "0003.v6-schema",
         "0004.position-reference-unique-while-open",
         "0005.backfill-run-file-counts",
+        "0006.evidence-irrelevant-column",
     ]
     assert pending_migrations(path) == []
     require_current_schema(path)
@@ -770,6 +771,25 @@ def test_match_blocks_survive_a_round_trip(uow: UnitOfWork) -> None:
     assert loaded is not None
     assert loaded.criteria[0].match_blocks == blocks
     assert loaded.criteria[0].negation_suspected is True
+
+
+def test_evidence_irrelevant_survives_a_round_trip(uow: UnitOfWork) -> None:
+    """Without a real column this silently reverts to its Pydantic default
+    (False) on every load — indistinguishable from a criterion that was never
+    flagged, for one that was and is only pending a follow-up opinion."""
+    seed(uow)
+    make_run(uow)
+    stored = candidate()
+    stored.criteria[0] = stored.criteria[0].model_copy(update={"evidence_irrelevant": True})
+
+    with uow as tx:
+        results_store.save(tx, "run1", stored, key())
+
+    with uow as tx:
+        loaded = results_store.get_cached(tx, key())
+
+    assert loaded is not None
+    assert loaded.criteria[0].evidence_irrelevant is True
 
 
 def test_save_verification_writes_phase_two_without_touching_the_score(uow: UnitOfWork) -> None:

@@ -614,14 +614,17 @@ def test_saving_without_a_base_version_is_still_allowed(service: ScreenerService
 
 
 def test_editing_a_criterion_without_its_claim_marks_the_claim_stale(
-    service: ScreenerService,
+    service: ScreenerService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The claim is what phase 2 verifies against (10.6 A).
+    """The claim is what phase 2 verifies against (10.6 A), when that check
+    is enabled — needs `verify_scope="all"` explicitly since the shipped
+    default (`"none"`) does not block on this at all, see the test below.
 
     Edit the criterion and leave the claim behind and the verifier goes on
     checking a hypothesis the rubric no longer makes — silently, and in the
     direction that produces confident agreement with the wrong question.
     """
+    monkeypatch.setattr(settings, "verify_scope", "all")
     position = service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
     saved = service.save_rubric(position.id, _with_claims(service, position.id), ACTOR)
 
@@ -632,6 +635,25 @@ def test_editing_a_criterion_without_its_claim_marks_the_claim_stale(
     assert second.criteria[0].claim_stale is True
     with pytest.raises(ServiceError, match="regenerate the claims"):
         service.approve_rubric(second.id, ACTOR)
+
+
+def test_a_stale_claim_does_not_block_approval_when_verify_scope_is_none(
+    service: ScreenerService,
+) -> None:
+    """The shipped default. Nothing reads `claim` when support verification is
+    off, and the rubric editor no longer shows a field to fix a stale one in —
+    blocking approval over it would be an unfixable trap, not a safeguard.
+    """
+    assert settings.verify_scope == "none"
+    position = service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
+    saved = service.save_rubric(position.id, _with_claims(service, position.id), ACTOR)
+
+    edited = list(saved.criteria)
+    edited[0] = edited[0].model_copy(update={"text": "8+ years backend engineering"})
+    second = service.save_rubric(position.id, edited, ACTOR, base_version=saved.version)
+
+    assert second.criteria[0].claim_stale is True
+    service.approve_rubric(second.id, ACTOR)  # not blocked
 
 
 def test_editing_the_text_and_the_claim_together_is_not_stale(

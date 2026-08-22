@@ -325,6 +325,9 @@ def test_a_real_quote_about_something_else_is_caught() -> None:
     # take someone out of a ranking.
     assert result.scoreable is True
     assert result.criteria[0].verdict == "strong"
+    # Per-criterion, so confirm_relevance knows exactly which id to ask a
+    # second, more capable opinion about.
+    assert result.criteria[0].evidence_irrelevant is True
 
 
 def test_a_relevant_quote_passes() -> None:
@@ -345,6 +348,7 @@ def test_a_relevant_quote_passes() -> None:
 
     assert Flag.EVIDENCE_IRRELEVANT not in result.flags
     assert result.scoreable is True
+    assert result.criteria[0].evidence_irrelevant is False
 
 
 def test_relevance_needs_only_one_content_word() -> None:

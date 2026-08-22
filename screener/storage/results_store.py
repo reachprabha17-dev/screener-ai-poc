@@ -151,8 +151,9 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
         tx.executemany(
             "INSERT INTO verdicts ("
             "candidate_id, criterion_id, verdict, model_verdict, evidence, verified, "
-            "match_ratio, longest_span, match_blocks_json, negation_suspected"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "match_ratio, longest_span, match_blocks_json, negation_suspected, "
+            "evidence_irrelevant"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     candidate_id,
@@ -165,6 +166,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
                     c.longest_span,
                     _dump_blocks(c.match_blocks),
                     int(c.negation_suspected),
+                    int(c.evidence_irrelevant),
                 )
                 for c in candidate.criteria
             ],
@@ -451,7 +453,7 @@ def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite
     verdict_rows = tx.execute(
         "SELECT criterion_id, verdict, model_verdict, evidence, verified, match_ratio, "
         "longest_span, match_blocks_json, negation_suspected, support, suggested_verdict, "
-        "verifier_rationale, absence_confirmed, absence_evidence "
+        "verifier_rationale, absence_confirmed, absence_evidence, evidence_irrelevant "
         "FROM verdicts WHERE candidate_id = ? ORDER BY id",
         (row["id"],),
     ).fetchall()
@@ -480,6 +482,7 @@ def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite
                     MatchBlockModel(**b) for b in json.loads(v["match_blocks_json"] or "[]")
                 ],
                 negation_suspected=bool(v["negation_suspected"]),
+                evidence_irrelevant=bool(v["evidence_irrelevant"]),
                 support=_as_support(v["support"]),
                 suggested_verdict=(
                     _as_verdict(v["suggested_verdict"]) if v["suggested_verdict"] else None

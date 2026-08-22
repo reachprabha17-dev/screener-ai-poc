@@ -441,6 +441,29 @@ class VerifyOutput(BaseModel):
     absence_checks: list[AbsenceCheck] = Field(default_factory=list)
 
 
+class RelevanceCheck(BaseModel):
+    """Is this excerpt about the same subject as the criterion, just in different words?
+
+    Only ever asked about a criterion `verify_evidence`'s crude keyword-overlap
+    check already flagged `EVIDENCE_IRRELEVANT` — a plain topic question, not a
+    depth or sufficiency one (`SupportCheck` covers that, separately, when
+    enabled). `related=True` is the only answer that clears the flag; anything
+    else — disagreement, or no answer at all — leaves it exactly where it was.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    related: bool
+    rationale: str = Field(default="", max_length=200)
+
+
+class RelevanceOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    checks: list[RelevanceCheck] = Field(default_factory=list)
+
+
 # --- Results ----------------------------------------------------------------
 
 
@@ -477,6 +500,11 @@ class ScoredCriterion(BaseModel):
     longest_span: int
     match_blocks: list[MatchBlock] = Field(default_factory=list)
     negation_suspected: bool = False
+    # Set by verify_evidence's crude keyword-overlap relevance check
+    # (Flag.EVIDENCE_IRRELEVANT). Per-criterion, unlike the flag itself, so a
+    # follow-up semantic check (confirm_relevance) knows exactly which
+    # criteria to ask about rather than re-deriving the same crude check.
+    evidence_irrelevant: bool = False
     # Phase 2 — null until verification has run, which is distinguishable from
     # "ran and agreed" (`support == "supported"`). A reviewer signing off needs
     # to be able to tell those apart (17.6).

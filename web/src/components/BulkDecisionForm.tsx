@@ -77,9 +77,17 @@ export function BulkDecisionForm({
     );
   });
 
+  const excluded = candidates.length - eligible.length;
+
   return (
     <Disclosure summary={`Decide on all ${String(eligible.length)} at once`}>
       <form onSubmit={(event) => void onSubmit(event)} className="space-y-3">
+        {excluded > 0 ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            {eligible.length} of {candidates.length} in this group — the other {excluded} need
+            review and are decided individually, not in bulk.
+          </p>
+        ) : null}
         <div className="flex gap-4">
           {DECISIONS.map((option) => (
             <Choice key={option} type="radio" value={option} {...register('decision')}>

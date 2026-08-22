@@ -80,7 +80,7 @@ describe('review screen', () => {
           score: null,
           scoreable: false,
           review_required: true,
-          escalation_reasons: ['unverified_evidence'],
+          escalation_reasons: ['UNVERIFIED_EVIDENCE'],
         }),
       ],
       meets_must_haves: [candidate({ filename: 'ranked.pdf', file_sha256: 'sha-ok' })],
@@ -100,9 +100,9 @@ describe('review screen', () => {
   it('names the escalation reasons rather than showing one count', async () => {
     mockCandidates({
       needs_review: [
-        candidate({ file_sha256: 'a', escalation_reasons: ['judge_disagreement'] }),
-        candidate({ file_sha256: 'b', escalation_reasons: ['judge_disagreement'] }),
-        candidate({ file_sha256: 'c', escalation_reasons: ['negation'] }),
+        candidate({ file_sha256: 'a', escalation_reasons: ['JUDGE_DISAGREEMENT'] }),
+        candidate({ file_sha256: 'b', escalation_reasons: ['JUDGE_DISAGREEMENT'] }),
+        candidate({ file_sha256: 'c', escalation_reasons: ['NEGATION'] }),
       ],
       escalation_rate: 0.2,
     });
@@ -170,7 +170,7 @@ describe('review screen', () => {
           file_sha256: 'sha-ravi',
           must_haves_met: false,
           review_required: true,
-          escalation_reasons: ['suspected_injection'],
+          escalation_reasons: ['SUSPECTED_INJECTION'],
         }),
       ],
       escalation_rate: 0.5,
@@ -193,7 +193,7 @@ describe('review screen', () => {
           file_sha256: 'sha-ravi',
           must_haves_met: false,
           review_required: true,
-          escalation_reasons: ['suspected_injection'],
+          escalation_reasons: ['SUSPECTED_INJECTION'],
         }),
       ],
       escalation_rate: 0.5,

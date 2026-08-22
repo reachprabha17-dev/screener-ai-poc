@@ -31,12 +31,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from config.settings import settings
+from screener.clients.ollama_client import BudgetBugError, LLMError, SchemaInvalidError
 from screener.core.budget import check_budget
 from screener.core.compute_score import compute_score
 from screener.core.detect_injection import detect_injection
 from screener.core.detect_negation import detect_negation
 from screener.core.rank import assign_band
 from screener.core.reconcile_judge import escalation_reasons_for, reconcile_judge
+from screener.core.reconcile_relevance import reconcile_relevance
 from screener.core.redact_pii import identity_map, redact_pii
 from screener.core.screen_freetext import screen_freetext
 from screener.core.verify_evidence import verify_evidence
@@ -45,6 +47,8 @@ from screener.intake.validate_file import validate_file
 from screener.llm import load_prompt
 from screener.llm.confirm_absence import confirm_absence
 from screener.llm.confirm_absence import targets as absence_targets
+from screener.llm.confirm_relevance import confirm_relevance
+from screener.llm.confirm_relevance import targets as relevance_targets
 from screener.llm.judge_resume import PROMPT_NAME, build_user_message, judge_resume
 from screener.llm.verify_support import targets as support_targets
 from screener.llm.verify_support import verify_support
@@ -264,6 +268,20 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
 
     # --- 10.5 evidence verification, against `sent` -------------------------
     verified = verify_evidence(screened.output, sent, rubric)
+
+    # --- 10.5 C(2): a second, narrower opinion on what verify_evidence's crude
+    # relevance check flagged. Same resident model, same phase — no reason for
+    # a second phase when there is no second model (config/settings.py). Never
+    # allowed to fail the candidate: an infrastructure hiccup here leaves the
+    # flag exactly where verify_evidence left it, fail-safe rather than fatal.
+    flagged_irrelevant = relevance_targets(verified.criteria)
+    if flagged_irrelevant:
+        try:
+            checks = confirm_relevance(deps.llm, flagged_irrelevant, rubric, sent)
+        except (LLMError, SchemaInvalidError, BudgetBugError):
+            checks = []
+        verified = reconcile_relevance(verified, checks)
+
     acc.add(*verified.flags, review=verified.review_required)
 
     if not verified.scoreable:

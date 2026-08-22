@@ -19,7 +19,8 @@ from typing import Any
 import pytest
 from conftest import make_rubric
 
-from config.settings import settings
+from screener.clients.ollama_client import LLMError
+from screener.core.budget import context_limit
 from screener.models import Flag, ParsedResume, ParseResult, RedFlag
 from screener.pipeline import Deps, file_sha256, judge_one, screen_batch
 
@@ -60,10 +61,17 @@ class FakeLLM:
         self,
         *payloads: dict[str, Any],
         prompt_tokens: int = 900,
+        relevance_reply: dict[str, Any] | None = None,
+        relevance_raises: Exception | None = None,
     ) -> None:
         self._payloads = list(payloads) or [verdicts()]
         self._prompt_tokens = prompt_tokens
+        # Fail-safe by default: no opinion offered, so a test that does not
+        # care about relevance sees the flag it set up survive unchanged.
+        self._relevance_reply = relevance_reply if relevance_reply is not None else {"checks": []}
+        self._relevance_raises = relevance_raises
         self.seen: list[tuple[str, str]] = []
+        self.relevance_calls: list[tuple[str, str]] = []
 
     def chat_json(
         self, model: str, system: str, user: str, schema: dict[str, Any]
@@ -72,6 +80,11 @@ class FakeLLM:
             # A phase-2 call. Empty is a valid `VerifyOutput`: the verifier
             # agreed with everything and found nothing for the `none` criteria.
             return {"support_checks": [], "absence_checks": []}
+        if "checks" in schema.get("properties", {}):
+            self.relevance_calls.append((system, user))
+            if self._relevance_raises is not None:
+                raise self._relevance_raises
+            return self._relevance_reply
         self.seen.append((system, user))
         return self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
 
@@ -238,7 +251,7 @@ def test_budget_is_measured_on_the_assembled_prompt_not_the_resume(root: Path) -
     Here the resume is tiny but the assembled prompt is over budget, and the
     candidate must still be caught.
     """
-    llm = FakeLLM(prompt_tokens=settings.num_ctx)
+    llm = FakeLLM(prompt_tokens=context_limit() + 1)
 
     candidate = run(root, FakeParser("Short CV."), llm)
 
@@ -326,6 +339,80 @@ def test_unverifiable_evidence_escalates_rather_than_penalising(root: Path) -> N
     assert candidate.score is None
     assert candidate.scoreable is False
     assert Flag.EVIDENCE_UNVERIFIED in candidate.flags
+
+
+# Real, verified, but shares no content word with "Backend engineering
+# experience" — the crude keyword check flags this one every time.
+WORDLESS_BUT_RELATED_EVIDENCE = (
+    "Led the migration from a monolith to microservices between 2019 and 2024."
+)
+
+
+def test_a_confirmed_semantic_match_clears_the_irrelevant_flag(root: Path) -> None:
+    """The follow-up opinion, agreeing: the false positive never reaches a
+    reviewer, and nothing about the verdict or score moves."""
+    llm = FakeLLM(
+        verdicts(evidence=WORDLESS_BUT_RELATED_EVIDENCE),
+        relevance_reply={
+            "checks": [
+                {"id": cid, "related": True, "rationale": "same subject, different wording"}
+                for cid in ("C1", "C2", "C3", "C4")
+            ]
+        },
+    )
+
+    candidate = run(root, FakeParser(), llm)
+
+    assert llm.relevance_calls  # the follow-up call actually happened
+    assert Flag.EVIDENCE_IRRELEVANT not in candidate.flags
+    assert candidate.review_required is False
+    assert candidate.scoreable is True
+    assert candidate.score is not None
+    assert all(c.verdict == "strong" for c in candidate.criteria)
+
+
+def test_a_confirmed_mismatch_keeps_the_flag(root: Path) -> None:
+    llm = FakeLLM(
+        verdicts(evidence=WORDLESS_BUT_RELATED_EVIDENCE),
+        relevance_reply={
+            "checks": [
+                {"id": cid, "related": False, "rationale": "different subject"}
+                for cid in ("C1", "C2", "C3", "C4")
+            ]
+        },
+    )
+
+    candidate = run(root, FakeParser(), llm)
+
+    assert Flag.EVIDENCE_IRRELEVANT in candidate.flags
+    assert candidate.review_required is True
+
+
+def test_the_follow_up_is_not_called_when_nothing_was_flagged(root: Path) -> None:
+    """No wasted call: only criteria the crude check actually flagged are asked
+    about, and this resume's evidence is unrelated to nothing."""
+    llm = FakeLLM(verdicts())
+
+    candidate = run(root, FakeParser(), llm)
+
+    assert llm.relevance_calls == []
+    assert Flag.EVIDENCE_IRRELEVANT not in candidate.flags
+
+
+def test_an_infrastructure_failure_in_the_follow_up_is_fail_safe(root: Path) -> None:
+    """A network blip or a malformed reply must not fail the whole candidate,
+    and must not silently clear a flag it could not actually confirm."""
+    llm = FakeLLM(
+        verdicts(evidence=WORDLESS_BUT_RELATED_EVIDENCE),
+        relevance_raises=LLMError("connection reset"),
+    )
+
+    candidate = run(root, FakeParser(), llm)
+
+    assert llm.relevance_calls  # the attempt happened
+    assert Flag.EVIDENCE_IRRELEVANT in candidate.flags
+    assert candidate.review_required is True
+    assert candidate.score is not None  # the candidate itself is not a failure
 
 
 def test_a_failure_never_scores_zero(root: Path) -> None:

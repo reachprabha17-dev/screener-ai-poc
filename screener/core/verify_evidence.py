@@ -329,6 +329,7 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
         alignment = align(cv.evidence, sent_text)
         verified = _is_verified(alignment)
         verdict = cv.verdict
+        irrelevant = False
 
         if cv.verdict != "none" and is_non_substantive(cv.evidence):
             # (a) Self-contradiction. Safe to automate.
@@ -359,8 +360,14 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
             # a lexical heuristic that misfires this often on real rubrics has
             # not earned the power to take someone out of the ranking. A
             # reviewer sees the flag; the candidate keeps their place.
+            #
+            # `pipeline.judge_one` follows this flag with a second, narrower
+            # semantic opinion (`llm/confirm_relevance.py`) before a reviewer
+            # ever sees it — this function only records the crude signal;
+            # whether it survives is decided after, not here.
             flags.add(Flag.EVIDENCE_IRRELEVANT)
             review_required = True
+            irrelevant = True
 
         scored.append(
             ScoredCriterion(
@@ -375,6 +382,9 @@ def verify_evidence(output: JudgeOutput, sent_text: str, rubric: Rubric) -> Veri
                 # quote *was* in the resume" is precisely the reviewer's
                 # question about an unverified quote (15.3).
                 match_blocks=alignment.blocks,
+                # Per-criterion, so a follow-up semantic check (confirm_relevance)
+                # knows which ones to ask about without re-deriving this.
+                evidence_irrelevant=irrelevant,
                 weight=criterion.weight,
                 must_have=criterion.must_have,
             )

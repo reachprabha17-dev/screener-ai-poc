@@ -364,11 +364,16 @@ class ScreenerService:
     def approve_rubric(self, rubric_id: str, actor: Actor) -> Rubric:
         """The human gate. Recorded with who and when, because it is a decision.
 
-        **Blocked while any claim is stale** (23.1.8). The claim is what phase 2
-        verifies against (10.6 A); editing a criterion's text without regenerating
-        it leaves the verifier checking a hypothesis the rubric no longer makes —
-        silently, and in the direction that produces confident agreement with the
-        wrong question.
+        **Blocked while any claim is stale, but only when something reads the
+        claim.** The claim is what `verify_support` (Stage D) verifies against
+        (10.6 A); editing a criterion's text without regenerating it leaves
+        that check checking a hypothesis the rubric no longer makes — silently,
+        and in the direction that produces confident agreement with the wrong
+        question. Under the shipped `verify_scope="none"` default that stage
+        never runs at all, so blocking approval over it would be enforcing
+        upkeep of a field nothing reads — worse, with no way to fix it, since
+        the rubric editor no longer shows a claim field to fix it in. Revisit
+        if `verify_scope` is ever turned back on.
         """
         with self.uow_factory() as tx:
             self._ensure_actor(tx, actor)
@@ -376,7 +381,7 @@ class ScreenerService:
             if rubric is None:
                 raise NotFoundError(f"rubric {rubric_id}")
             stale = [c.id for c in rubric.criteria if c.claim_stale]
-            if stale:
+            if stale and settings.verify_scope != "none":
                 raise ServiceError(
                     f"criteria {', '.join(stale)} were edited after their claim was written; "
                     "regenerate the claims before approving"

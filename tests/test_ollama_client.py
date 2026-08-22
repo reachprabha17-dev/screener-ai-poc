@@ -24,6 +24,11 @@ from screener.clients.ollama_client import (
 from screener.models import JudgeOutput
 
 MODEL = settings.judge_model
+# `judge_model` is `verifier_model` under the shipped default (they share one
+# model). Tests that specifically want the *non*-verifier budget branch of
+# `_context_for`/`_num_predict_for` use this instead of `MODEL`, so they stay
+# meaningful regardless of whether the two settings happen to coincide.
+OTHER_MODEL = "some-other-model"
 
 SCHEMA: dict[str, Any] = JudgeOutput.model_json_schema()
 GOOD = '{"criteria": [{"id": "C1", "verdict": "strong", "evidence": "7 years backend"}]}'
@@ -108,10 +113,13 @@ def test_decoding_options_are_fixed_by_settings() -> None:
     """Not per-call. They are part of the cache key and the reproducibility claim.
 
     A caller that could vary `temperature` per request would silently invalidate
-    every stored comparison across the boundary.
+    every stored comparison across the boundary. Uses `OTHER_MODEL`, not
+    `MODEL`: the shipped `judge_model` is `verifier_model`, and this test is
+    about the fixed decoding params in general, not the model-specific
+    ctx/predict budget covered by `test_the_verifier_gets_its_own_context_and_output_budget`.
     """
     llm, fake = client(chat_payload())
-    llm.chat_json(MODEL, "system", "resume", SCHEMA)
+    llm.chat_json(OTHER_MODEL, "system", "resume", SCHEMA)
 
     options = fake.calls[0]["options"]
     assert options["temperature"] == settings.temperature
@@ -196,14 +204,15 @@ def test_truncated_output_is_not_retried_blindly() -> None:
     """Output hitting `num_predict` cuts the JSON mid-object.
 
     Retrying reproduces the same overflow at the same cost; `num_predict` is the
-    thing to change, so the cause is surfaced instead.
+    thing to change, so the cause is surfaced instead. Uses `OTHER_MODEL` — see
+    `test_decoding_options_are_fixed_by_settings`.
     """
     llm, fake = client(
         chat_payload('{"criteria": [{"id": "C1", "verd', output_tokens=settings.num_predict)
     )
 
     with pytest.raises(SchemaInvalidError) as excinfo:
-        llm.chat_json(MODEL, "system", "resume", SCHEMA)
+        llm.chat_json(OTHER_MODEL, "system", "resume", SCHEMA)
 
     assert excinfo.value.truncated is True
     assert "num_predict" in str(excinfo.value)
@@ -214,12 +223,13 @@ def test_prompt_over_the_context_limit_is_a_budget_bug() -> None:
     """The pre-check was supposed to make this impossible.
 
     Raised rather than logged: the model returns a confident verdict on a
-    truncated prompt, so a candidate judged this way must not be scored.
+    truncated prompt, so a candidate judged this way must not be scored. Uses
+    `OTHER_MODEL` — see `test_decoding_options_are_fixed_by_settings`.
     """
     llm, _ = client(chat_payload(prompt_tokens=settings.num_ctx))
 
     with pytest.raises(BudgetBugError):
-        llm.chat_json(MODEL, "system", "resume", SCHEMA)
+        llm.chat_json(OTHER_MODEL, "system", "resume", SCHEMA)
 
 
 def test_non_object_json_is_rejected() -> None:

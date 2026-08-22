@@ -47,21 +47,38 @@ export const FLAG_HELP: Record<string, string> = {
   PARSER_CRASHED: 'The parser failed on this file. Reported as a security event.',
   LLM_ERROR: 'The model was unreachable. Transient — retry.',
   SCHEMA_INVALID: 'The model returned malformed output. Transient — retry.',
+  EVIDENCE_IRRELEVANT:
+    'The quote is real and verbatim, but is not about this criterion — e.g. evidence for one skill offered to support a different one.',
+  NEGATION_SUSPECTED:
+    'A negation appears just before the quote. It may deny what it was offered to support rather than confirm it.',
+  JUDGE_DISAGREES:
+    'A second model read this quote differently from the first. Recorded as a suggestion — the original verdict was not changed.',
+  UNVERIFIED_ABSENCE:
+    'The first model said this was absent; a second pass found what looks like real evidence for it. Neither verdict was changed automatically.',
 };
 
 export function flagHelp(flag: string): string {
   return FLAG_HELP[flag] ?? 'See the run log.';
 }
 
-/** Escalation reasons, grouped so similar cases can be worked in a batch. */
+/**
+ * Escalation reasons, grouped so similar cases can be worked in a batch.
+ *
+ * Keyed on the wire value the backend actually sends — `EscalationReason` is a
+ * Python `StrEnum` whose `.value` is the upper-case member name itself (e.g.
+ * `"UNVERIFIED_EVIDENCE"`, `screener/models.py`), not a lower-cased form of it.
+ * Lower-case keys here would never match, silently falling through to
+ * `escalationLabel`'s raw-reason fallback — which is exactly what happened
+ * before this was caught: every reason rendered as its raw upper-case name.
+ */
 export const ESCALATION_LABELS: Record<string, string> = {
-  unverified_evidence: 'unverified evidence',
-  judge_disagreement: 'judge disagreement',
-  absence_found: 'evidence found for an “absent” criterion',
-  negation: 'negation suspected',
-  partial_must_have: 'partial evidence on a must-have',
-  unprocessable: 'could not be processed',
-  suspected_injection: 'suspected injection',
+  UNVERIFIED_EVIDENCE: 'unverified evidence',
+  JUDGE_DISAGREEMENT: 'judge disagreement',
+  ABSENCE_FOUND: 'evidence found for an “absent” criterion',
+  NEGATION: 'negation suspected',
+  PARTIAL_MUST_HAVE: 'partial evidence on a must-have',
+  UNPROCESSABLE: 'could not be processed',
+  SUSPECTED_INJECTION: 'suspected injection',
 };
 
 export function escalationLabel(reason: string): string {

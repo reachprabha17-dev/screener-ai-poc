@@ -1,0 +1,11 @@
+-- `ScoredCriterion.evidence_irrelevant` (screener/models.py): per-criterion
+-- marker for verify_evidence's crude keyword-overlap relevance check
+-- (Flag.EVIDENCE_IRRELEVANT), so a follow-up semantic opinion
+-- (llm/confirm_relevance.py) knows exactly which criteria to ask about
+-- without re-deriving the same crude check from `evidence` and `text` alone.
+--
+-- Without this column the field silently never round-trips: written in
+-- memory during judge_one, dropped on save, and read back as its Pydantic
+-- default (False) on every subsequent load — indistinguishable from "never
+-- flagged" for a candidate that was.
+ALTER TABLE verdicts ADD COLUMN evidence_irrelevant INTEGER NOT NULL DEFAULT 0;

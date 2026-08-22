@@ -1,13 +1,12 @@
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { useApproveRubric, useSaveRubric } from '../api/queries';
+import { useApproveRubric, useExtractRubric, useSaveRubric } from '../api/queries';
 import type { Criterion, Rubric } from '../api/types';
 import { shortHash } from '../lib/format';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { Card, CardBody, CardHeader } from '../ui/Card';
-import { Disclosure } from '../ui/Disclosure';
 import { Table, Td, Th } from '../ui/Table';
 
 const MIN_CRITERIA = 4;
@@ -51,10 +50,10 @@ export function RubricEditor({ rubric }: { rubric: Rubric }) {
   const [problem, setProblem] = useState('');
   const save = useSaveRubric(rubric.position_id);
   const approve = useApproveRubric(rubric.position_id);
+  const extract = useExtractRubric(rubric.position_id);
 
   const approved = rubric.approved_at !== null;
   const dirty = JSON.stringify(criteria) !== JSON.stringify(rubric.criteria);
-  const stale = criteria.filter((c) => c.claim_stale);
 
   function update(index: number, patch: Partial<Criterion>): void {
     setCriteria((current) => current.map((c, i) => (i === index ? { ...c, ...patch } : c)));
@@ -128,27 +127,6 @@ export function RubricEditor({ rubric }: { rubric: Rubric }) {
                       update(index, { text: event.target.value });
                     }}
                   />
-                  <Disclosure
-                    summary={
-                      <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                        Claim the second model checks
-                        {criterion.claim_stale ? ' · out of date' : ''}
-                      </span>
-                    }
-                  >
-                    <input
-                      value={criterion.claim}
-                      aria-label={`Criterion ${criterion.id} claim`}
-                      placeholder="The candidate has at least 5 years of backend engineering experience."
-                      onChange={(event) => {
-                        update(index, { claim: event.target.value });
-                      }}
-                    />
-                    <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                      The criterion restated as an assertion. Phase 2 tests this sentence against
-                      the resume, so it has to still match the criterion above.
-                    </p>
-                  </Disclosure>
                 </Td>
                 <Td>
                   <input
@@ -196,16 +174,6 @@ export function RubricEditor({ rubric }: { rubric: Rubric }) {
           A <strong>must-have</strong> is a hard requirement: failing one moves the candidate to the
           unqualified group, ranked separately and never against the rest. Mark them sparingly.
         </p>
-
-        {stale.length > 0 ? (
-          <Alert tone="warn" title="Claims are out of date">
-            <p>
-              {stale.map((c) => c.id).join(', ')} were edited after their claim was written.
-              Approval is blocked until the claims match the criteria — the verifier would otherwise
-              check a hypothesis the rubric no longer makes.
-            </p>
-          </Alert>
-        ) : null}
 
         {problem ? (
           <Alert tone="error">
@@ -256,7 +224,33 @@ export function RubricEditor({ rubric }: { rubric: Rubric }) {
           {dirty ? (
             <span className="text-sm text-neutral-500 dark:text-neutral-400">Unsaved edits</span>
           ) : null}
+          <Button
+            variant="ghost"
+            busy={extract.isPending}
+            onClick={() => {
+              extract.mutate(undefined, {
+                onSuccess: (drafted) => {
+                  toast.success(`Drafted version ${String(drafted.version)}`);
+                },
+                onError: (error) => {
+                  toast.error(error.message);
+                },
+              });
+            }}
+          >
+            Redraft from the job description
+          </Button>
         </div>
+        {extract.isPending ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            This is a live model call and can take a minute on a cold start.
+          </p>
+        ) : (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            Redrafting creates a new version from the job description, discarding any unsaved edits
+            above — the version you last saved or approved is never lost.
+          </p>
+        )}
       </CardBody>
     </Card>
   );

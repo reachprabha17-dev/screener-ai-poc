@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 
+from config.settings import settings
 from eval.accuracy import Result, score
 from eval.compare_verifiers import CONFIGURATIONS, _both_flags, _difflib_flags, _judge_flags
 from eval.compare_verifiers import measure as compare_verifiers
@@ -492,13 +493,19 @@ def test_a_fabrication_stage_b_catches_is_missed_only_by_the_judge_row(
     assert result.tallies["difflib + judge"].missed_fabrications == 0
 
 
-def test_a_verbatim_but_irrelevant_quote_is_missed_only_by_stage_b(tmp_path: Path) -> None:
+def test_a_verbatim_but_irrelevant_quote_is_missed_only_by_stage_b(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The case for keeping the second model (9.3).
 
     The quote is real, verbatim and correctly copied, so it verifies at ratio
     1.00 — and it establishes nothing about the criterion. Stage B is right not
-    to care what the words mean; this is the hole that leaves.
+    to care what the words mean; this is the hole that leaves. Needs
+    `verify_scope="all"` explicitly: the shipped default is `"none"` (support
+    verification is off by default this session — see `config/settings.py`),
+    and this comparison is specifically about what running it *would* buy.
     """
+    monkeypatch.setattr(settings, "verify_scope", "all")
     resume = "Fluent in Finnish and Estonian, and I write a food blog on weekends."
     corpus = one_case_corpus(tmp_path, resume, "none")
     llm = ScriptedVerifier(
@@ -513,14 +520,16 @@ def test_a_verbatim_but_irrelevant_quote_is_missed_only_by_stage_b(tmp_path: Pat
 
 
 def test_a_correct_verdict_sent_to_a_reviewer_is_counted_as_a_false_escalation(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The column that keeps the table from recommending 'escalate everything'.
 
     The model's verdict matches the adjudicated label, and the second model
     flags it anyway. That is a reviewer paying for work that changes nothing,
-    and it is the cost side of every row.
+    and it is the cost side of every row. Needs `verify_scope="all"`
+    explicitly — see the note on the previous test.
     """
+    monkeypatch.setattr(settings, "verify_scope", "all")
     resume = "Owned the Kubernetes platform for 12 services in production."
     corpus = one_case_corpus(tmp_path, resume, "strong")
     llm = ScriptedVerifier("strong", support="insufficient")

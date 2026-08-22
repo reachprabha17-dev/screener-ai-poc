@@ -42,12 +42,21 @@ def _app_version() -> str:
 class Settings(BaseSettings):
     # --- Inference ---
     #
-    # Two models, deliberately different weights (1.3). A verifier trained on
-    # the same data as the judge shares its blind spots, and a second opinion
-    # that agrees for the same reason as the first is not a second opinion.
-    # They do not co-reside in 12 GB, which is why runs are two-phase (17.4).
+    # Judge and verifier currently share one model. The original design used
+    # two deliberately different ones (1.3) — a verifier trained on the same
+    # data as the judge shares its blind spots, and a second opinion that
+    # agrees for the same reason as the first is not a second opinion — which
+    # is also why runs were two-phase with a model swap between them (17.4).
+    # Consolidated to one model for GPU/ops cost (no swap, no 12 GB VRAM
+    # contention) now that `verify_scope="none"` retires the check that
+    # benefited most from a genuinely independent second model
+    # (`verify_support`). `confirm_absence` — the check that remains — asks
+    # "did you literally miss this," not "would a different model see it
+    # differently," so it loses less from sharing a model, but it is no longer
+    # a fully independent second opinion either. Revisit if `verify_scope` is
+    # ever turned back on: that check is the one this tradeoff actually costs.
     ollama_host: str = "http://localhost:11434"
-    judge_model: str = "granite4.1:8b"
+    judge_model: str = "gemma4:12b"
     verifier_model: str = "gemma4:12b"
     judge_digest_pin: str | None = None
     verifier_digest_pin: str | None = None
@@ -56,15 +65,16 @@ class Settings(BaseSettings):
     # 10.6 B sends the whole resume plus every `none` criterion in one call, so
     # the verifier needs materially more room than the judge.
     verifier_num_ctx: int = 16384
-    # verify_support (10.6 A) batches a support judgment, a suggested verdict,
-    # and up to a 200-char rationale *per criterion in scope* into one call —
-    # strictly more per-item output than the judge's own verdict+evidence, over
-    # the same set of criteria. Sharing the judge's 1536-token budget truncates
-    # that response mid-JSON on any candidate with more than a handful of
-    # in-scope criteria (observed in practice: SCHEMA_INVALID, "output hit
-    # num_predict=1536", identical on every retry since the overflow is
-    # deterministic). Kept well under `verifier_num_ctx` so the prompt still has
-    # room for a full resume.
+    # confirm_absence (10.6 B) batches a confirmed-absent judgment and an
+    # optional quote *per `none` criterion* into one call — more per-item
+    # output than the judge's own verdict+evidence over the same set. Sharing
+    # the judge's 1536-token budget truncates that response mid-JSON on a
+    # candidate with more than a handful of `none` verdicts (observed in
+    # practice, when this was verify_support's batch rather than
+    # confirm_absence's: SCHEMA_INVALID, "output hit num_predict=1536",
+    # identical on every retry since the overflow is deterministic). Kept well
+    # under `verifier_num_ctx` so the prompt still has room for a full resume.
+    # Matters again for verify_support the moment `verify_scope` is not `"none"`.
     verifier_num_predict: int = 4096
     temperature: float = 0.0
     top_k: int = 1
@@ -86,11 +96,18 @@ class Settings(BaseSettings):
 
     # --- Verification (10.6) ---
     verification_enabled: bool = True
-    # `all` by default. `must_have_and_borderline` is the lever to pull if the
-    # escalation rate proves unmanageable — a smaller queue, not a bigger one
-    # (19.2). Absence checking is never skipped by scope: it is the only check
-    # on a `none`, and `none` on a must-have is the disqualifying outcome.
-    verify_scope: Literal["all", "must_have_and_borderline"] = "all"
+    # `must_have_and_borderline` is the lever to pull if `all`'s escalation
+    # rate proves unmanageable — a smaller queue, not a bigger one (19.2).
+    # `none` turns `verify_support` off entirely: measured this session
+    # (`eval/compare_verifiers.py` against the 12-case labelled set) as adding
+    # no catch beyond what Stage B's Python check already catches, at the cost
+    # of a full second-model GPU call per candidate. Default is `none` for
+    # that reason — flip back to `all` or `must_have_and_borderline` to
+    # re-enable it, and re-run the eval against a bigger corpus before trusting
+    # that measurement generally. Absence checking is never skipped by scope
+    # regardless of its value: it is the only check on a `none`, and `none` on
+    # a must-have is the disqualifying outcome.
+    verify_scope: Literal["all", "must_have_and_borderline", "none"] = "none"
     borderline_ratio_max: float = 0.75
 
     # --- Budget (10.1) ---
