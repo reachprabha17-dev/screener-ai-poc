@@ -70,7 +70,7 @@ def get_cached(tx: Tx, key: CacheKey) -> Candidate | None:
     """
     where = " AND ".join(f"{column} = ?" for column in _CACHE_COLUMNS)
     row = tx.execute(
-        f"SELECT * FROM candidates WHERE {where} AND cacheable = 1 "  # noqa: S608 — column names are a module constant, never caller input
+        f"SELECT * FROM candidates WHERE {where} AND cacheable = TRUE "  # noqa: S608 — column names are a module constant, never caller input
         "ORDER BY id DESC LIMIT 1",
         tuple(getattr(key, column) for column in _CACHE_COLUMNS),
     ).fetchone()
@@ -124,10 +124,10 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
             _dump_spans(candidate.redaction_map),
             candidate.score,
             candidate.band,
-            int(candidate.must_haves_met),
-            int(candidate.scoreable),
-            int(candidate.review_required),
-            int(candidate.cacheable),
+            candidate.must_haves_met,
+            candidate.scoreable,
+            candidate.review_required,
+            candidate.cacheable,
             json.dumps([r.value for r in candidate.escalation_reasons]),
             candidate.verification_status,
             candidate.summary,
@@ -139,7 +139,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
             key.judge_digest,
             key.verifier_digest,
             key.prompt_hash,
-            int(key.redaction_on),
+            key.redaction_on,
             key.num_ctx,
             key.app_version,
             candidate.scored_at.isoformat(),
@@ -165,12 +165,12 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
                     c.verdict,
                     c.model_verdict,
                     c.evidence,
-                    int(c.verified),
+                    c.verified,
                     c.match_ratio,
                     c.longest_span,
                     _dump_blocks(c.match_blocks),
-                    int(c.negation_suspected),
-                    int(c.evidence_irrelevant),
+                    c.negation_suspected,
+                    c.evidence_irrelevant,
                 )
                 for c in candidate.criteria
             ],
@@ -219,7 +219,7 @@ def save_verification(tx: Tx, candidate_id: int, candidate: Candidate) -> None:
         "escalation_reasons_json = ?, flags_json = ?, verifier_digest = ? WHERE id = ?",
         (
             candidate.verification_status,
-            int(candidate.review_required),
+            candidate.review_required,
             json.dumps([r.value for r in candidate.escalation_reasons]),
             json.dumps([f.value for f in candidate.flags]),
             _verifier_digest_of(tx, candidate_id),
@@ -235,9 +235,9 @@ def save_verification(tx: Tx, candidate_id: int, candidate: Candidate) -> None:
                 c.support,
                 c.suggested_verdict,
                 c.verifier_rationale,
-                None if c.absence_confirmed is None else int(c.absence_confirmed),
+                None if c.absence_confirmed is None else c.absence_confirmed,
                 c.absence_evidence or None,
-                int(c.negation_suspected),
+                c.negation_suspected,
                 candidate_id,
                 c.id,
             )
@@ -345,7 +345,7 @@ def list_for_run(tx: Tx, run_id: str) -> list[Candidate]:
 # `sign_off_run`'s precondition exactly, because a dashboard that reads zero
 # while sign-off returns 400 teaches reviewers to distrust the screen.
 _AWAITING_REVIEW = (
-    "decision = 'undecided' AND (review_required = 1 OR verification_status = 'pending')"
+    "decision = 'undecided' AND (review_required = TRUE OR verification_status = 'pending')"
 )
 
 

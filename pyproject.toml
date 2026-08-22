@@ -25,6 +25,10 @@ dependencies = [
 # Decision #11 used to be a rule about what `ui/` was allowed to import — the
 # thing it was protecting against no longer exists.
 dev = ["pytest", "pytest-cov", "hypothesis", "ruff", "mypy", "httpx"]
+# Installed only where db_backend=postgres. psycopg 3 serves both SQLAlchemy
+# (postgresql+psycopg) and yoyo 9, so this is one driver rather than one per
+# tool — yoyo would otherwise fall back to its psycopg2 backend.
+postgres = ["psycopg[binary]>=3.1"]
 
 [project.scripts]
 screener = "screener.cli:app"

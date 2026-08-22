@@ -135,7 +135,7 @@ def enqueue_verify_jobs(tx: Tx, run_id: str) -> int:
         "INSERT INTO jobs (run_id, phase, file_path, file_sha256, candidate_id, "
         "status, created_at, updated_at) "
         "SELECT c.run_id, 'verify', c.filename, c.file_sha256, c.id, 'pending', ?, ? "
-        "FROM candidates c WHERE c.run_id = ? AND c.scoreable = 1 "
+        "FROM candidates c WHERE c.run_id = ? AND c.scoreable = TRUE "
         "ON CONFLICT DO NOTHING",
         (timestamp, timestamp, run_id),
     )
@@ -211,7 +211,7 @@ def claim_next(tx: Tx, worker_id: str, phase: str = "judge") -> Job | None:
     # state rather than by the job's alone.
     verify_join = "JOIN candidates c ON c.id = j.candidate_id " if phase == "verify" else ""
     verify_where = (
-        "AND c.verification_status = 'pending' AND c.scoreable = 1 " if phase == "verify" else ""
+        "AND c.verification_status = 'pending' AND c.scoreable = TRUE " if phase == "verify" else ""
     )
 
     row = tx.execute(

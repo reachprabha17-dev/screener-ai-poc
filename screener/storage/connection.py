@@ -237,10 +237,19 @@ def _clear_dead_migration_lock(path: Path) -> None:
 
 
 def _yoyo_url(path: Path) -> str:
-    """yoyo takes its own DSN, and it is not SQLAlchemy's."""
+    """yoyo takes its own DSN, and it is not quite SQLAlchemy's.
+
+    The Postgres URL is passed through **with** its `+psycopg` suffix, not
+    stripped to bare `postgresql://`. yoyo 9.0 registers both: `postgresql`
+    selects its psycopg2 backend and `postgresql+psycopg` selects the psycopg3
+    one. Stripping the suffix would quietly put migrations on psycopg2 while
+    SQLAlchemy runs on psycopg3 — two Postgres drivers to install, and a
+    failure at the first migration on a host that only has the one this project
+    actually declares.
+    """
     if is_sqlite():
         return f"sqlite:///{path.resolve()}"
-    return settings.db_url.replace("postgresql+psycopg://", "postgresql://")
+    return settings.db_url
 
 
 def _backend(path: Path) -> Any:  # noqa: ANN401 — yoyo ships no type information
