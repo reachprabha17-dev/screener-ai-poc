@@ -31,6 +31,7 @@ stores rather than a forwarding call.
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -914,6 +915,34 @@ class ScreenerService:
             if recovered:
                 audit_store.append(
                     tx, None, "reclaim_orphaned", "worker", worker_id, {"jobs": recovered}
+                )
+        return recovered
+
+    def reclaim_expired_leases(self, worker_id: str) -> int:
+        """Recover jobs another worker has held past the lease window (16.5).
+
+        The backstop behind `reclaim_orphaned`, for the job it cannot match: one
+        claimed under a name nothing answers to any more, after a host rename or
+        a changed `WORKER_ID`. Left alone it stays `claimed` forever, and
+        `no_pending` counts `claimed`, so the run never completes.
+
+        Audited without an actor, like the reclaim above — no human did this, and
+        a synthetic user would make a recovery indistinguishable from a decision.
+        The audit row matters more here than for the startup reclaim: a lease
+        expiring means something took far longer than any job should, and that is
+        worth being able to find afterwards.
+        """
+        cutoff = (now() - timedelta(seconds=settings.job_lease_timeout_s)).isoformat()
+        with self.uow_factory() as tx:
+            recovered = jobs_store.reclaim_expired(tx, worker_id, cutoff)
+            if recovered:
+                audit_store.append(
+                    tx,
+                    None,
+                    "reclaim_expired",
+                    "worker",
+                    worker_id,
+                    {"jobs": recovered, "lease_seconds": settings.job_lease_timeout_s},
                 )
         return recovered
 

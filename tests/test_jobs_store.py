@@ -859,3 +859,96 @@ def test_a_phase_is_drained_only_when_nothing_is_in_flight(uow: UnitOfWork) -> N
         assert jobs_store.no_pending(tx, "run1", "judge") is False
         jobs_store.complete(tx, job.id)
         assert jobs_store.no_pending(tx, "run1", "judge") is True
+
+
+# --- the lease sweep: last-resort recovery (16.5) ----------------------------
+
+
+def claimed_at_of(uow: UnitOfWork, job_id: int) -> str | None:
+    with uow as tx:
+        row = tx.execute("SELECT claimed_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return None if row is None else row["claimed_at"]
+
+
+def test_a_job_held_past_the_lease_by_a_vanished_worker_is_reclaimed(uow: UnitOfWork) -> None:
+    """The case startup reclaim cannot see (16.5).
+
+    `reclaim_orphaned` matches on *this* worker's name. A job claimed as
+    `old-hostname` before the box was renamed wears a name nothing will ever
+    answer to again, so it stays `claimed` — and `no_pending` counts `claimed`,
+    so the run never completes. The lease is what eventually frees it.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    with uow as tx:
+        job = jobs_store.claim_next(tx, "old-hostname")
+    assert job is not None
+
+    with uow as tx:
+        reclaimed = jobs_store.reclaim_expired(tx, "new-hostname", cutoff=now().isoformat())
+
+    assert reclaimed == 1
+    with uow as tx:
+        assert jobs_store.progress(tx, "run1").pending == 1
+
+
+def test_the_sweep_cannot_touch_the_calling_workers_own_job(uow: UnitOfWork) -> None:
+    """The safety property, and it is structural rather than a matter of timing.
+
+    The statement excludes `claimed_by = worker_id`, so the job this worker is
+    holding is unreachable however old it looks and whatever the clock has done.
+    Without that clause a forward clock step would hand a live resume to a second
+    worker — duplicate inference and a `UNIQUE(file_sha256, run_id)` violation on
+    save, which is worse than the stranding the sweep exists to fix.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    with uow as tx:
+        job = jobs_store.claim_next(tx, WORKER)
+    assert job is not None
+
+    # A cutoff far in the future: every claim looks expired.
+    with uow as tx:
+        reclaimed = jobs_store.reclaim_expired(
+            tx, WORKER, cutoff=(now() + timedelta(days=3650)).isoformat()
+        )
+
+    assert reclaimed == 0
+    with uow as tx:
+        assert jobs_store.progress(tx, "run1").claimed == 1
+
+
+def test_a_job_inside_its_lease_is_left_alone(uow: UnitOfWork) -> None:
+    """A slow job is not a dead one. The window has to have actually passed."""
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    with uow as tx:
+        assert jobs_store.claim_next(tx, "other-worker") is not None
+
+    with uow as tx:
+        reclaimed = jobs_store.reclaim_expired(
+            tx, WORKER, cutoff=(now() - timedelta(hours=6)).isoformat()
+        )
+
+    assert reclaimed == 0
+    with uow as tx:
+        assert jobs_store.progress(tx, "run1").claimed == 1
+
+
+def test_the_lease_sweep_does_not_reset_the_attempt_counter(uow: UnitOfWork) -> None:
+    """Same reason as `reclaim_orphaned`: the file may be what killed the worker.
+
+    A crash loop that resets its own counter never reaches `job_max_attempts`,
+    so one bad document could be retried forever.
+    """
+    seed_run(uow)
+    add_jobs(uow, "run1", 1)
+    with uow as tx:
+        job = jobs_store.claim_next(tx, "old-hostname")
+    assert job is not None and job.attempts == 1
+
+    with uow as tx:
+        jobs_store.reclaim_expired(tx, WORKER, cutoff=now().isoformat())
+        row = tx.execute("SELECT attempts FROM jobs WHERE id = ?", (job.id,)).fetchone()
+
+    assert row["attempts"] == 1

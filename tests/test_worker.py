@@ -804,3 +804,29 @@ def test_a_restarted_worker_reclaims_the_job_its_previous_life_was_holding(
         assert jobs_store.progress(tx, claimed.run_id).pending == 1, (
             "the stranded job should be back in the queue, not still claimed"
         )
+
+
+def test_the_lease_sweep_is_rate_limited_on_a_monotonic_clock(
+    db: Path, service: ScreenerService, worker: Worker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The idle loop turns over every couple of seconds; the sweep is a write.
+
+    Rate-limited on `time.monotonic`, deliberately — the wall clock is the thing
+    the lease comparison already has to tolerate stepping, and the *scheduling*
+    of the check should not be exposed to it as well.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(
+        service, "reclaim_expired_leases", lambda worker_id: calls.append(worker_id) or 0
+    )
+    monkeypatch.setattr(settings, "lease_sweep_interval_s", 600)
+
+    worker.sweep_expired_leases()
+    worker.sweep_expired_leases()
+    worker.sweep_expired_leases()
+    assert len(calls) == 1, "swept more than once inside the interval"
+
+    # Far enough on, and it runs again.
+    monkeypatch.setattr(worker, "_last_sweep", float("-inf"))
+    worker.sweep_expired_leases()
+    assert len(calls) == 2

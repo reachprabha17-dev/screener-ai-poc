@@ -223,6 +223,29 @@ class Settings(BaseSettings):
     worker_poll_interval_s: int = 2
     heartbeat_interval_s: int = 15
     job_max_attempts: int = 3
+    # **The last-resort lease, and it is deliberately enormous.** Startup reclaim
+    # handles the ordinary crash; this covers the one case it cannot see, a job
+    # left `claimed` under a *different* name after a host rename or a changed
+    # `WORKER_ID`. Without it such a job stays claimed forever and — because
+    # `no_pending` counts `claimed` — the run never completes.
+    #
+    # Sized against the worst case a job can legitimately take, not the typical
+    # one: 60 s parsing (`parse_timeout_s`) plus up to two LLM calls, each of
+    # which retries `max_retries` times at `request_timeout_s` with backoff.
+    # That is roughly 30 minutes. Six hours leaves a 12x margin.
+    #
+    # The margin is the point. This is the one place a wall clock is consulted,
+    # and a clock that steps forward would expire live work — the failure the
+    # rest of 16.5 is built to avoid (an air-gapped box has no dependable NTP).
+    # A window this wide means a step would have to be measured in hours to do
+    # damage, and nothing here needs recovering quickly. Never shorten it toward
+    # the worst-case job time to make recovery faster; add a heartbeat instead,
+    # which is what a shorter lease actually requires.
+    job_lease_timeout_s: int = 6 * 60 * 60
+    # How often the sweep runs while the worker is idle. Measured on a monotonic
+    # clock, so the *scheduling* of the check is immune to the clock steps the
+    # check itself has to tolerate.
+    lease_sweep_interval_s: int = 600
     # `fast_lane_max_files` and `run_aging_hours` were removed with the fast lane
     # itself (17.3). Scheduling is strict FIFO by run creation: batch duration
     # was never the constraint, and shortest-job-first bought nothing against

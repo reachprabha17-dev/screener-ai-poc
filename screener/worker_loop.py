@@ -62,6 +62,10 @@ class Worker:
     _stopping: bool = False
     _rubrics: dict[str, tuple[Rubric, Run]] = field(default_factory=dict)
     _log: Any = field(default_factory=get_logger)
+    # Monotonic, not wall clock: this only decides *when to look*, and it must
+    # not be knocked about by the same clock steps the lease check has to
+    # tolerate. `-inf` so the first idle cycle always sweeps.
+    _last_sweep: float = float("-inf")
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -86,7 +90,13 @@ class Worker:
         """
         require_current_schema()
         self._warn_if_no_escalation_budget()
-        return self.service.reclaim_orphaned(self.worker_id)
+        recovered = self.service.reclaim_orphaned(self.worker_id)
+        # A rename or a changed WORKER_ID only takes effect at a restart, so a
+        # restart is exactly when a job stranded under the old name appears.
+        # Sweep here too rather than waiting out the first idle interval — the
+        # lease still has to have expired, so this reclaims nothing that is live.
+        self.sweep_expired_leases()
+        return recovered
 
     def _warn_if_no_escalation_budget(self) -> None:
         """Nag on every start while `escalation_budget` is unset (19.2).
@@ -110,9 +120,42 @@ class Worker:
         self.startup()
         while not self._stopping:
             if not self.run_once():
+                # Idle is the only safe moment to sweep: this worker holds no
+                # job, so there is nothing of its own for a sweep to disturb.
+                self.sweep_expired_leases()
                 # Nothing to do. Sleep in short slices so a stop signal is not
                 # left waiting out a full poll interval.
                 self._sleep_interruptibly(self.poll_interval_s)
+
+    def sweep_expired_leases(self) -> int:
+        """Reclaim jobs another worker has held past the lease, at most so often.
+
+        The backstop to startup reclaim (16.5). Startup handles a crash by name;
+        this handles the job with no name left to match — claimed as
+        `old-hostname` before a rename, which nothing will ever answer to again.
+        Without it that job stays `claimed`, and `no_pending` counts `claimed`,
+        so the run never completes.
+
+        **Rate-limited on a monotonic clock.** The idle loop turns over every
+        couple of seconds and this is a write; `time.monotonic()` decides when to
+        look, so the scheduling cannot be dragged around by the wall-clock steps
+        the lease comparison itself has to tolerate.
+
+        The query cannot touch this worker's own job — it excludes
+        `claimed_by = worker_id` — so calling it here is safe regardless of how
+        long anything has been running.
+        """
+        if time.monotonic() - self._last_sweep < settings.lease_sweep_interval_s:
+            return 0
+        self._last_sweep = time.monotonic()
+        recovered = self.service.reclaim_expired_leases(self.worker_id)
+        if recovered:
+            self._log.warning(
+                "lease_expired_reclaim",
+                jobs=recovered,
+                lease_seconds=settings.job_lease_timeout_s,
+            )
+        return recovered
 
     def run_once(self) -> bool:
         """Claim and process at most one job. True if work was done.

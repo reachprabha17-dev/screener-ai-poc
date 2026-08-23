@@ -384,6 +384,36 @@ def reclaim_orphaned(tx: Tx, worker_id: str) -> int:
     return cursor.rowcount or 0
 
 
+def reclaim_expired(tx: Tx, worker_id: str, cutoff: str) -> int:
+    """Reclaim jobs claimed by *another* worker before `cutoff` (16.5).
+
+    The lease sweep — the standard visibility-timeout pattern, and the
+    last-resort half of recovery. `reclaim_orphaned` handles a crash by name;
+    this handles the case that has no name to match on, where a job was claimed
+    as `old-hostname` and nothing will ever answer to that again.
+
+    **`claimed_by != ?` is a safety property, not a filter.** It makes the
+    statement structurally incapable of reclaiming the job the calling worker is
+    holding right now, however long that job has been running and whatever the
+    clock has done. Combined with the startup reclaim — which has already cleared
+    this worker's own strays before the loop begins — anything wearing this
+    worker's name is live work, and this cannot touch it.
+
+    `cutoff` is passed in rather than computed here so the caller owns the one
+    wall-clock reading involved, and tests can hand it an exact boundary.
+
+    `attempts` is deliberately **not** reset, for the same reason as
+    `reclaim_orphaned`: the previous life may have died *because of* this file,
+    and a crash loop that resets its own counter never hits the cap.
+    """
+    cursor = tx.execute(
+        "UPDATE jobs SET status = 'pending', claimed_by = NULL, claimed_at = NULL, "
+        "updated_at = ? WHERE status = 'claimed' AND claimed_by != ? AND claimed_at < ?",
+        (now().isoformat(), worker_id, cutoff),
+    )
+    return cursor.rowcount or 0
+
+
 def stalled_candidates(tx: Tx, worker_id: str) -> list[tuple[int, int]]:
     """`(job_id, heartbeat_seq)` for jobs claimed by *other* workers.
 
