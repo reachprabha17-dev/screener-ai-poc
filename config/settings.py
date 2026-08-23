@@ -235,7 +235,8 @@ class Settings(BaseSettings):
     db_path: str = "data/screener.db"
     # Used when `db_backend` is not sqlite. SQLAlchemy URL, e.g.
     # `postgresql+psycopg://user:pass@host:5432/screener`. Kept out of the
-    # repository: put it in `.env` as SCREENER_DB_URL, because it carries a
+    # repository: put it in `.env` as DB_URL (these settings carry no env
+    # prefix — the variable is the field name), because it carries a
     # password and `db_path` deliberately does not.
     db_url: str = ""
     # Connection pool, per process (12.3). `pool_size` is the number kept open;

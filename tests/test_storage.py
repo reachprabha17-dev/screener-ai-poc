@@ -54,6 +54,15 @@ from screener.storage.connection import (
 )
 from screener.storage.uow import UnitOfWork
 
+# These three read SQLite's own catalogue and planner (`PRAGMA`,
+# `EXPLAIN QUERY PLAN`, `pragma_index_list`). They assert real properties — the
+# per-connection PRAGMAs, and that the cache index is partial and actually used
+# — but they can only assert them in SQLite's dialect. The Postgres equivalents
+# live in `test_schema_parity.py`, which checks the same guarantees from the DDL.
+sqlite_only = pytest.mark.skipif(
+    settings.db_backend != "sqlite", reason="reads SQLite's catalogue/planner directly"
+)
+
 ACTOR = Actor(id="poc-operator", display_name="PoC Operator", roles=frozenset({"admin"}))
 
 
@@ -174,6 +183,7 @@ def candidate(*, flags: list[Flag] | None = None, score: float | None = 7.8) -> 
 # --- migrations as a startup gate --------------------------------------------
 
 
+@sqlite_only
 def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> None:
     path = tmp_path / "fresh.db"
 
@@ -272,6 +282,7 @@ def test_an_unmigrated_database_refuses_to_start(tmp_path: Path) -> None:
         require_current_schema(tmp_path / "empty.db")
 
 
+@sqlite_only
 def test_pragmas_are_set_per_connection(db: Path) -> None:
     """`foreign_keys` is OFF by default and is per-connection, not per-database.
 
@@ -386,6 +397,7 @@ def test_position_id_scoping_stops_verdicts_leaking_across_requisitions(
         assert results_store.get_cached(tx, key(position_id="p-other")) is None
 
 
+@sqlite_only
 def test_cache_lookup_uses_the_partial_index(uow: UnitOfWork) -> None:
     """Not a performance test — a correctness one.
 
@@ -406,6 +418,7 @@ def test_cache_lookup_uses_the_partial_index(uow: UnitOfWork) -> None:
     assert "SCAN" not in detail
 
 
+@sqlite_only
 def test_the_cache_index_is_declared_partial(uow: UnitOfWork) -> None:
     with uow as tx:
         rows = tx.execute("SELECT name, partial FROM pragma_index_list('candidates')").fetchall()

@@ -26,7 +26,7 @@ def seed_user(
     """
     tx.execute(
         "INSERT INTO users (id, display_name, roles_json, active, created_at) "
-        "VALUES (?, ?, ?, 1, ?) ON CONFLICT DO NOTHING",
+        "VALUES (?, ?, ?, TRUE, ?) ON CONFLICT DO NOTHING",
         (actor_id, display_name, json.dumps(list(roles)), now().isoformat()),
     )
 
