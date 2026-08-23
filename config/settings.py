@@ -20,7 +20,6 @@ them alone admits fabricated evidence.
 reuse is the largest remaining source of run-to-run variation (10.8).
 """
 
-import os
 import socket
 from pathlib import Path
 from typing import Any, Literal
@@ -203,14 +202,24 @@ class Settings(BaseSettings):
     web_dist_dir: str = "web/dist"
 
     # --- Worker (16) ---
-    # **Unique per process, not a constant.** Startup reclaim resets every job
-    # still `claimed` by this worker_id, on the reasoning that a process which
-    # has claimed nothing yet can only be seeing its own previous life. That
-    # holds exactly as long as the id is unique: two workers sharing `worker-1`
-    # would each reset the other's *in-flight* jobs at startup, and both would
-    # then judge the same resume. Override with WORKER_ID where a stable name
-    # matters (a systemd unit that must reclaim its own work across a restart).
-    worker_id: str = Field(default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}")
+    # **Stable across restarts, unique per worker.** Startup reclaim resets every
+    # job still `claimed` by this worker_id, on the reasoning that a process
+    # which has claimed nothing yet can only be seeing its own previous life
+    # (16.5). Both halves of that name matter, and they pull in opposite
+    # directions:
+    #
+    # *Stable*, or recovery never runs. This used to include `os.getpid()`, and
+    # the pid is reissued on every start — so a worker killed mid-job came back
+    # under a new name, found nothing claimed by it, and left the job `claimed`
+    # forever. `no_pending` counts `claimed`, so the phase never drained and the
+    # run never completed, silently. `Restart=on-failure` in the systemd unit
+    # means that restart is the one the deployment performs by itself.
+    #
+    # *Unique*, or two workers reset each other's in-flight jobs at startup and
+    # both judge the same resume. The hostname gives both properties for one
+    # worker per host, which is the deployed topology. **Set WORKER_ID
+    # explicitly before running a second worker on the same host.**
+    worker_id: str = Field(default_factory=socket.gethostname)
     worker_poll_interval_s: int = 2
     heartbeat_interval_s: int = 15
     job_max_attempts: int = 3

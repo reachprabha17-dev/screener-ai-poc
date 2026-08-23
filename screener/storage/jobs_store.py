@@ -390,6 +390,22 @@ def stalled_candidates(tx: Tx, worker_id: str) -> list[tuple[int, int]]:
     The multi-worker half of 16.5, unused while there is one worker. A reclaimer
     samples this twice across its own poll cycles and reclaims only where the
     sequence has not advanced — relative progress, never wall-clock age.
+
+    **Do not connect this without first making the worker heartbeat.** The
+    sample-twice test assumes `heartbeat_seq` advances while a job is being
+    worked on. It does not: nothing calls `heartbeat` today, so the sequence is
+    bumped once at claim and then stays put for the whole job. A healthy worker
+    thirty seconds into an inference call is therefore indistinguishable from a
+    dead one, and a reclaimer would hand the resume it is holding to a second
+    worker — duplicate inference, two results for one candidate, and a
+    `UNIQUE(file_sha256, run_id)` violation on save. That is a worse failure than
+    the stranding this is meant to prevent.
+
+    The precondition is `Worker` calling `service.heartbeat` on a timer *during*
+    `_process`, which needs a thread or a callback into the pipeline — neither of
+    which exists, and 16 is deliberate about the worker being single-threaded.
+    Until then, `reclaim_orphaned` on a stable `worker_id` is the whole recovery
+    mechanism, and it is sufficient for the one-worker deployment.
     """
     rows = tx.execute(
         "SELECT id, heartbeat_seq FROM jobs WHERE status = 'claimed' AND claimed_by != ?",

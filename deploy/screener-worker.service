@@ -19,6 +19,16 @@ WorkingDirectory=/opt/screener
 # across the boundary — it is a deliberate, documented, re-measured decision.
 Environment=OLLAMA_NUM_PARALLEL=1
 Environment=PYTHONUNBUFFERED=1
+
+# The name this worker reclaims its own jobs under after a crash (16.5). Set
+# here rather than left to the default so it is visible in the unit that also
+# sets `Restart=on-failure` — the two are related. It must not change between
+# restarts, or the jobs the previous life left `claimed` are never recovered and
+# the run never completes. `%H` is systemd's hostname specifier, matching the
+# application default; change it only to run a second worker on this host, and
+# then give each a distinct value.
+Environment=WORKER_ID=%H
+
 EnvironmentFile=-/opt/screener/.env
 
 ExecStart=/opt/screener/.venv/bin/python /opt/screener/worker.py

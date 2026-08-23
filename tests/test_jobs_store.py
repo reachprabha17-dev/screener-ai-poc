@@ -12,6 +12,7 @@ real `SIGKILL` against a real process, not by setting a column by hand.
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -512,19 +513,31 @@ def test_reclaim_leaves_other_workers_jobs_alone(uow: UnitOfWork) -> None:
         assert jobs_store.progress(tx, "run1").claimed == 1
 
 
-def test_the_default_worker_id_is_unique_per_process() -> None:
-    """The precondition the test above depends on.
+def test_the_default_worker_id_is_stable_and_not_a_shared_constant() -> None:
+    """The precondition the test above depends on, and it pulls both ways.
 
-    Reclaim being scoped to "this worker's own id" is only a safety property
-    while that id is unique. A shared constant default meant two workers each
-    reset the other's *in-flight* jobs at startup and then judged the same
-    resume — the scoping test would still pass, because both processes were
-    telling the truth about an id they wrongly shared.
+    Reclaim is scoped to "this worker's own id", which needs the id to be two
+    things at once. **Unique**, or two workers each reset the other's in-flight
+    jobs at startup and then judge the same resume — which is why a shared
+    constant like `worker-1` is wrong. **Stable across restarts**, or the reclaim
+    never matches anything and a job left `claimed` by a killed process is
+    stranded for good; `no_pending` counts `claimed`, so the phase never drains
+    and the run never completes.
+
+    This test used to assert the opposite of the second half — it required
+    `os.getpid()` to be *in* the id, which is what made every restart a new
+    identity and left crash recovery permanently inoperative. The hostname gives
+    both properties for one worker per host, which is the deployed topology; a
+    second worker on the same host must be given `WORKER_ID` explicitly.
     """
     from config.settings import Settings
 
-    assert Settings().worker_id != "worker-1", "a constant default is the bug"
-    assert str(os.getpid()) in Settings().worker_id
+    worker_id = Settings().worker_id
+    assert worker_id != "worker-1", "a constant default is the bug"
+    assert socket.gethostname() in worker_id
+    assert str(os.getpid()) not in worker_id, (
+        "the pid changes on every restart, so reclaim_orphaned would never match"
+    )
 
 
 def test_heartbeat_sequence_advances(uow: UnitOfWork) -> None:

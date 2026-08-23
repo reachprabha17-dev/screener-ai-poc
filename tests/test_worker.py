@@ -669,3 +669,138 @@ def test_an_unscoreable_candidate_is_never_verified(
 
     assert llm.judged == 1
     assert llm.verified == 0, "an unscoreable candidate reached the verifier"
+
+
+# --- the identity recovery depends on (16.5) --------------------------------
+
+WORKER_ID_CHILD = """
+import sys
+sys.path.insert(0, {repo!r})
+from config.settings import settings
+print(settings.worker_id)
+"""
+
+
+def _worker_id_of_a_fresh_process() -> str:
+    """The name a newly started worker would claim jobs under.
+
+    Read from a real child process, because the thing under test is precisely
+    what changes between one process and the next.
+    """
+    result = subprocess.run(  # noqa: S603 — fixed argv, test-local script
+        [sys.executable, "-c", WORKER_ID_CHILD.format(repo=str(Path.cwd()))],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_a_restarted_worker_answers_to_the_same_name() -> None:
+    """Startup reclaim recovers jobs `claimed` by *this* worker_id (16.5).
+
+    That is the whole recovery mechanism, and it rests on one assumption: the
+    name survives a restart. It did not. The default was
+    `f"{hostname}-{os.getpid()}"`, and the pid is reissued every start — so a
+    worker that died holding a job came back under a new name, found nothing
+    wearing the old one, and left the job `claimed` forever. `no_pending` counts
+    `claimed`, so the phase never drained and the run never completed. Silently.
+
+    `deploy/screener-worker.service` sets `Restart=on-failure`, so the restart
+    that triggers this is the one the deployment performs automatically.
+
+    The existing SIGKILL tests could not catch it: they pin `WORKER_ID` and hand
+    the same constant to the restarted worker, which proves the mechanism works
+    while stepping over the default that breaks its precondition.
+    """
+    first = _worker_id_of_a_fresh_process()
+    second = _worker_id_of_a_fresh_process()
+
+    assert first == second, (
+        f"a restarted worker calls itself {second!r} but its stranded jobs are "
+        f"claimed by {first!r} — reclaim_orphaned matches on this name and will "
+        "find nothing, leaving the run wedged"
+    )
+
+
+# A worker that only starts up and reports what it recovered. It takes its name
+# the way a deployment does — from `settings.worker_id` — rather than being
+# handed one, which is the whole point of the test below.
+RESTART_CHILD = """
+import sys
+sys.path.insert(0, {repo!r})
+sys.path.insert(0, {tests!r})
+
+from config.settings import settings
+settings.db_path = {db!r}
+settings.resumes_dir = {resumes!r}
+settings.min_free_disk_gb = 0
+
+from test_worker import FakeLLM, FakeParser
+from screener.pipeline import Deps
+from screener.service import ScreenerService
+from worker import Worker
+
+llm = FakeLLM()
+worker = Worker(
+    service=ScreenerService(llm=llm),
+    deps=Deps(parser=FakeParser(), llm=llm),
+    poll_interval_s=0.01,
+)
+print(worker.worker_id, flush=True)
+print(worker.startup(), flush=True)
+"""
+
+
+def test_a_restarted_worker_reclaims_the_job_its_previous_life_was_holding(
+    db: Path, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+) -> None:
+    """Crash recovery through a real restart, with no worker_id handed in.
+
+    `test_a_batch_killed_midway_resumes_without_redoing_work` pins `WORKER_ID`
+    and gives the restarted worker the same constant, so it proves the reclaim
+    *mechanism* while stepping over whether a real restart still answers to the
+    same name. It did not: the default carried `os.getpid()`, so the restarted
+    process searched for a name nothing wore and the job stayed `claimed` for
+    good. `no_pending` counts `claimed`, so the phase never drained and the run
+    never finished — silently, with `Restart=on-failure` performing exactly this
+    restart.
+
+    Set up as a crash rather than acted out as one: a job left `claimed` by the
+    name a fresh process reports is precisely what a killed worker leaves behind,
+    and asserting on it does not depend on winning a race against the kill.
+    """
+    seed_run(service, count=1)
+    previous_life = _worker_id_of_a_fresh_process()
+
+    with uow_factory() as tx:
+        claimed = jobs_store.claim_next(tx, previous_life)
+    assert claimed is not None, "expected a job to claim"
+
+    # A second process, with its own pid — the restart systemd performs.
+    result = subprocess.run(  # noqa: S603 — fixed argv, test-local script
+        [
+            sys.executable,
+            "-c",
+            RESTART_CHILD.format(
+                repo=str(Path.cwd()),
+                tests=str(Path.cwd() / "tests"),
+                db=str(db),
+                resumes=settings.resumes_dir,
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    restarted_as, reclaimed = result.stdout.split()
+
+    assert restarted_as == previous_life, (
+        "the restarted worker must answer to the same name, or reclaim matches nothing"
+    )
+    assert int(reclaimed) == 1, "the job the previous life was holding was not recovered"
+
+    with uow_factory() as tx:
+        assert jobs_store.progress(tx, claimed.run_id).pending == 1, (
+            "the stranded job should be back in the queue, not still claimed"
+        )
