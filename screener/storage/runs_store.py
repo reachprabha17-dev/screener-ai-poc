@@ -102,6 +102,28 @@ def get(tx: Tx, run_id: str) -> Run | None:
     return _to_record(row) if row else None
 
 
+def get_for_update(tx: Tx, run_id: str) -> Run | None:
+    """`get`, holding the row against other writers until this transaction ends.
+
+    **The replacement for what `BEGIN IMMEDIATE` used to provide.** Under SQLite a
+    single write reservation covered the whole database, so every read-then-write
+    in the service layer was serialised whether or not it asked to be. Postgres
+    locks rows, and read-committed lets two transactions read the same run, both
+    conclude the phase has drained, and both act on it.
+
+    Nothing is corrupted when that happens — the enqueue is idempotent and the
+    phase is set to the same value — but both write an `advance_phase` audit row,
+    so one transition appears twice in the record an auditor reads. Taking the
+    row here makes the second caller wait and then observe the state the first
+    one left, which is the state it should have been deciding against.
+
+    Scoped to a single run rather than a table lock: two runs advancing at the
+    same time is normal and must not serialise.
+    """
+    row = tx.execute("SELECT * FROM runs WHERE id = ? FOR UPDATE", (run_id,)).fetchone()
+    return _to_record(row) if row else None
+
+
 def set_status(tx: Tx, run_id: str, status: str) -> None:
     """Move a run's status, stamping the matching timestamp.
 
@@ -160,7 +182,7 @@ def list_all(tx: Tx) -> list[Run]:
     return [_to_record(row) for row in rows]
 
 
-def _to_record(row: Any) -> Run:  # noqa: ANN401 — sqlite3.Row
+def _to_record(row: Any) -> Run:  # noqa: ANN401 — a SQLAlchemy RowMapping
     return Run(
         id=row["id"],
         position_id=row["position_id"],

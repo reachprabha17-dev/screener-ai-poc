@@ -29,11 +29,14 @@ stores rather than a forwarding call.
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import cast
+
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from config.settings import settings
 from screener.core.rank import rank
@@ -73,7 +76,7 @@ from screener.storage import (
     rubrics_store,
     runs_store,
 )
-from screener.storage.connection import pending_migrations
+from screener.storage.connection import pending_migrations, redacted_url
 from screener.storage.connection import (
     require_current_schema as _require_current_schema,
 )
@@ -116,6 +119,30 @@ def require_current_schema() -> None:
     module constructs nothing, so the gate still runs before anything is wired.
     """
     _require_current_schema()
+
+
+@contextmanager
+def _conflict_if_taken(message: str) -> Iterator[None]:
+    """Turn a unique-constraint violation into a 409 rather than a 500.
+
+    **The backstop behind an explicit pre-check, not a replacement for it.** The
+    pre-checks below (`get_open_by_reference`, `latest_version`) still run: they
+    produce a message naming what clashed, and they catch the ordinary case.
+    What they cannot do is close the window between the check and the insert.
+
+    Under SQLite that window did not exist — `BEGIN IMMEDIATE` held a write
+    reservation across the whole database, so a check and its insert could not be
+    separated by anyone else's write. Postgres locks rows, and rows that do not
+    exist yet cannot be locked, so two transactions can both pass the same
+    pre-check and race to insert. The unique index still refuses the second, which
+    means nothing is corrupted — but it arrives as an unhandled `IntegrityError`,
+    and the person whose only mistake was having the page open while a colleague
+    saved gets a 500 instead of "someone else got there first".
+    """
+    try:
+        yield
+    except IntegrityError as err:
+        raise ConflictError(message) from err
 
 
 def _mark_stale_claims(criteria: list[Criterion], previous: Rubric | None) -> list[Criterion]:
@@ -206,7 +233,8 @@ class ScreenerService:
             # raw `IntegrityError`.
             if positions_store.get_open_by_reference(tx, reference) is not None:
                 raise ConflictError(f"a requisition with reference '{reference}' is already open")
-            positions_store.create(tx, position)
+            with _conflict_if_taken(f"a requisition with reference '{reference}' is already open"):
+                positions_store.create(tx, position)
             audit_store.append_for(
                 tx, actor, "create_position", "position", position.id, {"reference": reference}
             )
@@ -292,7 +320,7 @@ class ScreenerService:
         """JD → draft rubric. The one LLM call in this layer.
 
         **The LLM call happens outside the transaction.** It takes ~5 s, and
-        SQLite's write lock held for that long blocks the worker in another
+        A write lock held for that long blocks the worker in another
         process. The same discipline as the worker's claim → screen → save.
 
         The result is a *draft*: unapproved, and unusable for a run until a human
@@ -370,7 +398,10 @@ class ScreenerService:
                 criteria=_mark_stale_claims(criteria, previous),
                 created_by=actor.id,
             )
-            rubrics_store.create(tx, rubric)
+            with _conflict_if_taken(
+                "rubric was edited by someone else while this version was being saved"
+            ):
+                rubrics_store.create(tx, rubric)
             audit_store.append_for(
                 tx,
                 actor,
@@ -518,7 +549,12 @@ class ScreenerService:
         ranking computed over a set that changed underneath it describes nothing.
         """
         with self.uow_factory() as tx:
-            run = runs_store.get(tx, run_id)
+            # Locked: this reads the run's phase and writes it back, and it races
+            # the worker's `advance_phase_if_complete` over the same field. Two
+            # unlocked transactions can interleave so the rescan's `judge` is
+            # overwritten by a `done` decided before the new jobs existed —
+            # leaving files queued that nothing will ever claim.
+            run = runs_store.get_for_update(tx, run_id)
             if run is None:
                 raise NotFoundError(f"run {run_id}")
             added = jobs_store.snapshot_folder(tx, run_id, Path(run.folder))
@@ -852,8 +888,13 @@ class ScreenerService:
             self.record_decision(candidate_id, decision, reason, actor)
         return BulkDecisionResult(decided=applied, skipped=skipped)
 
-    def purge_candidate(self, file_sha256: str, actor: Actor) -> int:
-        """Erase a candidate everywhere. Returns how many files were removed.
+    def purge_candidate(self, file_sha256: str, actor: Actor) -> tuple[int, int]:
+        """Erase a candidate everywhere. Returns (rows erased, files removed).
+
+        **Both counts, because zero rows is a different outcome from zero files.**
+        A purge that matched no candidate at all used to be indistinguishable from
+        a successful one at the call site, which is how an erasure control ends up
+        reported as working while doing nothing.
 
         Database first, in one transaction; **files afterwards**. There is no
         rollback for `unlink`, so deleting inside the transaction would destroy
@@ -871,14 +912,14 @@ class ScreenerService:
         """
         paths = failure_paths_for(file_sha256)
         with self.uow_factory() as tx:
-            results_store.purge_candidate(tx, file_sha256)
+            erased = results_store.purge_candidate(tx, file_sha256)
             audit_store.append_for(
                 tx,
                 actor,
                 "purge_candidate",
                 "candidate",
                 file_sha256[:12],
-                {"failure_captures": len(paths)},
+                {"rows_erased": erased, "failure_captures": len(paths)},
             )
 
         removed = 0
@@ -889,7 +930,7 @@ class ScreenerService:
             except FileNotFoundError:
                 # Already gone. The database row is the record; the file is a copy.
                 continue
-        return removed
+        return erased, removed
 
     # --- worker-facing surface -----------------------------------------------
     #
@@ -1063,7 +1104,11 @@ class ScreenerService:
         verify, goes straight to `done`. There is no empty middle phase.
         """
         with self.uow_factory() as tx:
-            run = runs_store.get(tx, run_id)
+            # `get_for_update`, not `get`: this is a read-then-write over run
+            # state, and two workers reaching it together would each decide the
+            # phase had drained and each write an `advance_phase` audit row for
+            # one transition. See `runs_store.get_for_update`.
+            run = runs_store.get_for_update(tx, run_id)
             if run is None:
                 return None
 
@@ -1097,7 +1142,7 @@ class ScreenerService:
             if run.phase == "verify" and jobs_store.no_pending(tx, run_id, "verify"):
                 runs_store.set_phase(tx, run_id, "done")
                 # Unscoreable candidates never get a verify job queued at all
-                # (`enqueue_verify_jobs` is `scoreable = 1` only), so `no_pending`
+                # (`enqueue_verify_jobs` filters on `scoreable`), so `no_pending`
                 # on `verify` can be true while they still sit at the initial
                 # `verification_status='pending'`. Left alone that reads
                 # "not checked yet" forever, the same failure this call already
@@ -1116,11 +1161,15 @@ class ScreenerService:
         candidate.
         """
         with self.uow_factory() as tx:
+            # Locked first, then read: taking the run row before counting jobs is
+            # what makes "is it complete?" and "mark it complete" one decision
+            # rather than two, so a second worker cannot write a duplicate
+            # `complete_run` row for the same transition.
+            run = runs_store.get_for_update(tx, run_id)
+            if run is None or run.status in ("completed", "aborted", "failed"):
+                return False
             progress = jobs_store.progress(tx, run_id)
             if not progress.is_complete:
-                return False
-            run = runs_store.get(tx, run_id)
-            if run is None or run.status in ("completed", "aborted", "failed"):
                 return False
             if run.phase != "done":
                 # Phase 1 draining is not the run finishing. Completing here
@@ -1220,25 +1269,43 @@ class ScreenerService:
                     digest_ok = False
                     detail[label] = f"{model}: loaded weights differ from the configured pin"
 
+        # **Two questions, not one.** The database is a network service now, and
+        # an unreachable one used to surface here as `migrations_current=False`
+        # with a stringified connection error — which reads as "the schema is
+        # stale" to anyone scanning the field rather than the detail. The fixes
+        # are completely different and only one of them is urgent.
+        db_reachable = True
+        migrations_current = True
         try:
             outstanding = pending_migrations()
             migrations_current = not outstanding
             if outstanding:
                 detail["migrations"] = f"{len(outstanding)} pending"
+        except OperationalError as exc:
+            db_reachable = False
+            detail["database"] = f"{redacted_url()}: {str(exc)[:160]}"
         except Exception as exc:  # noqa: BLE001 — reporting, not control flow
             migrations_current = False
             detail["migrations"] = str(exc)[:200]
 
-        free_gb = _free_disk_gb(Path(settings.db_path).parent)
+        # The **local** filesystem: failure captures, logs, quarantined files.
+        # This used to measure the directory holding the SQLite file and so
+        # doubled as a database-growth gate; it no longer can, because the
+        # candidate text lives in Postgres on a volume this process may not be
+        # able to see. `db_reachable` above is what covers the database being in
+        # trouble; sizing its volume is an operational task, not this check.
+        free_gb = _free_disk_gb(Path(settings.log_dir).parent)
         disk_ok = free_gb >= settings.min_free_disk_gb
         if not disk_ok:
-            # Stored resume text grows the database fast; the worker stops
-            # claiming below this (18).
-            detail["disk"] = f"{free_gb:.1f} GB free, below {settings.min_free_disk_gb} GB"
+            # The worker stops claiming below this (18).
+            detail["disk"] = (
+                f"{free_gb:.1f} GB free on the local volume, below {settings.min_free_disk_gb} GB"
+            )
 
         return HealthReport(
-            ok=llm_reachable and migrations_current and disk_ok,
+            ok=llm_reachable and db_reachable and migrations_current and disk_ok,
             llm_reachable=llm_reachable,
+            db_reachable=db_reachable,
             model_digest_matches_pin=digest_ok,
             migrations_current=migrations_current,
             free_disk_gb=round(free_gb, 2),
@@ -1275,7 +1342,7 @@ class ScreenerService:
             return entries, total
 
     # Candidate events are one query each. A thousand of them against a local
-    # SQLite file is survivable but pointless; past this many the story is a
+    # local volume is survivable but pointless; past this many the story is a
     # summary of the run rather than a per-applicant record, and the reader is
     # told so. Exactness here wants one `entity_id IN (…)` query, not a bigger cap.
     CANDIDATE_EVENT_CAP = 200

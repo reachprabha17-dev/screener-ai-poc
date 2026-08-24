@@ -5,7 +5,15 @@
 # origin as the API, which is why the API needs no CORS and the browser has no
 # second host to be pointed at.
 Description=Screener API — control plane and reviewer interface (spec 15)
-After=network.target
+# **Postgres, not just the network.** The first thing this process does is the
+# migration gate, which now opens a connection rather than reading a local file.
+# With `After=network.target` alone a boot where Postgres is a few seconds behind
+# produces a process that exits and gets restarted by `Restart=on-failure`, and
+# the journal says "connection refused" rather than "not up yet". The app also
+# waits for the database itself (`connection.wait_for_database`); this is the
+# half that stops the loop from starting at all.
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
@@ -55,4 +63,4 @@ ReadWritePaths=/opt/screener/data
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.targetwha

@@ -113,7 +113,7 @@ def close(tx: Tx, position_id: str) -> None:
     )
 
 
-def _to_position(row: Any) -> Position:  # noqa: ANN401 — sqlite3.Row
+def _to_position(row: Any) -> Position:  # noqa: ANN401 — a SQLAlchemy RowMapping
     return Position(
         id=row["id"],
         reference=row["reference"],

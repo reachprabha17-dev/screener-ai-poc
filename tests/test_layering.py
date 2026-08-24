@@ -39,6 +39,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Modules that touch the outside world. `core/` may import none of them.
 IO_MODULES = (
     "sqlite3",
+    "psycopg",
+    "sqlalchemy",
     "socket",
     "subprocess",
     "requests",
@@ -367,7 +369,13 @@ def test_the_worker_owns_no_sql() -> None:
     """
     assert_forbidden(
         package_imports("screener/worker_loop.py", "worker.py"),
-        ("sqlite3", "screener.storage.results_store", "screener.storage.jobs_store"),
+        (
+            "sqlite3",
+            "psycopg",
+            "sqlalchemy",
+            "screener.storage.results_store",
+            "screener.storage.jobs_store",
+        ),
     )
 
 

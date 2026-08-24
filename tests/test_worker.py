@@ -18,18 +18,18 @@ import os
 import signal
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import child_env
 
 from config.settings import settings
 from screener.models import Actor, EscalationReason, Flag, ParsedResume, ParseResult
 from screener.pipeline import Deps
 from screener.service import ScreenerService
 from screener.storage import jobs_store, results_store
-from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
 from worker import Worker
 
@@ -124,22 +124,10 @@ class FakeParser:
         )
 
 
-@pytest.fixture
-def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    monkeypatch.setattr(settings, "db_path", str(path))
+@pytest.fixture(autouse=True)
+def _workspace(db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local paths per test; the database comes from `conftest.db` (one schema)."""
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
-    return path
-
-
-@pytest.fixture
-def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
-    connection = connect(db)
-    try:
-        yield lambda: UnitOfWork(connection)
-    finally:
-        connection.close()
 
 
 @pytest.fixture
@@ -473,7 +461,6 @@ sys.path.insert(0, {repo!r})
 sys.path.insert(0, {tests!r})
 
 from config.settings import settings
-settings.db_path = {db!r}
 settings.resumes_dir = {resumes!r}
 settings.min_free_disk_gb = 0
 
@@ -498,7 +485,7 @@ while worker.run_once():
 
 
 def test_a_batch_killed_midway_resumes_without_redoing_work(
-    db: Path, service: ScreenerService, worker: Worker, tmp_path: Path
+    db: str, service: ScreenerService, worker: Worker, tmp_path: Path
 ) -> None:
     """The gate, with a real SIGKILL against a real process.
 
@@ -512,12 +499,15 @@ def test_a_batch_killed_midway_resumes_without_redoing_work(
     script = KILL_CHILD.format(
         repo=str(Path.cwd()),
         tests=str(Path.cwd() / "tests"),
-        db=str(db),
         resumes=settings.resumes_dir,
         worker_id=WORKER_ID,
     )
     child = subprocess.Popen(  # noqa: S603 — fixed argv, test-local script
-        [sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=child_env(db),
     )
     try:
         assert child.stdout is not None
@@ -732,7 +722,6 @@ sys.path.insert(0, {repo!r})
 sys.path.insert(0, {tests!r})
 
 from config.settings import settings
-settings.db_path = {db!r}
 settings.resumes_dir = {resumes!r}
 settings.min_free_disk_gb = 0
 
@@ -753,7 +742,7 @@ print(worker.startup(), flush=True)
 
 
 def test_a_restarted_worker_reclaims_the_job_its_previous_life_was_holding(
-    db: Path, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
+    db: str, service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
     """Crash recovery through a real restart, with no worker_id handed in.
 
@@ -785,13 +774,13 @@ def test_a_restarted_worker_reclaims_the_job_its_previous_life_was_holding(
             RESTART_CHILD.format(
                 repo=str(Path.cwd()),
                 tests=str(Path.cwd() / "tests"),
-                db=str(db),
                 resumes=settings.resumes_dir,
             ),
         ],
         capture_output=True,
         text=True,
         check=True,
+        env=child_env(db),
     )
     restarted_as, reclaimed = result.stdout.split()
 
@@ -807,7 +796,7 @@ def test_a_restarted_worker_reclaims_the_job_its_previous_life_was_holding(
 
 
 def test_the_lease_sweep_is_rate_limited_on_a_monotonic_clock(
-    db: Path, service: ScreenerService, worker: Worker, monkeypatch: pytest.MonkeyPatch
+    db: str, service: ScreenerService, worker: Worker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The idle loop turns over every couple of seconds; the sweep is a write.
 

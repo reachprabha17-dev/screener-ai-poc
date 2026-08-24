@@ -31,13 +31,14 @@ from screener.storage.connection import engine
 def to_named(sql: str) -> tuple[str, int]:
     """Rewrite `?` placeholders as `:p0, :p1, …`. Returns the SQL and the count.
 
-    **Why this is not done in the stores.** `?` is SQLite's placeholder and
-    Postgres wants `%s`; SQLAlchemy will emit whichever the driver needs, but
-    only for a statement whose binds it can see — which means named ones. The
-    obvious fix is to rewrite all 73 statements by hand, and it does not work:
-    several are assembled at runtime (`",".join("?" for …)` in `results_store`
-    and `jobs_store`), so the placeholders do not exist until the query is
-    built. Translating here catches those too, in one tested place.
+    **Why this survives SQLite's removal.** psycopg wants `%s`, and SQLAlchemy
+    will emit whatever the driver needs — but only for a statement whose binds it
+    can see, which means named ones. Writing `%s` directly in the stores is worse
+    than `?`: it collides with Python formatting and with `LIKE '%…'`. The obvious
+    alternative, rewriting all 73 statements to named binds by hand, does not work
+    either — several are assembled at runtime (`",".join("?" for …)` in
+    `results_store` and `jobs_store`), so the placeholders do not exist until the
+    query is built. Translating here catches those too, in one tested place.
 
     Quoted regions are skipped. No statement in the repo currently contains a
     literal `?` inside quotes — this was checked — but a translator that would
@@ -66,9 +67,12 @@ class Cursor:
     """The little of a DBAPI cursor the stores actually use.
 
     Rows come back as SQLAlchemy `RowMapping`, which supports `row["column"]`,
-    `dict(row)` and `.keys()` exactly as `sqlite3.Row` did — so the ~105 lookups
-    across the stores did not have to change when the driver did. That is the
-    point of putting the seam here rather than in each store.
+    `dict(row)` and `.keys()` — so the ~105 lookups across the stores did not have
+    to change when the driver did. That is the point of putting the seam here
+    rather than in each store.
+
+    There is deliberately no `lastrowid`: it was SQLite's, and every insert that
+    needs its key back carries `RETURNING id` instead.
     """
 
     def __init__(self, result: Any) -> None:  # noqa: ANN401 — SQLAlchemy CursorResult
@@ -84,12 +88,6 @@ class Cursor:
     def rowcount(self) -> int:
         return int(self._result.rowcount)
 
-    @property
-    def lastrowid(self) -> int | None:
-        # SQLite-specific, and one of the few things that does not survive the
-        # move to Postgres: there the insert has to carry `RETURNING id`.
-        return self._result.lastrowid  # type: ignore[no-any-return]
-
 
 class Tx:
     """A connection inside an open transaction, handed to stores.
@@ -100,8 +98,7 @@ class Tx:
 
     Statements keep their `?` placeholders and are translated to named binds on
     the way through (`to_named`), so SQLAlchemy emits whatever paramstyle the
-    driver wants. That is what makes the same store code run on SQLite and
-    Postgres without a rewrite.
+    driver wants.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -136,7 +133,6 @@ class _EmptyResult:
     """Stands in for a result set nobody produced, so `executemany([])` is a no-op."""
 
     rowcount = 0
-    lastrowid = None
 
     def mappings(self) -> "_EmptyResult":
         return self
@@ -153,8 +149,8 @@ class UnitOfWork:
 
     Commits on clean exit, rolls back on any exception, and returns the
     connection to the pool either way. Re-entry is refused rather than silently
-    nested: SQLite has no nested transactions, so an inner `with` that appeared
-    to commit would actually be committing the outer one's partial work.
+    nested: an inner `with` that appeared to commit would actually be committing
+    the outer one's partial work.
     """
 
     def __init__(self, connection: Connection | None = None, *, read_only: bool = False) -> None:
@@ -167,30 +163,27 @@ class UnitOfWork:
         self._read_only = read_only
 
     def read_only(self) -> "UnitOfWork":
-        """A transaction that takes no write reservation.
+        """A transaction that declares it will not write, and is held to it.
 
-        `BEGIN DEFERRED` instead of `IMMEDIATE` on SQLite: it takes no lock up
-        front, so a poller using this cannot contend with the worker's writes
-        for the single write-reservation slot the way `run_status` did (12.2).
-        Safe only because nothing in the block may write — a write here would
-        upgrade to the write lock mid-transaction, which can itself fail after
-        work has already been done, exactly what `IMMEDIATE` avoids elsewhere.
+        `SET TRANSACTION READ ONLY`, which used to be `BEGIN DEFERRED` on SQLite.
+        The intent is the same — a status poller must not contend with the worker
+        — but the enforcement is not: `DEFERRED` was an assertion the caller made
+        and the database took on trust, silently upgrading to a write lock if the
+        block wrote after all. Postgres refuses the write instead, so a block that
+        quietly starts writing is now a loud failure in a test rather than a
+        lock-contention bug found in production.
         """
         return UnitOfWork(self._connection, read_only=True)
 
     def __enter__(self) -> Tx:
         if self._depth:
-            raise RuntimeError("UnitOfWork is not re-entrant; SQLite has no nested transactions")
+            raise RuntimeError("UnitOfWork is not re-entrant; nested transactions are not used")
         self._depth = 1
         if self._connection is None:
             self._connection = engine().connect()
-        # Read by the `begin` event in `connection.py`, which is the only thing
-        # that opens a SQLite transaction. Ignored by dialects that do not need
-        # to choose (Postgres opens its own).
-        self._connection = self._connection.execution_options(
-            begin_mode="DEFERRED" if self._read_only else "IMMEDIATE"
-        )
         self._transaction = self._connection.begin()
+        if self._read_only:
+            self._connection.exec_driver_sql("SET TRANSACTION READ ONLY")
         return Tx(self._connection)
 
     def __exit__(

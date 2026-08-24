@@ -13,7 +13,7 @@ transaction semantics are the behaviour under test, and none of them exist in a
 fake.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,6 @@ from screener.service import (
     ServiceError,
 )
 from screener.storage import audit_store, jobs_store, results_store, runs_store
-from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
 
 ACTOR = Actor(id="poc-operator", display_name="PoC Operator", roles=frozenset({"admin"}))
@@ -83,22 +82,14 @@ class FakeLLM:
         self.loaded = None
 
 
-@pytest.fixture
-def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    monkeypatch.setattr(settings, "db_path", str(path))
+@pytest.fixture(autouse=True)
+def _workspace(db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local paths per test; the database comes from `conftest.db` (one schema).
+
+    Requesting `db` is what truncates between tests — autouse so no test in this
+    file can accidentally run against the rows the previous one left.
+    """
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
-    return path
-
-
-@pytest.fixture
-def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
-    connection = connect(db)
-    try:
-        yield lambda: UnitOfWork(connection)
-    finally:
-        connection.close()
 
 
 @pytest.fixture
@@ -506,7 +497,7 @@ def test_a_run_of_only_cache_hits_reaches_done_instead_of_sticking_in_verify(
         tx.execute("UPDATE jobs SET status = 'done' WHERE run_id = ?", (run_id,))
         # Both scoreable candidates arrived pre-verified, as a cache hit would.
         tx.execute(
-            "UPDATE candidates SET verification_status = 'done' WHERE run_id = ? AND scoreable = 1",
+            "UPDATE candidates SET verification_status = 'done' WHERE run_id = ? AND scoreable",
             (run_id,),
         )
 
@@ -519,7 +510,7 @@ def test_a_run_of_only_cache_hits_reaches_done_instead_of_sticking_in_verify(
 def test_an_unscoreable_candidate_is_not_left_reading_not_verified_forever(
     service: ScreenerService, uow_factory: Callable[[], UnitOfWork]
 ) -> None:
-    """Regression. `enqueue_verify_jobs` only queues `scoreable = 1` candidates, so
+    """Regression. `enqueue_verify_jobs` only queues scoreable candidates, so
     an unscoreable one never gets a verify job at all. If the run's verify phase
     still drains — because every *scoreable* candidate arrived pre-verified, e.g.
     a cache hit — and the run reaches `done`, the unscoreable candidate must not
@@ -531,7 +522,7 @@ def test_an_unscoreable_candidate_is_not_left_reading_not_verified_forever(
     with uow_factory() as tx:
         tx.execute("UPDATE jobs SET status = 'done' WHERE run_id = ?", (run_id,))
         tx.execute(
-            "UPDATE candidates SET verification_status = 'done' WHERE run_id = ? AND scoreable = 1",
+            "UPDATE candidates SET verification_status = 'done' WHERE run_id = ? AND scoreable",
             (run_id,),
         )
 
@@ -560,7 +551,7 @@ def test_a_candidate_still_awaiting_verification_blocks_sign_off(
         assert pending.id is not None
         results_store.save_decision(tx, pending.id, "undecided", ACTOR.id, now())
         tx.execute(
-            "UPDATE candidates SET verification_status = 'pending', review_required = 0 "
+            "UPDATE candidates SET verification_status = 'pending', review_required = FALSE "
             "WHERE id = ?",
             (pending.id,),
         )
@@ -810,9 +801,13 @@ def test_create_position_with_an_open_taken_reference_is_a_clean_conflict_not_a_
     `idx_positions_open_reference` (0004) exists to prevent.
 
     Left unchecked, the second `create_position` reached the index as a raw
-    `sqlite3.IntegrityError`, which the API had no handler for and which
-    reached the browser as an unexplained 500. `ConflictError` is mapped to 409
-    with a message a reviewer can act on.
+    `IntegrityError`, which the API had no handler for and which reached the
+    browser as an unexplained 500. `ConflictError` is mapped to 409 with a
+    message a reviewer can act on.
+
+    The pre-check below is not the only guard any more: on Postgres two callers
+    can both pass it and race to insert, so `_conflict_if_taken` catches the
+    index's own refusal and maps that to 409 as well.
     """
     service.create_position(reference="REQ-1", title="t", jd_text=JD, actor=ACTOR)
 
@@ -1085,7 +1080,7 @@ def test_purge_removes_failure_captures_from_disk(
     )
     assert capture is not None and capture.exists()
 
-    removed = service.purge_candidate("sha-qualified", ACTOR)
+    _erased, removed = service.purge_candidate("sha-qualified", ACTOR)
 
     assert removed == 1
     assert not capture.exists()
@@ -1112,7 +1107,7 @@ def test_purge_succeeds_when_there_is_nothing_on_disk(
     """A healthy run writes no captures at all, and erasure still has to work."""
     _seed_run_with_candidates(service, uow_factory)
 
-    assert service.purge_candidate("sha-qualified", ACTOR) == 0
+    assert service.purge_candidate("sha-qualified", ACTOR) == (1, 0)
 
     with uow_factory() as tx:
         row = tx.execute(

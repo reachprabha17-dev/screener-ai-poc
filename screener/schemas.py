@@ -512,6 +512,7 @@ class HealthResponse(BaseModel):
 
     ok: bool
     llm_reachable: bool
+    db_reachable: bool
     model_digest_matches_pin: bool
     migrations_current: bool
     free_disk_gb: float

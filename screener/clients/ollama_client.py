@@ -99,7 +99,7 @@ class OllamaClient:
     def digest(self, model: str) -> str:
         """Digest of a model's weights, recorded against every decision.
 
-        Model tags are mutable: re-pulling `granite4.1:8b` can change the weights
+        Model tags are mutable: re-pulling `gemma4:12b` can change the weights
         underneath decisions already stored, which breaks both reproducibility
         and the audit record without changing anything visible.
 
@@ -142,10 +142,13 @@ class OllamaClient:
     def ensure_loaded(self, model: str) -> None:
         """Make `model` the resident one, unloading the other.
 
-        **Called once per phase, never per resume.** 12 GB of VRAM does not hold
-        `granite4.1:8b` (~5–6 GB) and `gemma4:12b` (~8 GB) at once, and swapping
-        per candidate costs a 10–20 s load each time — 2,000 loads on a 1,000-CV
-        run instead of two.
+        **Called once per phase, never per resume.** Judge and verifier are
+        consolidated to one model (`gemma4:12b`) for now, so this is currently a
+        no-op after the first call — see the rationale in `config/settings.py`.
+        Kept in place for when the two diverge again: 12 GB of VRAM would not
+        hold two distinct ~8 GB+ models at once, and swapping per candidate
+        costs a 10–20 s load each time — 2,000 loads on a 1,000-CV run instead
+        of two.
 
         Failures to unload are not fatal: Ollama evicts under memory pressure on
         its own, so the worst case is the load that follows being slower.

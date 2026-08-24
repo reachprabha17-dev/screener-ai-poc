@@ -24,7 +24,12 @@ dependencies = [
 # process; it has no Python dependencies because it is not a Python process.
 # Decision #11 used to be a rule about what `ui/` was allowed to import — the
 # thing it was protecting against no longer exists.
-dev = ["pytest", "pytest-cov", "hypothesis", "ruff", "mypy", "httpx"]
+# `pillow` is a *test fixture* dependency: `tests/fixtures_docs.py` generates the
+# scanned PDFs the OCR path is exercised against, rather than committing binaries
+# that no reviewer can read in a diff. It was undeclared, so a clean
+# `uv sync --extra dev` produced a tree that could not even collect three test
+# modules.
+dev = ["pytest", "pytest-cov", "hypothesis", "ruff", "mypy", "httpx", "pillow"]
 # Installed only where db_backend=postgres. psycopg 3 serves both SQLAlchemy
 # (postgresql+psycopg) and yoyo 9, so this is one driver rather than one per
 # tool — yoyo would otherwise fall back to its psycopg2 backend.

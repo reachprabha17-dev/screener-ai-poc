@@ -99,7 +99,7 @@ def hash_for(tx: Tx, rubric_id: str) -> str | None:
     return str(row["rubric_hash"]) if row else None
 
 
-def _to_rubric(row: Any) -> Rubric:  # noqa: ANN401 — sqlite3.Row
+def _to_rubric(row: Any) -> Rubric:  # noqa: ANN401 — a SQLAlchemy RowMapping
     return Rubric(
         id=row["id"],
         position_id=row["position_id"],

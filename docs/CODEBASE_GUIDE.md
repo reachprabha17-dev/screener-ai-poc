@@ -71,8 +71,10 @@ Everything runs on **one computer, inside the company network, with no internet
 access**. That one constraint chose most of the stack for us:
 
 * No internet means the AI model runs locally (Ollama), not through a cloud API.
-* One machine means a simple file-based database (SQLite), not a database
-  cluster.
+* One machine means one Postgres instance on that machine, not a cluster. It
+  started as SQLite — one file, no server, which suits a proof of concept — and
+  that was reversed. Read "Why Postgres, and why not SQLite" below before
+  assuming either choice was arbitrary.
 * A small internal audience originally meant a Python-based UI (Streamlit). That
   was reversed: the interface is now React, built once into static files that the
   API process serves. The build system is the cost; what it bought is a real
@@ -91,8 +93,10 @@ access**. That one constraint chose most of the stack for us:
 | **pydantic-settings** | Reads configuration from environment variables into a typed object | `config/settings.py` |
 | **FastAPI** | Web framework that serves the HTTP API | `screener/api/` |
 | **uvicorn** | The web server that runs FastAPI | `scripts/dev.sh`, `deploy/` |
-| **SQLite** | A database that is just a single file on disk | `screener/storage/` |
-| **yoyo-migrations** | Applies database schema changes in order | `storage/migrations/sqlite/` |
+| **PostgreSQL 18** | The database. A server, not a file | `screener/storage/` |
+| **SQLAlchemy Core** | Engine and connection pool. Not the ORM — the SQL is still written by hand | `storage/connection.py`, `storage/uow.py` |
+| **psycopg 3** | The Postgres driver, shared by SQLAlchemy and yoyo | declared in `pyproject.toml` |
+| **yoyo-migrations** | Applies database schema changes in order | `storage/migrations/postgres/` |
 | **Ollama** | Runs AI models locally on this machine | `clients/ollama_client.py` |
 | **React 19 + TypeScript** | The reviewer interface | `web/src/` |
 | **Vite** | Builds the interface into static files | `web/vite.config.ts` |
@@ -185,8 +189,8 @@ memorising:
 
 Skip: async endpoints (there are none here), WebSockets, background tasks.
 
-**5. How SQLite handles concurrent access (about half a day) — before working in
-`screener/storage/`**
+**5. How Postgres handles concurrent access (about half a day) — before working
+in `screener/storage/`**
 
 This is the least "framework-like" item on the list and the one people most
 often get wrong. Two separate programs write to this database: the web API and
@@ -194,20 +198,45 @@ the background worker.
 
 Learn:
 
-* **WAL mode** — a SQLite setting that allows one writer and many readers at the
-  same time, without readers ever being blocked.
-* **`busy_timeout`** — how long to wait when the database is locked instead of
-  failing immediately.
-* **`check_same_thread`** — SQLite connections belong to the thread that made
-  them. FastAPI runs handlers on a pool of threads, so a single shared
-  connection works fine in development and breaks under real traffic.
+* **Row-level locking, and `FOR UPDATE SKIP LOCKED`.** This is the single most
+  important item here. Postgres locks *rows*, not the database, so two writers
+  proceed in parallel unless they want the same row — which is what makes a
+  second worker possible at all, and also what makes claiming a job harder than
+  it looks. Read `jobs_store.claim_next` and its module docstring: the
+  history there is worth your time, because the obvious-looking version of that
+  statement handed the same job to two workers.
+* **`SELECT ... FOR UPDATE` for read-then-write.** Any sequence that reads state,
+  decides something, and writes it back needs the row held across both halves.
+  `runs_store.get_for_update` exists for exactly this, and the docstring says
+  which three callers need it and why.
+* **Read-committed isolation**, which is the default and is what makes the two
+  points above necessary. Two transactions can read the same row and both act on
+  what they read.
+* **The connection pool.** Handlers are synchronous and FastAPI runs them on a
+  threadpool, so connections move between threads. `pool_pre_ping` and
+  `pool_recycle` are there because a server-side idle timeout can close a
+  connection underneath you — a class of problem that does not exist with a
+  local file.
 * **Why a database transaction must never wrap an AI call.** An AI call takes
-  about 5 seconds. Holding the database's write lock for 5 seconds blocks the
-  other process completely. The worker's pattern is: claim job (transaction),
-  run the AI (no transaction), save result (transaction).
+  about 5 seconds. Holding locks for 5 seconds blocks the other process. The
+  worker's pattern is: claim job (transaction), run the AI (no transaction),
+  save result (transaction).
 
-Then read `storage/connection.py` and `storage/uow.py`. That's 250 lines
+Then read `storage/connection.py` and `storage/uow.py`. That's 300 lines
 containing all of the above.
+
+**Why Postgres, and why not SQLite.** SQLite was right for a proof of concept and
+the migration away from it is recent, so most of the sharp edges in this codebase
+are in that seam. The short version: SQLite's `BEGIN IMMEDIATE` takes a write
+reservation over the *whole database*, which made every read-then-write in the
+service layer serialisable for free. Nobody had to think about it, so nobody did
+— and when the backend changed, that guarantee vanished without a single line of
+the dependent code changing. Three bugs shipped through that gap, and the tests
+did not catch them because the tests were still running on SQLite.
+
+If you take one thing from this section: **the tests run against a real Postgres
+schema** (`tests/conftest.py` explains how), and that is not a convenience. It is
+the only check that actually works.
 
 yoyo-migrations takes another 20 minutes. A migration is a `.sql` file with a
 matching `.rollback.sql` file. One gotcha: yoyo reads one folder and does not
@@ -276,7 +305,7 @@ Honestly, `config/settings.py` is the best Ollama tutorial in this repository.
 Note that this app has *two separate log streams* and they are not
 interchangeable:
 
-* The **audit log** lives in SQLite. It records *who did what*: approvals,
+* The **audit log** is a table in Postgres. It records *who did what*: approvals,
   overrides, purges, sign-offs. It can only be appended to, enforced by a
   database trigger.
 * **`screener.jsonl`** is a rotating log file. It records *what the system did*:
@@ -299,12 +328,13 @@ files.
 
 People often expect these and they aren't here:
 
-* No React, no JavaScript, no npm, no frontend build step.
 * No Docker or Kubernetes.
-* No PostgreSQL, MySQL, or any database server.
-* **No ORM** (no SQLAlchemy, no Django ORM). The SQL is written by hand. Open
-  `storage/results_store.py` and you are looking at the actual queries.
-* No Celery, Redis, or message queue. The job queue is a table in SQLite.
+* **No ORM.** SQLAlchemy is here, but only its Core layer — an engine, a
+  connection pool, and `text()`. No models, no session, no relationships, no
+  lazy loading. Open `storage/results_store.py` and you are looking at the
+  actual queries.
+* No Celery, Redis, or message queue. The job queue is a table (`jobs`), and
+  `FOR UPDATE SKIP LOCKED` is what makes it one.
 * No LangChain or agent framework. Prompts are markdown files, and the model is
   called directly.
 * No cloud SDKs.
@@ -582,7 +612,7 @@ measured to pick it. `git grep -n "Measured"` finds them all.
 | `screener/intake/` | File checking, safe parsing, text cleaning |
 | `screener/llm/`, `screener/prompts/` | Prompts. Stored as files and hashed, not as strings in code |
 | `screener/clients/` | Ollama. The only place the AI is spoken to |
-| `screener/storage/` | SQLite, migrations, transactions, seven stores |
+| `screener/storage/` | Postgres, migrations, transactions, seven stores |
 | `screener/pipeline.py` | The two main functions: `judge_one` and `verify_one` |
 | `screener/service.py` | Transactions, audit records, permissions, preconditions |
 | `screener/schemas.py` | The HTTP contract, including role-based views |
@@ -598,15 +628,17 @@ measured to pick it. `git grep -n "Measured"` finds them all.
 
 ---
 
-## Part 7 — The two AI models
+## Part 7 — The AI model
 
-Phase 1 judges with `granite4.1:8b`. Phase 2 verifies with `gemma4:12b`. They
-are deliberately different models: a verifier trained on the same data as the
-judge would share its blind spots, and an agreement for the same wrong reason
-isn't a second opinion.
-
-They don't fit in 12 GB of video memory at the same time. That's why a run has
-two phases instead of interleaving the two models per CV.
+Both phases run on `gemma4:12b` — judge and verifier were consolidated to one
+model once `verify_scope` defaulted to `"none"` (see `config/settings.py`),
+since a verifier trained on the same data as the judge shares its blind spots
+anyway, and the two-model design's value came from a check that's now off by
+default. The two-phase structure and the `ensure_loaded`/`unload` swap
+mechanism remain in place — a run still has a judge phase and a verify phase —
+in case the models diverge again, at which point the original constraint
+returns: two distinct ~8 GB+ models don't both fit in 12 GB of video memory at
+once, which is why a run has two phases instead of interleaving models per CV.
 
 `OLLAMA_NUM_PARALLEL=1` is locked to 1 and it matters more than it looks. One
 slot means one request at a time, which makes Ollama's prompt caching
@@ -636,10 +668,14 @@ understand.
 
 Read this before reporting any of it as a bug.
 
-* **Microsoft SQL Server support.** The spec describes it. It doesn't exist. The
-  proof of concept runs on SQLite by decision. Several queries use SQLite-only
-  syntax, so porting is real work, not a config change. It's also blocked on
-  getting the Microsoft ODBC driver installed on a machine with no internet.
+* **Microsoft SQL Server support.** The spec describes it. It doesn't exist, and
+  the SQLite-to-Postgres move is the reason to be sceptical about how cheap it
+  would be: that was one backend to one other backend, with a Protocol seam
+  already in place, and it still shipped three silent dialect bugs. `ports.py`
+  names a storage seam, but nothing has ever gone through it — the move went
+  through `connection.py`. Treat a third backend as real work, not a config
+  value. It is also still blocked on getting the Microsoft ODBC driver onto a
+  machine with no internet.
 * **The verifier comparison hasn't been run.** `eval/compare_verifiers.py` exists
   and is tested, but producing the actual comparison needs a GPU and the
   labelled data set. Until then, verifying *every* criterion is a default rather
@@ -655,8 +691,21 @@ Read this before reporting any of it as a bug.
 * **Authentication is a stub.** The `X-Actor` and `X-Actor-Roles` HTTP headers
   are simply trusted. This is only acceptable because the API listens on
   localhost only. It must be replaced before anything external can reach it.
-  The good news: it's all behind one function (`get_actor`), so replacing it
-  means changing one file.
+  Replacing it *is* one function (`get_actor`) — the `actor` parameter is already
+  threaded through every signature, which is the expensive part.
+* **There is no authorization model, which is a separate gap from the one above.**
+  Roles gate what a response *contains* — an auditor sees more fields than a
+  recruiter — and nothing else. No write endpoint checks a role, so
+  `approve_rubric`, `record_decision`, `sign_off_run` and `purge_candidate` are
+  open to anyone who authenticates. One person can draft a rubric, approve it,
+  decide every candidate and sign off the run; the audit trail records that
+  faithfully, it just doesn't prevent it. Authenticating the caller gives you
+  identity, not permission — both are needed before an external listener exists.
+* **Backups are outside the erasure path.** `purge_candidate` clears the database
+  columns and the failure captures under `data/`, which was the whole story when
+  the database was a file in `data/`. It isn't any more: `pg_dump` output and WAL
+  archives hold full resume text, and nothing here reaches them. A retention and
+  encryption policy for those is an operational decision nobody has made yet.
 
 ---
 
@@ -672,15 +721,26 @@ That's the actual judgement the product makes, in about 600 lines.
 
 ## Part 11 — Check that you've understood it
 
-First, run the build checks. They take about 45 seconds and need no GPU and no
-database:
+First, set up. You need a Postgres you can reach and a `DB_URL` pointing at it —
+the suite creates a schema of its own inside that database, so it will not touch
+your working data, but it does need somewhere to put it:
+
+```bash
+uv sync --extra dev --extra postgres
+cp .env.example .env            # then set DB_URL
+.venv/bin/screener migrate      # apply the schema
+```
+
+Then run the build checks. They take about a minute and need no GPU:
 
 ```bash
 ./scripts/dev.sh check          # formatting, linting, type checking, tests
 ```
 
-That covers the reviewer interface too — prettier, eslint, tsc and vitest — when
-`web/node_modules` is present. It warns and skips them when it isn't, so a
+It refuses to start if the dev tools are missing or the database is unreachable,
+and names which — a gate that skips silently is not a gate. That covers the
+reviewer interface too — prettier, eslint, tsc and vitest — when
+`web/node_modules` is present. It warns and skips *those* when it isn't, so a
 backend change is never blocked by a machine with no Node on it.
 
 To see the interface itself:
@@ -714,5 +774,9 @@ Then try to answer these from the code. Every one has a definite answer.
    the shared value, and what did the previous approach cost?
 9. Someone submits a folder path of `../../etc`. Name every layer it passes
    through, and the one that rejects it.
+10. Two workers ask for a job at the same moment. What stops them getting the
+    same one, and what did the previous answer to that question get wrong?
+11. A purge runs against a `file_sha256` that does not exist. What does the
+    caller see, and why is that different from a purge that erased a row?
 
 If you can answer those, you can change this codebase safely.

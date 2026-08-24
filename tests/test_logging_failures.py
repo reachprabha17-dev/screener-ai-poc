@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 from helpers_storage import make_rubric_row
+from sqlalchemy import text
 
 from config.settings import settings
 from screener.logging import (
@@ -35,7 +36,7 @@ from screener.models import Actor, Candidate, Position, ScoredCriterion, now
 from screener.ports import CacheKey
 from screener.service import ScreenerService
 from screener.storage import positions_store, results_store, runs_store
-from screener.storage.connection import apply_migrations, connect
+from screener.storage.connection import engine
 from screener.storage.uow import UnitOfWork
 
 ACTOR = Actor(id="poc-operator", display_name="PoC Operator")
@@ -85,23 +86,17 @@ class FakeLLM:
 
 
 @pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(settings, "db_path", str(tmp_path / "screener.db"))
+def workspace(db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(settings, "failure_dir", str(tmp_path / "failures"))
     monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
     monkeypatch.setattr(settings, "capture_raw_on_failure", True)
-    apply_migrations(tmp_path / "screener.db")
     return tmp_path
 
 
 @pytest.fixture
 def uow_factory(workspace: Path) -> Iterator[Callable[[], UnitOfWork]]:
-    connection = connect(workspace / "screener.db")
-    try:
-        yield lambda: UnitOfWork(connection)
-    finally:
-        connection.close()
+    yield UnitOfWork
 
 
 @pytest.fixture
@@ -131,23 +126,29 @@ def everything_under(root: Path) -> str:
     )
 
 
-def everything_in(db: Path) -> str:
-    """Every text value in the database. The content search the gate runs."""
-    connection = connect(db)
-    try:
+def everything_in(_db: str) -> str:
+    """Every value in every table of the test schema. The content search the gate runs.
+
+    Deliberately catalogue-driven rather than a list of columns to check: the
+    point of this gate is to catch the column somebody adds and forgets to add to
+    `purge_candidate`, which a hand-maintained list would miss by construction.
+    """
+    with engine().connect() as connection:
         tables = [
-            r[0]
-            for r in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
+            row[0]
+            for row in connection.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")
+            )
+            if not row[0].startswith(("yoyo", "_yoyo"))
         ]
         return "".join(
             str(value)
             for table in tables
-            for row in connection.exec_driver_sql(f"SELECT * FROM {table}")  # noqa: S608 — table names from sqlite_master
+            # noqa: S608 — table names come from the catalogue, never from input
+            for row in connection.execute(text(f'SELECT * FROM "{table}"'))  # noqa: S608
             for value in row
             if value is not None
         )
-    finally:
-        connection.close()
 
 
 # --- failure capture ---------------------------------------------------------
@@ -227,9 +228,9 @@ def test_purge_leaves_no_copy_of_the_resume_anywhere(
     assert CANDIDATE_NAME in everything_in(db)
     assert CANDIDATE_NAME in everything_under(Path(settings.failure_dir))
 
-    removed = service.purge_candidate("sha-asha", ACTOR)
+    erased, removed = service.purge_candidate("sha-asha", ACTOR)
 
-    assert removed == 1
+    assert (erased, removed) == (1, 1)
     assert CANDIDATE_NAME not in everything_in(db)
     assert "asha.nair@example.com" not in everything_in(db)
     assert CANDIDATE_NAME not in everything_under(Path(settings.failure_dir))

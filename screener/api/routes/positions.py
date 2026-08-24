@@ -1,6 +1,6 @@
 """Requisitions and rubric drafting (spec 15.1).
 
-Handlers are `def`, not `async def`. `sqlite3` is synchronous, so FastAPI runs
+Handlers are `def`, not `async def`. The database driver is synchronous, so FastAPI runs
 these in its threadpool, which is correct. `async def` with a blocking database
 call inside blocks the event loop — the most common FastAPI mistake, producing
 something slower than the sync version while looking more sophisticated (15.3).

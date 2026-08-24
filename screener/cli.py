@@ -79,11 +79,13 @@ def migrate() -> None:
     Must live here: the API and the worker both refuse to start while migrations
     are outstanding, so the thing that resolves that cannot be either of them.
     """
-    from screener.storage.connection import apply_migrations, db_path
+    from screener.storage.connection import apply_migrations, redacted_url
 
     applied = apply_migrations()
     if applied:
-        typer.secho(f"Applied {len(applied)} migration(s) to {db_path()}", fg=typer.colors.GREEN)
+        typer.secho(
+            f"Applied {len(applied)} migration(s) to {redacted_url()}", fg=typer.colors.GREEN
+        )
         for name in applied:
             typer.echo(f"  {name}")
     else:
@@ -116,6 +118,7 @@ def health(json: Annotated[bool, typer.Option("--json")] = False) -> None:
         _emit(report.model_dump(), True)
     else:
         typer.echo(f"model     {'ok' if report.llm_reachable else 'UNREACHABLE'}")
+        typer.echo(f"database  {'ok' if report.db_reachable else 'UNREACHABLE'}")
         typer.echo(f"schema    {'current' if report.migrations_current else 'PENDING'}")
         typer.echo(f"disk      {report.free_disk_gb:.1f} GB free")
         typer.echo(f"version   {report.app_version}")
@@ -342,8 +345,21 @@ def purge(
     actor: ActorOption = settings.dev_actor_id,
 ) -> None:
     """Erase a candidate everywhere, trace files included (12.6)."""
-    removed = _service().purge_candidate(file_sha256, _actor(actor))
-    typer.secho(f"Purged. {removed} trace file(s) deleted.", fg=typer.colors.GREEN)
+    erased, removed = _service().purge_candidate(file_sha256, _actor(actor))
+    if not erased:
+        # Reported as a warning, not a success. "Purged." over a hash that matched
+        # nothing reads as a completed erasure, and someone acting on a deletion
+        # request would file it as done.
+        typer.secho(
+            f"No candidate matches {file_sha256[:12]}. Nothing was erased "
+            f"({removed} orphaned capture file(s) deleted).",
+            fg=typer.colors.YELLOW,
+        )
+        return
+    typer.secho(
+        f"Purged {erased} candidate row(s). {removed} capture file(s) deleted.",
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()

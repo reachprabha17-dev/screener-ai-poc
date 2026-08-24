@@ -4,21 +4,17 @@ The gate names four things: cache hit/miss across all 8 key fields, transient
 flags not cached, audit triggers rejecting UPDATE/DELETE, and override+audit
 atomicity. Each has its own section below.
 
-Every test runs against a real SQLite file with the real migration applied. An
-in-memory fake would prove nothing about the triggers, the partial index, or WAL
-— which is where all the behaviour under test actually lives.
+Every test runs against a real Postgres schema with the real migration applied.
+An in-memory fake would prove nothing about the triggers or the partial index —
+which is where all the behaviour under test actually lives.
 """
 
-import os
-import subprocess
-import sys
-from collections.abc import Iterator
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
-from sqlalchemy.exc import IntegrityError
-from yoyo.exceptions import LockTimeout
+from conftest import _schema_url
+from sqlalchemy import text
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 from config.settings import settings
 from screener.models import (
@@ -46,40 +42,15 @@ from screener.storage import (
 from screener.storage.connection import (
     MIGRATIONS_ROOT,
     PendingMigrationsError,
-    apply_migrations,
-    connect,
+    dispose_engine,
+    engine,
     migrations_dir,
     pending_migrations,
     require_current_schema,
 )
 from screener.storage.uow import UnitOfWork
 
-# These three read SQLite's own catalogue and planner (`PRAGMA`,
-# `EXPLAIN QUERY PLAN`, `pragma_index_list`). They assert real properties — the
-# per-connection PRAGMAs, and that the cache index is partial and actually used
-# — but they can only assert them in SQLite's dialect. The Postgres equivalents
-# live in `test_schema_parity.py`, which checks the same guarantees from the DDL.
-sqlite_only = pytest.mark.skipif(
-    settings.db_backend != "sqlite", reason="reads SQLite's catalogue/planner directly"
-)
-
 ACTOR = Actor(id="poc-operator", display_name="PoC Operator", roles=frozenset({"admin"}))
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> Iterator[Path]:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    yield path
-
-
-@pytest.fixture
-def uow(db: Path) -> Iterator[UnitOfWork]:
-    connection = connect(db)
-    try:
-        yield UnitOfWork(connection)
-    finally:
-        connection.close()
 
 
 def seed(uow: UnitOfWork) -> None:
@@ -183,76 +154,16 @@ def candidate(*, flags: list[Flag] | None = None, score: float | None = 7.8) -> 
 # --- migrations as a startup gate --------------------------------------------
 
 
-@sqlite_only
-def test_migrations_apply_and_then_report_nothing_pending(tmp_path: Path) -> None:
-    path = tmp_path / "fresh.db"
+def test_migrations_apply_and_then_report_nothing_pending(db: str) -> None:
+    """The schema the suite runs against is the one the migration produces.
 
-    assert apply_migrations(path) == [
-        "0001.initial-schema",
-        "0002.judge-digest-rename",
-        "0003.v6-schema",
-        "0004.position-reference-unique-while-open",
-        "0005.backfill-run-file-counts",
-        "0006.evidence-irrelevant-column",
-    ]
-    assert pending_migrations(path) == []
-    require_current_schema(path)
-
-
-def _dead_pid() -> int:
-    """A pid guaranteed to belong to no running process."""
-    child = subprocess.Popen([sys.executable, "-c", "pass"])  # noqa: S603
-    child.wait(timeout=10)
-    return child.pid
-
-
-def test_a_lock_row_left_by_a_dead_process_is_cleared_automatically(tmp_path: Path) -> None:
-    """Regression. `yoyo` acquires its advisory lock with a retrying connection
-    but releases it with a single unretried `DELETE`
-    (`DatabaseBackend._delete_lock_row`), over a connection that — unlike ours —
-    carries no `busy_timeout`. Api and worker each call `require_current_schema`
-    independently at their own startup, so two of those landing within the same
-    instant is enough for one release to hit "database is locked" and leave the
-    row behind — reporting a current schema as permanently pending until a
-    human runs `yoyo break-lock` by hand.
-
-    Self-healed here: the row is cleared the next time anything touches
-    migrations, as long as the pid that left it is provably no longer running.
+    A single migration, not a replay of the six SQLite ones: those carried the
+    history of a database that could not alter a constraint in place, and
+    replaying them would enshrine workarounds for a limitation this backend does
+    not have. `db` has already applied it, so this asserts the end state.
     """
-    path = tmp_path / "fresh.db"
-    apply_migrations(path)
-
-    with connect(path) as connection:
-        connection.exec_driver_sql(
-            "INSERT INTO yoyo_lock (locked, ctime, pid) VALUES (1, datetime('now'), ?)",
-            (_dead_pid(),),
-        )
-        connection.commit()
-
-    # Would raise LockTimeout without the self-heal.
-    assert pending_migrations(path) == []
-    require_current_schema(path)
-
-
-def test_a_lock_row_held_by_a_live_process_is_left_alone(tmp_path: Path) -> None:
-    """The other half: a lock genuinely in use must still block (12.1) — the
-    self-heal only clears rows nobody could possibly still be holding.
-    """
-    from screener.storage.connection import _backend  # noqa: PLC0415 — test-only reach-in
-
-    path = tmp_path / "fresh.db"
-    apply_migrations(path)
-
-    with connect(path) as connection:
-        connection.exec_driver_sql(
-            "INSERT INTO yoyo_lock (locked, ctime, pid) VALUES (1, datetime('now'), ?)",
-            (os.getpid(),),
-        )
-        connection.commit()
-
-    with pytest.raises(LockTimeout):
-        with _backend(path).lock(timeout=0.5):
-            pass
+    assert pending_migrations() == []
+    require_current_schema()
 
 
 def test_every_migration_lives_where_yoyo_will_read_it() -> None:
@@ -265,36 +176,37 @@ def test_every_migration_lives_where_yoyo_will_read_it() -> None:
     asks the same question of the same directory.
     """
     stray = sorted(p.name for p in MIGRATIONS_ROOT.glob("*.sql"))
-    assert stray == [], f"invisible to yoyo — move under migrations/<backend>/: {stray}"
+    assert stray == [], f"invisible to yoyo — move under migrations/postgres/: {stray}"
 
-    assert migrations_dir() == MIGRATIONS_ROOT / settings.db_backend
+    assert migrations_dir() == MIGRATIONS_ROOT / "postgres"
     assert sorted(p.name for p in migrations_dir().glob("*.sql"))
 
 
-def test_an_unmigrated_database_refuses_to_start(tmp_path: Path) -> None:
+def test_an_unmigrated_database_refuses_to_start() -> None:
     """A schema/code mismatch on candidate data is an integrity incident (12.1).
 
     Refusing beats warning, and refusing beats auto-migrating: applying a schema
     change as a side effect of process start runs it at an unplanned time on a
     database nobody has backed up.
     """
-    with pytest.raises(PendingMigrationsError, match="pending"):
-        require_current_schema(tmp_path / "empty.db")
+    schema = "screener_unmigrated_probe"
+    base = settings.db_url
+    with engine().connect() as connection:
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        connection.commit()
 
-
-@sqlite_only
-def test_pragmas_are_set_per_connection(db: Path) -> None:
-    """`foreign_keys` is OFF by default and is per-connection, not per-database.
-
-    A connection that forgets it silently accepts verdict rows pointing at
-    candidates that do not exist.
-    """
-    connection = connect(db)
+    settings.db_url = _schema_url(base, schema)
+    dispose_engine()
     try:
-        assert connection.exec_driver_sql("PRAGMA foreign_keys").fetchone()[0] == 1
-        assert connection.exec_driver_sql("PRAGMA journal_mode").fetchone()[0] == "wal"
+        with pytest.raises(PendingMigrationsError, match="pending"):
+            require_current_schema()
     finally:
-        connection.close()
+        settings.db_url = base
+        dispose_engine()
+        with engine().connect() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+            connection.commit()
 
 
 def test_foreign_keys_are_actually_enforced(uow: UnitOfWork) -> None:
@@ -397,34 +309,47 @@ def test_position_id_scoping_stops_verdicts_leaking_across_requisitions(
         assert results_store.get_cached(tx, key(position_id="p-other")) is None
 
 
-@sqlite_only
-def test_cache_lookup_uses_the_partial_index(uow: UnitOfWork) -> None:
-    """Not a performance test — a correctness one.
-
-    Transient rows are excluded by `WHERE cacheable = 1` *in the index itself*.
-    If the planner fell back to a table scan, exclusion would depend on the SQL
-    predicate alone, and the structural guarantee 12.5 describes would quietly
-    become an ordinary filter that a future query could omit.
-    """
-    where = " AND ".join(f"{column} = ?" for column in results_store._CACHE_COLUMNS)  # noqa: SLF001
-    with uow as tx:
-        plan = tx.execute(
-            f"EXPLAIN QUERY PLAN SELECT * FROM candidates WHERE {where} AND cacheable = 1",  # noqa: S608
-            tuple("x" for _ in results_store._CACHE_COLUMNS),  # noqa: SLF001
-        ).fetchall()
-
-    detail = " ".join(row["detail"] for row in plan)
-    assert "idx_cache" in detail
-    assert "SCAN" not in detail
-
-
-@sqlite_only
 def test_the_cache_index_is_declared_partial(uow: UnitOfWork) -> None:
-    with uow as tx:
-        rows = tx.execute("SELECT name, partial FROM pragma_index_list('candidates')").fetchall()
+    """The structural half of 12.5, read from Postgres' catalogue.
 
-    partial = {row["name"]: row["partial"] for row in rows}
-    assert partial["idx_cache"] == 1
+    `idx_cache` carries a `WHERE cacheable` predicate, so a non-cacheable row is
+    not merely filtered out of a cache lookup — it is not in the index at all. A
+    plain index here would leave exclusion depending on the SQL predicate alone,
+    which a future query could omit without anything failing.
+
+    This assertion used to live in `test_schema_parity.py`, which compared the two
+    backends' DDL as text because there was no Postgres to ask. There is now, so
+    it asks.
+    """
+    with uow as tx:
+        row = tx.execute(
+            "SELECT pg_get_expr(i.indpred, i.indrelid) AS predicate "
+            "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE c.relname = 'idx_cache'"
+        ).fetchone()
+
+    assert row is not None, "idx_cache is missing"
+    assert row["predicate"] == "cacheable", "idx_cache is no longer partial"
+
+
+def test_the_open_reference_index_is_unique_and_partial(uow: UnitOfWork) -> None:
+    """A reference is unique among *open* requisitions only (0004's whole point).
+
+    Both halves matter and they are separate columns in the catalogue: drop the
+    uniqueness and two open requisitions can share a folder; drop the predicate
+    and a closed requisition squats its reference forever.
+    """
+    with uow as tx:
+        row = tx.execute(
+            "SELECT i.indisunique AS is_unique, "
+            "pg_get_expr(i.indpred, i.indrelid) AS predicate "
+            "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE c.relname = 'idx_positions_open_reference'"
+        ).fetchone()
+
+    assert row is not None, "idx_positions_open_reference is missing"
+    assert row["is_unique"] is True
+    assert "open" in (row["predicate"] or "")
 
 
 # --- gate: transient flags are never cached ----------------------------------
@@ -486,13 +411,18 @@ def test_deterministic_failures_are_cacheable(uow: UnitOfWork, flag: Flag) -> No
 # --- gate: audit is append-only, enforced by the database --------------------
 
 
+# `DatabaseError`, not `IntegrityError`. The guarantee is that the write is
+# refused and says why; how the driver classifies a trigger's abort is its own
+# business, and the two backends disagree — SQLite's `RAISE(ABORT)` arrives as an
+# integrity violation, Postgres' `RAISE EXCEPTION` as a raised exception. Pinning
+# the narrower type tested the driver rather than the control.
 def test_audit_rows_cannot_be_updated(uow: UnitOfWork) -> None:
     """A convention survives exactly until someone writes a cleanup script."""
     seed(uow)
     with uow as tx:
         audit_store.append_for(tx, ACTOR, "override", "candidate", "1")
 
-    with pytest.raises(IntegrityError, match="append-only"), uow as tx:
+    with pytest.raises(DatabaseError, match="append-only"), uow as tx:
         tx.execute("UPDATE audit_log SET action = 'nothing happened'")
 
 
@@ -501,7 +431,7 @@ def test_audit_rows_cannot_be_deleted(uow: UnitOfWork) -> None:
     with uow as tx:
         audit_store.append_for(tx, ACTOR, "purge", "candidate", "1")
 
-    with pytest.raises(IntegrityError, match="append-only"), uow as tx:
+    with pytest.raises(DatabaseError, match="append-only"), uow as tx:
         tx.execute("DELETE FROM audit_log")
 
 

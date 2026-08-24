@@ -187,6 +187,19 @@ class Worker:
             self.service.finish_run_if_complete(run.id)
             return False
 
+        if self._stopping:
+            # SIGTERM landed between the claim and the first line of work, so
+            # nothing is being abandoned — this is still "finish the job in
+            # hand", there just isn't one yet.
+            #
+            # Handing it back matters because `TimeoutStopSec` is 120 s and a job
+            # may legitimately run for far longer: starting one now means systemd
+            # SIGKILLs us partway through, and the job is left `claimed` with an
+            # attempt already spent against `job_max_attempts`. A few restarts
+            # during a deploy would retire a file nothing is wrong with.
+            self.service.release_job(job)
+            return False
+
         bind_job(job.run_id, job.id, self.worker_id)
         started = time.monotonic()
         try:

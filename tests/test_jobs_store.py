@@ -16,37 +16,19 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 
-import pytest
+from conftest import child_env
 from helpers_storage import make_rubric_row
 
 from config.settings import settings
 from screener.models import Actor, Position, now
 from screener.storage import jobs_store, positions_store, runs_store
-from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
 
 ACTOR = Actor(id="poc-operator", display_name="PoC Operator", roles=frozenset({"admin"}))
 WORKER = "worker-1"
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    return path
-
-
-@pytest.fixture
-def uow(db: Path) -> Iterator[UnitOfWork]:
-    connection = connect(db)
-    try:
-        yield UnitOfWork(connection)
-    finally:
-        connection.close()
 
 
 def seed_run(
@@ -199,10 +181,12 @@ def test_claim_takes_exactly_one_job_and_marks_ownership(uow: UnitOfWork) -> Non
 
 
 def test_a_claimed_job_is_never_claimed_twice(uow: UnitOfWork) -> None:
-    """The property that makes double-processing impossible.
+    """Sequential claiming never repeats itself.
 
-    One statement — `UPDATE ... WHERE id = (SELECT ...) RETURNING` — so there is
-    no window between choosing a job and owning it.
+    Necessary but nowhere near sufficient — the real property is under
+    contention, which `test_concurrent_workers_never_claim_the_same_job` below
+    exercises with four processes. This one passed throughout the period when two
+    concurrent workers were being handed the same job.
     """
     seed_run(uow)
     add_jobs(uow, "run1", 5)
@@ -221,14 +205,12 @@ def test_a_claimed_job_is_never_claimed_twice(uow: UnitOfWork) -> None:
 
 
 CONCURRENT_CLAIMER = """
-import sys, pathlib, time
+import sys, time
 sys.path.insert(0, {repo!r})
-from screener.storage.connection import connect
 from screener.storage.uow import UnitOfWork
 from screener.storage import jobs_store
 
-conn = connect(pathlib.Path({db!r}))
-uow = UnitOfWork(conn)
+uow = UnitOfWork()
 
 # Start together, or the first process drains the queue before the others are
 # even running and the test measures nothing.
@@ -251,7 +233,7 @@ CONCURRENT_WORKERS = 4
 CONCURRENT_JOBS = 40
 
 
-def test_concurrent_workers_never_claim_the_same_job(db: Path, uow: UnitOfWork) -> None:
+def test_concurrent_workers_never_claim_the_same_job(db: str, uow: UnitOfWork) -> None:
     """Atomicity under real contention, not just in sequence.
 
     Sequential claiming proves nothing about atomicity — the failure this guards
@@ -266,7 +248,7 @@ def test_concurrent_workers_never_claim_the_same_job(db: Path, uow: UnitOfWork) 
     seed_run(uow)
     add_jobs(uow, "run1", CONCURRENT_JOBS)
 
-    script = CONCURRENT_CLAIMER.format(repo=str(Path.cwd()), db=str(db))
+    script = CONCURRENT_CLAIMER.format(repo=str(Path.cwd()))
     start_at = time.time() + 2.0
     workers = [
         subprocess.Popen(  # noqa: S603 — fixed argv, test-local script
@@ -274,6 +256,7 @@ def test_concurrent_workers_never_claim_the_same_job(db: Path, uow: UnitOfWork) 
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=child_env(db),
         )
         for n in range(CONCURRENT_WORKERS)
     ]
@@ -444,12 +427,10 @@ def test_completion_records_the_hash_read_at_claim_time(uow: UnitOfWork) -> None
 RECLAIM_CHILD = """
 import sys, time
 sys.path.insert(0, {repo!r})
-from screener.storage.connection import connect
 from screener.storage.uow import UnitOfWork
 from screener.storage import jobs_store
 
-conn = connect(__import__("pathlib").Path({db!r}))
-uow = UnitOfWork(conn)
+uow = UnitOfWork()
 with uow as tx:
     job = jobs_store.claim_next(tx, {worker!r})
 print(job.id, flush=True)
@@ -457,7 +438,7 @@ time.sleep(60)
 """
 
 
-def test_startup_reclaim_recovers_jobs_from_a_killed_worker(db: Path, uow: UnitOfWork) -> None:
+def test_startup_reclaim_recovers_jobs_from_a_killed_worker(db: str, uow: UnitOfWork) -> None:
     """The gate, with a real SIGKILL against a real process.
 
     A worker dying mid-job is not hypothetical — it is every deploy, every OOM,
@@ -471,11 +452,12 @@ def test_startup_reclaim_recovers_jobs_from_a_killed_worker(db: Path, uow: UnitO
     seed_run(uow)
     add_jobs(uow, "run1", 3)
 
-    script = RECLAIM_CHILD.format(repo=str(Path.cwd()), db=str(db), worker=WORKER)
+    script = RECLAIM_CHILD.format(repo=str(Path.cwd()), worker=WORKER)
     child = subprocess.Popen(  # noqa: S603 — fixed argv, test-local script
         [sys.executable, "-c", script],
         stdout=subprocess.PIPE,
         text=True,
+        env=child_env(db),
     )
     try:
         assert child.stdout is not None
@@ -532,7 +514,12 @@ def test_the_default_worker_id_is_stable_and_not_a_shared_constant() -> None:
     """
     from config.settings import Settings
 
-    worker_id = Settings().worker_id
+    # `_env_file=None` on purpose: this asserts the *code* default, and reading
+    # the developer's `.env` would test whatever that happens to say instead. It
+    # says `WORKER_ID=worker-1` on this machine, which is the very constant the
+    # assertion below rejects — so without this the test fails on the one thing
+    # it is not about.
+    worker_id = Settings(_env_file=None).worker_id
     assert worker_id != "worker-1", "a constant default is the bug"
     assert socket.gethostname() in worker_id
     assert str(os.getpid()) not in worker_id, (

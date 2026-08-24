@@ -6,12 +6,22 @@ and this module is the seam if that ever changes (22.2).
 
 Three things here are subtler than they look.
 
-**The claim is one statement.** `UPDATE ... WHERE id = (SELECT ...) RETURNING *`
-runs atomically inside the transaction, so there is no window between choosing a
-job and owning it. A SELECT-then-UPDATE would work today — one worker, and
-`BEGIN IMMEDIATE` holds the write lock — but it would be a latent double-claim
-the day a second worker starts, and that failure hands the same candidate to two
-workers and writes the result twice.
+**The claim takes a row lock, and the single statement is not what makes it
+safe.** This file used to argue that `UPDATE ... WHERE id = (SELECT ...)
+RETURNING` was atomic on its own. It never was. Under SQLite that claim held for
+an unrelated reason — `BEGIN IMMEDIATE` serialises writers across the whole
+database, so no two claims could overlap in the first place. Postgres locks rows,
+not databases, and there the same statement hands **the same job to two workers**:
+the second blocks on the row lock, re-qualifies through EvalPlanQual, and returns
+the id the first one just took. Measured, with the concurrency test in
+`tests/test_jobs_store.py`: four workers, forty jobs, job 1 claimed three times.
+
+`FOR UPDATE SKIP LOCKED` is what actually provides the property. It makes a
+locked row invisible to the next claimer rather than something to wait for, so
+concurrent workers take *different* jobs instead of queueing for the same one.
+The failure it prevents is the expensive one: the same candidate screened twice,
+two results written, and a `UNIQUE(file_sha256, run_id)` violation aborting the
+batch mid-run.
 
 **Recovery is clock-free.** Absolute lease expiry was rejected because an
 air-gapped box has no NTP: a clock step either reclaims work that is still
@@ -204,6 +214,10 @@ def claim_next(tx: Tx, worker_id: str, phase: str = "judge") -> Job | None:
     ~5 s of GPU each (12.9) — and re-running a non-deterministic second opinion
     over settled candidates can change who is in the review queue on a rerun that
     was supposed to be a resumption.
+
+    **`FOR UPDATE SKIP LOCKED` is load-bearing**, not an optimisation — see the
+    module docstring. Removing it does not slow this down, it hands one job to
+    two workers.
     """
     timestamp = now().isoformat()
     placeholders = ",".join("?" for _ in _ACTIVE_RUN_STATUSES)
@@ -234,6 +248,7 @@ def claim_next(tx: Tx, worker_id: str, phase: str = "judge") -> Job | None:
               {verify_where}
             ORDER BY r.created_at, j.id
             LIMIT 1
+            FOR UPDATE OF j SKIP LOCKED
         )
         RETURNING id, run_id, phase, file_path, file_sha256, candidate_id, attempts,
                   claimed_by, claimed_at
@@ -353,10 +368,15 @@ def release(tx: Tx, job_id: int) -> None:
     `attempts` is decremented because the claim incremented it and no attempt was
     actually made — otherwise a few clean restarts would exhaust the cap on a
     file nothing is wrong with.
+
+    `GREATEST`, not `MAX`. Two-argument `MAX` is a scalar function in SQLite and
+    an aggregate in Postgres, where this raised `function max(integer, integer)
+    does not exist` — silently, because nothing called this at all until the
+    worker's stop path was wired up.
     """
     tx.execute(
         "UPDATE jobs SET status = 'pending', claimed_by = NULL, claimed_at = NULL, "
-        "attempts = MAX(attempts - 1, 0), updated_at = ? WHERE id = ?",
+        "attempts = GREATEST(attempts - 1, 0), updated_at = ? WHERE id = ?",
         (now().isoformat(), job_id),
     )
 
@@ -585,7 +605,7 @@ def abort_run_jobs(tx: Tx, run_id: str) -> int:
     return cursor.rowcount or 0
 
 
-def _to_job(row: Any) -> Job:  # noqa: ANN401 — sqlite3.Row
+def _to_job(row: Any) -> Job:  # noqa: ANN401 — a SQLAlchemy RowMapping
     keys = row.keys()
     return Job(
         id=int(row["id"]),

@@ -799,6 +799,10 @@ class HealthReport(BaseModel):
 
     ok: bool
     llm_reachable: bool
+    # Separate from `migrations_current`: a database that cannot be reached is a
+    # different incident from one whose schema is behind, and reporting the first
+    # as the second sends an operator to look at migrations at 2am.
+    db_reachable: bool = True
     model_digest_matches_pin: bool
     migrations_current: bool
     free_disk_gb: float

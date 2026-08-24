@@ -10,7 +10,7 @@ network blip would be served back on resume as a permanent verdict, sidelining a
 real applicant forever behind something that looks like a legitimate result.
 
 `cacheable` is therefore computed from the flags and written as a column, and
-`idx_cache` is a **partial index** over `cacheable = 1`. Non-cacheable rows are
+`idx_cache` is a **partial index** over `WHERE cacheable`. Non-cacheable rows are
 stored for audit and shown to reviewers but are structurally invisible to
 lookup — enforced by the index rather than by a `WHERE` clause a future query
 could forget.
@@ -400,8 +400,8 @@ def find_duplicates(tx: Tx, run_id: str, file_sha256: str) -> int:
     return int(row["n"]) if row else 0
 
 
-def purge_candidate(tx: Tx, file_sha256: str) -> None:
-    """Erase candidate content everywhere in the database (12.10).
+def purge_candidate(tx: Tx, file_sha256: str) -> int:
+    """Erase candidate content everywhere in the database (12.10). Returns rows erased.
 
     Score, band, flags and decision survive as non-identifying statistics — a
     purged candidate should still be countable in an escalation rate without
@@ -417,19 +417,36 @@ def purge_candidate(tx: Tx, file_sha256: str) -> None:
     Files are the caller's job (`service.purge_candidate`): there is no rollback
     for `unlink`, so a store that deleted them would destroy data a later abort
     was supposed to keep.
+
+    **`cacheable` is bound as a Python `bool`, not `0`.** It is a real boolean
+    column, and `SET cacheable = 0` aborted the whole statement on Postgres with
+    a datatype mismatch — so nothing was erased at all, while the caller went on
+    to report a successful purge. That is the exact failure this docstring warns
+    about two paragraphs up, arriving through the type system rather than through
+    a forgotten column.
+
+    The row count is returned so the caller can say whether anything was actually
+    found. A purge that matched nothing and a purge that erased a candidate are
+    different outcomes, and reporting them identically is how an erasure that
+    quietly did nothing gets recorded as done.
     """
     tx.execute(
         "UPDATE verdicts SET evidence = NULL, absence_evidence = NULL "
         "WHERE candidate_id IN (SELECT id FROM candidates WHERE file_sha256 = ?)",
         (file_sha256,),
     )
-    tx.execute(
+    # `red_flags_json` belongs here with the rest: it is model-written prose
+    # *about the person*, derived from the resume, and leaving it behind left a
+    # narrative description of a purged candidate sitting beside their blanked
+    # row.
+    cursor = tx.execute(
         "UPDATE candidates SET filename = ?, summary = NULL, "
-        "notable_strengths_json = NULL, resume_text = NULL, sent_text = NULL, "
-        "sent_text_sha256 = NULL, redaction_map_json = NULL, cacheable = 0 "
-        "WHERE file_sha256 = ?",
-        (_REDACTED, file_sha256),
+        "notable_strengths_json = NULL, red_flags_json = NULL, resume_text = NULL, "
+        "sent_text = NULL, sent_text_sha256 = NULL, redaction_map_json = NULL, "
+        "cacheable = ? WHERE file_sha256 = ?",
+        (_REDACTED, False, file_sha256),
     )
+    return cursor.rowcount or 0
 
 
 # --- row mapping -------------------------------------------------------------
@@ -453,7 +470,7 @@ def _dump_blocks(blocks: list[MatchBlockModel]) -> str | None:
     return json.dumps([b.model_dump() for b in blocks]) if blocks else None
 
 
-def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — sqlite3.Row
+def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — a SQLAlchemy RowMapping
     verdict_rows = tx.execute(
         "SELECT criterion_id, verdict, model_verdict, evidence, verified, match_ratio, "
         "longest_span, match_blocks_json, negation_suspected, support, suggested_verdict, "

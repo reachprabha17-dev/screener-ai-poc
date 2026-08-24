@@ -129,7 +129,7 @@ def search(
     return [_row_to_dict(row) for row in rows], total
 
 
-def _row_to_dict(row: Any) -> dict[str, Any]:  # noqa: ANN401 — sqlite3.Row
+def _row_to_dict(row: Any) -> dict[str, Any]:  # noqa: ANN401 — a SQLAlchemy RowMapping
     detail = row["detail_json"]
     return {
         "ts": row["ts"],

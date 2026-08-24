@@ -1,5 +1,0 @@
--- Rollback for 0005.
---
--- No-op by design. This migration only ever replaces a wrong number with the
--- correct one derived from `jobs` — there is no prior state worth restoring,
--- and resetting every row back to 0 would only reintroduce the bug it fixed.

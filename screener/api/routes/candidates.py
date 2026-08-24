@@ -109,8 +109,13 @@ def purge_candidate(
 
     Kept unauthenticated-but-present in the PoC deliberately: it is what makes
     the data disposable, and it is cheap now and expensive to retrofit (21).
+
+    `count` is the number of candidate **rows** erased, not files removed. A
+    caller acting on a deletion request needs to know whether anything matched,
+    and a file count is zero on the healthy runs that never wrote a capture.
     """
-    return CountResponse(count=service.purge_candidate(file_sha256, actor))
+    erased, _files = service.purge_candidate(file_sha256, actor)
+    return CountResponse(count=erased)
 
 
 @router.get("/candidates/{candidate_id}/record", response_model=AdverseActionResponse)

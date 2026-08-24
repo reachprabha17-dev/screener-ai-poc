@@ -2,8 +2,10 @@
 Description=Screener worker — screens one resume at a time (spec 16.6)
 # The worker's first call is to Ollama; starting before it is up produces a
 # batch of LLM_ERROR flags that look like model problems.
-After=network.target ollama.service
-Wants=ollama.service
+# Postgres for the same reason as the API unit: the worker's `startup()` runs the
+# migration gate before it claims anything, and that is a network call now.
+After=network.target ollama.service postgresql.service
+Wants=ollama.service postgresql.service
 
 [Service]
 Type=simple
@@ -20,16 +22,21 @@ WorkingDirectory=/opt/screener
 Environment=OLLAMA_NUM_PARALLEL=1
 Environment=PYTHONUNBUFFERED=1
 
-# The name this worker reclaims its own jobs under after a crash (16.5). Set
-# here rather than left to the default so it is visible in the unit that also
-# sets `Restart=on-failure` — the two are related. It must not change between
-# restarts, or the jobs the previous life left `claimed` are never recovered and
-# the run never completes. `%H` is systemd's hostname specifier, matching the
-# application default; change it only to run a second worker on this host, and
-# then give each a distinct value.
-Environment=WORKER_ID=%H
-
 EnvironmentFile=-/opt/screener/.env
+
+# The name this worker reclaims its own jobs under after a crash (16.5). It must
+# not change between restarts, or the jobs the previous life left `claimed` are
+# never recovered and the run never completes; and it must differ between
+# workers, or two of them reset each other's in-flight jobs at startup.
+#
+# **After `EnvironmentFile=`, deliberately.** systemd applies these in order and
+# the last assignment wins, so with this above the file, a `WORKER_ID=worker-1`
+# left in `.env` silently overrode `%H` — handing every host on a shared `.env`
+# the same name, which is precisely the collision the uniqueness half exists to
+# prevent. `%H` is systemd's hostname specifier and matches the application
+# default. To run a second worker on this host, copy this unit and give each a
+# distinct value here.
+Environment=WORKER_ID=%H
 
 ExecStart=/opt/screener/.venv/bin/python /opt/screener/worker.py
 

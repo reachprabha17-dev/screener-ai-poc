@@ -2,7 +2,7 @@
 
 **Two streams, and they are not interchangeable.**
 
-`audit_log` (SQLite) records *who did what* — overrides, approvals, purges,
+`audit_log` (in Postgres) records *who did what* — overrides, approvals, purges,
 sign-off. Append-only, trigger-enforced, and readable by a human going through a
 decision months later.
 

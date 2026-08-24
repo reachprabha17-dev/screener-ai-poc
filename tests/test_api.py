@@ -31,8 +31,7 @@ from screener.models import Candidate, Flag, ScoredCriterion
 from screener.ports import CacheKey
 from screener.service import ScreenerService
 from screener.storage import results_store, runs_store
-from screener.storage.connection import apply_migrations, dispose_engine
-from screener.storage.uow import UnitOfWork, unit_of_work
+from screener.storage.uow import UnitOfWork
 
 JD = "Senior Backend Engineer. Required: 5+ years backend. Kubernetes essential."
 
@@ -76,26 +75,10 @@ class FakeLLM:
         self.loaded = None
 
 
-@pytest.fixture
-def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    monkeypatch.setattr(settings, "db_path", str(path))
+@pytest.fixture(autouse=True)
+def _workspace(db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local paths per test; the database comes from `conftest.db` (one schema)."""
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
-    return path
-
-
-@pytest.fixture
-def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
-    """Thread-local, exactly as production does it.
-
-    A single shared connection would fail the moment FastAPI dispatched a sync
-    handler onto its threadpool — `sqlite3` sets `check_same_thread=True` and a
-    connection cannot cross threads (12.3). Pinning one in the fixture would
-    test a topology the deployment never runs.
-    """
-    yield unit_of_work
-    dispose_engine()
 
 
 @pytest.fixture
@@ -567,7 +550,10 @@ def test_decision_and_purge(
 
     purge = client.delete("/candidates/sha-qualified")
     assert purge.status_code == 200
-    assert purge.json() == {"count": 0}  # no trace files existed
+    # Candidate rows erased, not files removed. A healthy run writes no captures,
+    # so the file count is 0 on the successful path — reporting that as `count`
+    # made a purge that erased nothing look identical to one that worked.
+    assert purge.json() == {"count": 1}
 
 
 def test_a_decision_without_a_reason_is_rejected(
@@ -762,7 +748,7 @@ def test_every_mutating_route_requires_an_actor() -> None:
 
 
 def test_no_handler_is_async() -> None:
-    """`sqlite3` is synchronous.
+    """The database driver is synchronous.
 
     `async def` with a blocking database call inside blocks the event loop and
     produces something slower than the sync version while looking more

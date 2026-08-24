@@ -1,41 +1,22 @@
 """Audit log search (spec 15.4).
 
-**Runs against a throwaway database, like every other store test.** An earlier
-version of this file used `unit_of_work()` directly, which resolves
-`settings.db_path` — the real one. `audit_log` is append-only by database
-trigger, so those rows could never be cleaned up: each run added five permanent
-entries to the working database and the assertions had to be weakened to `>=` to
-tolerate the ones left by previous runs. Isolating the database is what lets the
-counts below be exact, which is the whole point of asserting on them.
+**Runs against a throwaway schema, like every other store test.** An earlier
+version of this file used `unit_of_work()` directly, which resolved the *real*
+database. `audit_log` is append-only by database trigger, so those rows could
+never be cleaned up: each run added five permanent entries to the working
+database and the assertions had to be weakened to `>=` to tolerate the ones left
+by previous runs. Isolating the schema is what lets the counts below be exact,
+which is the whole point of asserting on them.
+
+The `db` and `uow_factory` fixtures come from `conftest.py` — see its header for
+why `TRUNCATE` rather than `DELETE` is what resets these rows between tests.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-import pytest
-
-from config.settings import settings
 from screener.storage import audit_store
-from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
-
-
-@pytest.fixture
-def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    monkeypatch.setattr(settings, "db_path", str(path))
-    return path
-
-
-@pytest.fixture
-def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
-    connection = connect(db)
-    try:
-        yield lambda: UnitOfWork(connection)
-    finally:
-        connection.close()
 
 
 def test_search_filters_by_each_field(uow_factory: Callable[[], UnitOfWork]) -> None:

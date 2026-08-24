@@ -80,21 +80,30 @@ pid_of() {
   if kill -0 "$pid" 2>/dev/null; then echo "$pid"; else rm -f "$file"; return 1; fi
 }
 
-# `npm` on PATH is `/snap/bin/npm`, a `snap run` wrapper — observed on this
-# host to exit 0 while producing no output and starting nothing (a broken
-# snap confinement, not anything under our control). That failure is silent:
-# `start_ui` would wait the full 20s for a port that was never going to open
-# and blame Vite. Detected once, here, rather than on every invocation.
+# `npm` and `node` on PATH can be `/snap/bin/{npm,node}` — symlinks into
+# `snap run`, observed on this host to exit 0 while producing no output and
+# starting nothing (a broken snap confinement, not anything under our
+# control). Worse, it is intermittent: `npm -v` in the foreground can succeed
+# while the nohup'd `npm run dev` right after silently does nothing — so
+# trusting one working invocation is not enough, and `start_ui` would wait
+# the full 20s for a port that was never going to open and blame Vite.
+#
+# The fix is not "fall back to the real npm's path": that file's own
+# `#!/usr/bin/env node` shebang re-resolves `node` from PATH, hitting the
+# same broken wrapper. Instead, prepend the real node install's bin
+# directory to PATH — verified by running its `node` binary directly, which
+# bypasses `snap run` entirely — so every command for the rest of this
+# script (this one and the later nohup) resolves to working binaries.
 resolve_npm() {
   [[ -n "${NPM_BIN:-}" ]] && return
+  local real_bin=/snap/node/current/bin
+  if [[ -x "$real_bin/node" && -n "$("$real_bin/node" --version 2>/dev/null)" ]]; then
+    PATH="$real_bin:$PATH"
+  fi
   if [[ -n "$(npm -v 2>/dev/null)" ]]; then
     NPM_BIN=npm
   else
-    local fallback; fallback="$(echo /snap/node/current/bin/npm)"
-    [[ -x "$fallback" && -n "$("$fallback" -v 2>/dev/null)" ]] \
-      || die "npm is not working (checked PATH and $fallback) — is the node snap mid-refresh?"
-    NPM_BIN="$fallback"
-    warn "PATH's npm produced no output — using $NPM_BIN instead"
+    die "npm is not working (checked PATH, prepending $real_bin) — is the node snap mid-refresh?"
   fi
 }
 
@@ -254,10 +263,40 @@ cmd_logs() {
   tail -f "$(log_file "$name")"
 }
 
+# The gate is only a gate if it can run. The dev tools live in an optional extra,
+# and a tree synced without it produced a bare "No such file or directory" from
+# the first line of cmd_check — which reads as a broken script rather than a
+# missing dependency. Five commits of database migration landed through that gap.
+require_tools() {
+  local missing=()
+  local tool
+  for tool in ruff mypy pytest; do
+    [[ -x "$VENV/$tool" ]] || missing+=("$tool")
+  done
+  (( ${#missing[@]} == 0 )) \
+    || die "missing dev tools: ${missing[*]} — run: uv sync --extra dev --extra postgres"
+}
+
+# The suite runs against a real Postgres, in a schema of its own (tests/conftest.py).
+# Checked once, here, so an unreachable database says so instead of surfacing as
+# forty connection errors from unrelated-looking tests.
+require_database() {
+  "$VENV/python" -c '
+from screener.storage.connection import engine, redacted_url
+try:
+    with engine().connect():
+        pass
+except Exception as exc:
+    raise SystemExit(f"{redacted_url()}: {exc}")
+' || die "cannot reach the database — is Postgres running, and is DB_URL set in .env?"
+}
+
 cmd_check() {
   # The same four gates the build order runs at every step (20), plus the three
   # the reviewer interface brings with it. Ordered cheapest-first so a formatting
   # slip does not cost a full test run.
+  require_tools
+  require_database
   "$VENV/ruff" format --check .
   "$VENV/ruff" check .
   # No path argument: a path overrides `files` in pyproject.toml, and `mypy .`

@@ -5,11 +5,11 @@ folders into jobs, and reports progress. **It never screens** — that is the
 worker, in another process, so that a 78-minute batch cannot make this
 unresponsive (2).
 
-**Handlers are `def`, not `async def`.** `sqlite3` is synchronous, so FastAPI
-runs them in its threadpool, which is correct and is why `connection.py` creates
-one connection per thread. Declaring `async def` and then making blocking calls
-inside would block the event loop and produce something slower than the sync
-version while looking more sophisticated (15.3).
+**Handlers are `def`, not `async def`.** The database driver is synchronous, so
+FastAPI runs them in its threadpool — which is correct, and is what the
+connection pool exists to serve. Declaring `async def` and then making blocking
+calls inside would block the event loop and produce something slower than the
+sync version while looking more sophisticated (15.3).
 
 **Migrations are a startup gate.** The app refuses to construct against a stale
 schema rather than serving requests that write rows half-matching the schema the

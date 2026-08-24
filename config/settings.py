@@ -9,7 +9,7 @@ which is indistinguishable downstream from a genuinely weak candidate.
 ``num_predict`` — left unset, output caps truncate the JSON mid-object and the
 failure surfaces as a schema error whose real cause is invisible.
 
-``judge_digest_pin`` — model tags are mutable. Re-pulling ``granite4.1:8b`` can
+``judge_digest_pin`` — model tags are mutable. Re-pulling ``gemma4:12b`` can
 change the weights underneath decisions already stored, breaking reproducibility
 and the audit record.
 
@@ -259,34 +259,31 @@ class Settings(BaseSettings):
     seconds_per_resume: float = 5.4
 
     # --- Storage / observability ---
-    # Selects the migration directory and, later, the SQL dialect (12.2). It is
-    # not cosmetic: migrations live one directory per backend because yoyo reads
-    # a single directory without recursing, so the wrong value here means every
-    # migration is silently skipped rather than failing loudly.
-    db_backend: Literal["sqlite", "postgres"] = "sqlite"
-    db_path: str = "data/screener.db"
-    # Used when `db_backend` is not sqlite. SQLAlchemy URL, e.g.
-    # `postgresql+psycopg://user:pass@host:5432/screener`. Kept out of the
-    # repository: put it in `.env` as DB_URL (these settings carry no env
-    # prefix — the variable is the field name), because it carries a
-    # password and `db_path` deliberately does not.
+    # **Postgres only.** `db_backend` and `db_path` are gone: SQLite was the
+    # proof-of-concept backend, and supporting both cost more than it saved —
+    # three dialect bugs shipped behind a portability check that could only ever
+    # catch the differences somebody had already thought of.
+    #
+    # SQLAlchemy URL, e.g. `postgresql+psycopg://user:pass@host:5432/screener`.
+    # Kept out of the repository and required at runtime: put it in `.env` as
+    # DB_URL (these settings carry no env prefix — the variable is the field
+    # name). There is deliberately no default, because a default that silently
+    # connects somewhere is worse than a startup that refuses to.
     db_url: str = ""
     # Connection pool, per process (12.3). `pool_size` is the number kept open;
     # `max_overflow` how many extra may be opened under burst before callers
     # queue. The API serves sync handlers from a threadpool, so the ceiling that
     # matters is threads-in-flight, not requests/second.
     #
-    # SQLite ignores the size in practice — it is one local file, and the real
-    # limit is its single writer — but the pool still bounds descriptors, which
-    # is what a hand-rolled thread-local cache failed to do (it leaked one
-    # connection per thread, forever, until the worker died `database is
-    # locked`).
+    # The pool also bounds descriptors, which is what the hand-rolled
+    # thread-local cache it replaced failed to do — that leaked one connection
+    # per thread, forever, until the process ran out.
     db_pool_size: int = 5
     db_max_overflow: int = 10
     # Seconds to wait for a free connection before failing rather than hanging.
     db_pool_timeout: int = 30
     # Recycle before a server-side idle timeout closes a connection underneath
-    # us. Irrelevant to SQLite; it is Postgres/pgbouncer that drops idle ones.
+    # us — Postgres and pgbouncer both drop idle connections.
     db_pool_recycle_s: int = 1800
     # Override per deployment via RESUMES_DIR in `.env` — point it at the mount
     # when the share is available. **Prefer an absolute path there:** a relative
@@ -301,8 +298,11 @@ class Settings(BaseSettings):
     capture_raw_on_failure: bool = True
     failure_dir: str = "data/failures"
     log_dir: str = "data/logs"
-    # Readiness gate. `resume_text` + `sent_text` add roughly 40 MB per 1,000-CV
-    # run to the database, so the floor still matters after traces are gone.
+    # Readiness gate on the **local** filesystem — failure captures, logs and
+    # quarantined files, all under `data/`. It no longer measures the database:
+    # `resume_text` and `sent_text` land in Postgres now, on a volume this
+    # process may not be able to see at all. Sizing that volume is an operational
+    # task, not something this gate can do; see `service.health`.
     min_free_disk_gb: int = 20
 
     @property

@@ -11,7 +11,7 @@ advances people who should not have. Those are different harms with different
 owners, and a single accuracy percentage conceals which one you have. The
 confusion matrix and the `strong`↔`none` count are the numbers to argue about.
 
-Run: `python -m eval.accuracy [--model granite4.1:8b]`
+Run: `python -m eval.accuracy [--model gemma4:12b]`
 """
 
 import argparse

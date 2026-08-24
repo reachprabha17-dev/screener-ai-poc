@@ -2,8 +2,11 @@
 
 Infrastructure is named here and implemented in ``clients/``, ``intake/`` and
 ``storage/``. Callers depend on these Protocols, never on a concrete class, so
-swapping Ollama for vLLM, xberg for another parser, or SQLite for Postgres means
-one new file satisfying a Protocol plus a config value.
+swapping Ollama for vLLM or xberg for another parser means one new file
+satisfying a Protocol plus a config value. The storage seam is named here for the
+same reason, though it is a statement of intent rather than an exercised one —
+the SQLite-to-Postgres move went through `connection.py`, not through a second
+adapter, and it is the two above that are genuinely swappable.
 
 **This is the portability mechanism**, and it is why no ORM is added for the same
 purpose (22.2) — adding an abstraction to achieve what an existing abstraction
@@ -128,7 +131,7 @@ class ResumeParser(Protocol):
 class Tx(Protocol):
     """An open transaction handed to stores. Stores never open one themselves.
 
-    The cursor type is deliberately implementation-defined: naming ``sqlite3``
+    The cursor type is deliberately implementation-defined: naming the driver
     here would couple the port to the adapter it exists to abstract away.
     """
 
@@ -162,11 +165,16 @@ class ResultsStore(Protocol):
 
     def save(self, tx: Tx, run_id: str, candidate: Candidate) -> None: ...
 
-    def purge_candidate(self, tx: Tx, file_sha256: str) -> None:
-        """Erase candidate content across every store, including trace files.
+    def purge_candidate(self, tx: Tx, file_sha256: str) -> int:
+        """Erase candidate content across every store. Returns rows erased.
 
-        The trace files are the step that is easy to forget and the one that
-        would make the whole control ineffective (12.6, 17).
+        The failure captures on disk are the step that is easy to forget and the
+        one that would make the whole control ineffective (12.6, 17); they are the
+        caller's half, because there is no rollback for `unlink`.
+
+        The count is part of the contract rather than a convenience: an erasure
+        that matched nothing has to be distinguishable from one that worked, or a
+        purge over a hash that no longer exists gets reported as done.
         """
         ...
 

@@ -7,7 +7,7 @@ becomes a ranked, banded, signed-off-able result — which is the whole product.
 Run with `pytest -m live`.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,6 @@ from screener.intake.sandbox import SandboxedParser
 from screener.models import Actor
 from screener.pipeline import Deps
 from screener.service import ScreenerService
-from screener.storage.connection import apply_migrations, connect
 from screener.storage.uow import UnitOfWork
 from worker import Worker
 
@@ -53,22 +52,14 @@ APPLICANTS = {
 }
 
 
-@pytest.fixture
-def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "screener.db"
-    apply_migrations(path)
-    monkeypatch.setattr(settings, "db_path", str(path))
+@pytest.fixture(autouse=True)
+def _workspace(db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local paths per test; the database comes from `conftest.db` (one schema).
+
+    Requesting `db` is what truncates between tests — autouse so no test in this
+    file can accidentally run against the rows the previous one left.
+    """
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
-    return path
-
-
-@pytest.fixture
-def uow_factory(db: Path) -> Iterator[Callable[[], UnitOfWork]]:
-    connection = connect(db)
-    try:
-        yield lambda: UnitOfWork(connection)
-    finally:
-        connection.close()
 
 
 @pytest.fixture

@@ -139,12 +139,12 @@ export function CandidateDetail({
         {[...candidate.criteria]
           .sort((a, b) => VERDICT_ORDER[a.verdict] - VERDICT_ORDER[b.verdict])
           .map((criterion) => (
-          <CriterionBlock
-            key={criterion.id}
-            criterion={criterion}
-            resumeText={candidate.resume_text}
-          />
-        ))}
+            <CriterionBlock
+              key={criterion.id}
+              criterion={criterion}
+              resumeText={candidate.resume_text}
+            />
+          ))}
       </section>
 
       <section className="border-t border-neutral-200 pt-4 dark:border-neutral-800">

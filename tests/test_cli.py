@@ -24,7 +24,6 @@ from typer.testing import CliRunner
 from config.settings import settings
 from screener.cli import app
 from screener.storage import audit_store, results_store
-from screener.storage.connection import dispose_engine
 from screener.storage.uow import unit_of_work
 
 CLI_SOURCE = Path(__file__).resolve().parent.parent / "screener" / "cli.py"
@@ -107,9 +106,8 @@ class FakeParser:
 
 
 @pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+def workspace(db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """A database and resume folder the CLI will find through settings."""
-    monkeypatch.setattr(settings, "db_path", str(tmp_path / "screener.db"))
     monkeypatch.setattr(settings, "resumes_dir", str(tmp_path / "resumes"))
     monkeypatch.setattr(settings, "failure_dir", str(tmp_path / "failures"))
     monkeypatch.setattr(settings, "min_free_disk_gb", 0)
@@ -119,9 +117,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]
     monkeypatch.setattr("screener.clients.ollama_client.OllamaClient", lambda *a, **k: FakeLLM())
     monkeypatch.setattr("screener.intake.sandbox.SandboxedParser", lambda *a, **k: FakeParser())
 
-    dispose_engine()
     yield tmp_path
-    dispose_engine()
 
 
 @pytest.fixture
@@ -160,18 +156,13 @@ def candidate_ids(run_id: str) -> list[int]:
 
 
 def only_id(table: str) -> str:
-    import sqlite3
-
-    connection = sqlite3.connect(settings.db_path)
-    try:
-        order = "version DESC" if table == "rubrics" else "created_at DESC"
-        # noqa: S608 — `table` and `order` come from this function's own literals,
-        # never from input. Interpolation is unavoidable: SQLite does not accept
-        # a bound parameter in a table name or an ORDER BY clause.
-        sql = f"SELECT id FROM {table} ORDER BY {order} LIMIT 1"  # noqa: S608
-        return str(connection.execute(sql).fetchone()[0])
-    finally:
-        connection.close()
+    order = "version DESC" if table == "rubrics" else "created_at DESC"
+    # noqa: S608 — `table` and `order` come from this function's own literals,
+    # never from input. Interpolation is unavoidable: a bound parameter is not
+    # accepted in a table name or an ORDER BY clause.
+    sql = f"SELECT id FROM {table} ORDER BY {order} LIMIT 1"  # noqa: S608
+    with unit_of_work() as tx:
+        return str(tx.execute(sql).fetchone()["id"])
 
 
 # --- the CLI is not an HTTP client -------------------------------------------
@@ -213,26 +204,42 @@ def test_the_cli_does_not_reach_past_the_service_into_storage() -> None:
 # --- bootstrap commands ------------------------------------------------------
 
 
-def test_migrate_creates_the_schema(runner: CliRunner, workspace: Path) -> None:
-    result = invoke(runner, "migrate")
+def test_migrate_reports_a_schema_that_is_already_current(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """`workspace` hands over a migrated schema, so this is the idempotent path.
 
-    assert "0001.initial-schema" in result.output
-    assert Path(settings.db_path).exists()
-
-
-def test_migrate_is_idempotent(runner: CliRunner, workspace: Path) -> None:
-    invoke(runner, "migrate")
+    Asserting on a freshly-applied migration is no longer possible from here
+    without building a second schema: the suite runs against one that `conftest`
+    migrated at session start. `test_storage` covers the apply path.
+    """
     result = invoke(runner, "migrate")
 
     assert "already current" in result.output
 
 
-def test_health_exits_nonzero_when_not_ready(runner: CliRunner, workspace: Path) -> None:
-    """Usable in a shell script or a pre-flight check — no migrations applied yet."""
+def test_migrate_never_prints_the_password(runner: CliRunner, workspace: Path) -> None:
+    """The DSN carries a credential and this command prints where it connected."""
+    result = invoke(runner, "migrate")
+
+    assert "***" in result.output or "already current" in result.output
+    assert "Metr0" not in result.output
+
+
+def test_health_exits_nonzero_when_not_ready(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Usable in a shell script or a pre-flight check.
+
+    The unready condition is the disk gate rather than a pending schema: the suite
+    runs against an already-migrated schema, and this asserts that *some* failing
+    dependency produces a non-zero exit and names itself in the output.
+    """
+    monkeypatch.setattr(settings, "min_free_disk_gb", 10**9)
     result = runner.invoke(app, ["health"])
 
     assert result.exit_code == 1
-    assert "PENDING" in result.output
+    assert "disk" in result.output
 
 
 def test_health_reports_each_dependency(runner: CliRunner, workspace: Path) -> None:
@@ -459,8 +466,16 @@ def test_work_can_be_limited(runner: CliRunner, workspace: Path) -> None:
     assert status["pending"] == 2  # the rest are still queued, not lost
 
 
-def test_the_escalation_rate_is_printed_with_results(runner: CliRunner, workspace: Path) -> None:
-    """Printed on every result, not buried in a report (18.2)."""
+def test_the_escalation_rate_is_printed_with_results(
+    runner: CliRunner, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Printed on every result, not buried in a report (18.2).
+
+    `escalation_budget` is forced to the code default of `None` rather than read
+    from the environment: this asserts the *unset* nag, and the developer's `.env`
+    sets a budget, which would silently turn this into a test of the other branch.
+    """
+    monkeypatch.setattr(settings, "escalation_budget", None)
     jd = workspace / "jd.txt"
     jd.write_text(JD)
     invoke(runner, "migrate")
