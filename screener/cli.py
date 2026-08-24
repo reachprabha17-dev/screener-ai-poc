@@ -282,23 +282,36 @@ def work(
     with different retry, reclaim, or completion semantics, discovered during an
     incident.
     """
-    from screener.worker_loop import build_worker
+    from screener.worker_loop import WorkerIdentityTakenError, build_worker
 
     worker = build_worker()
     if worker_id:
         worker.worker_id = worker_id
     worker.install_signal_handlers()
 
-    reclaimed = worker.startup()
+    try:
+        reclaimed = worker.startup()
+    except WorkerIdentityTakenError as err:
+        # The common way to hit this: running the break-glass path while the
+        # daemon is up. Both would answer to the same name, and this one's
+        # startup reclaim would take the running worker's job away mid-inference.
+        _fail(
+            f"{err}\n\nTry: ./scripts/dev.sh stop worker   (or: screener work --worker-id adhoc-1)"
+        )
+        return
+
     if reclaimed:
         typer.secho(f"Reclaimed {reclaimed} job(s) from a previous run.", fg=typer.colors.YELLOW)
 
     processed = 0
-    while worker.run_once():
-        processed += 1
-        typer.echo(f"  processed {processed}")
-        if limit and processed >= limit:
-            break
+    try:
+        while worker.run_once():
+            processed += 1
+            typer.echo(f"  processed {processed}")
+            if limit and processed >= limit:
+                break
+    finally:
+        worker.release()
 
     # Jobs, not resumes. A run is two passes over the same candidates (17.4),
     # so "6 resumes screened" for a folder of 3 would be wrong in the direction

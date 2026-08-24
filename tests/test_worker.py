@@ -18,7 +18,7 @@ import os
 import signal
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -141,13 +141,22 @@ def service(llm: FakeLLM, uow_factory: Callable[[], UnitOfWork]) -> ScreenerServ
 
 
 @pytest.fixture
-def worker(service: ScreenerService, llm: FakeLLM) -> Worker:
-    return Worker(
+def worker(service: ScreenerService, llm: FakeLLM) -> Iterator[Worker]:
+    """Released on teardown — the worker name is now an exclusive claim.
+
+    Without this the first test to call `startup()` would hold `WORKER_ID` for
+    the rest of the session and every later one would refuse to start, which is
+    the guard working exactly as intended against a fixture that has not been
+    told about it.
+    """
+    instance = Worker(
         service=service,
         deps=Deps(parser=FakeParser(), llm=llm),  # type: ignore[arg-type]
         worker_id=WORKER_ID,
         poll_interval_s=0.01,
     )
+    yield instance
+    instance.release()
 
 
 def pdf_bytes(marker: int) -> bytes:

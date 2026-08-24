@@ -44,7 +44,17 @@ from screener.models import Candidate, Rubric, Run
 from screener.pipeline import Deps, file_sha256, judge_one, verify_one
 from screener.ports import CacheKey, Job
 from screener.service import ScreenerService
-from screener.storage.connection import require_current_schema
+from screener.storage.connection import (
+    WorkerIdentityTakenError,
+    acquire_worker_identity,
+    release_worker_identity,
+    require_current_schema,
+)
+
+# Re-exported so callers catch this from the module whose `startup()` raises it,
+# rather than reaching into `storage` themselves — `cli.py` is held to that by
+# `test_the_cli_does_not_reach_past_the_service_into_storage`.
+__all__ = ["Worker", "WorkerIdentityTakenError", "build_worker", "main"]
 
 
 @dataclass
@@ -66,6 +76,9 @@ class Worker:
     # not be knocked about by the same clock steps the lease check has to
     # tolerate. `-inf` so the first idle cycle always sweeps.
     _last_sweep: float = float("-inf")
+    # The connection holding this worker's exclusive claim on its name. Held for
+    # the life of the process; the server releases it if the process dies.
+    _identity: Any = None
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -83,12 +96,21 @@ class Worker:
         signal.signal(signal.SIGINT, self.request_stop)
 
     def startup(self) -> int:
-        """Refuse to run against a stale schema, then reclaim my own orphans.
+        """Refuse to run against a stale schema or a taken name, then reclaim.
 
         Migrations are a gate, not a warning: a schema/code mismatch on a
         database of candidate decisions is an integrity incident (12.1).
+
+        **The name is claimed before anything is reclaimed, and the order is the
+        whole point.** `reclaim_orphaned` resets every job still `claimed` by
+        this worker_id, which is only sound if no *other* live worker answers to
+        it. Acquiring the identity first is what establishes that: if someone
+        else holds it, this process refuses to start rather than reclaiming a job
+        that is being worked on right now (16.5).
         """
         require_current_schema()
+        if self._identity is None:
+            self._identity = acquire_worker_identity(self.worker_id)
         self._warn_if_no_escalation_budget()
         recovered = self.service.reclaim_orphaned(self.worker_id)
         # A rename or a changed WORKER_ID only takes effect at a restart, so a
@@ -118,14 +140,27 @@ class Worker:
 
     def run_forever(self) -> None:
         self.startup()
-        while not self._stopping:
-            if not self.run_once():
-                # Idle is the only safe moment to sweep: this worker holds no
-                # job, so there is nothing of its own for a sweep to disturb.
-                self.sweep_expired_leases()
-                # Nothing to do. Sleep in short slices so a stop signal is not
-                # left waiting out a full poll interval.
-                self._sleep_interruptibly(self.poll_interval_s)
+        try:
+            while not self._stopping:
+                if not self.run_once():
+                    # Idle is the only safe moment to sweep: this worker holds no
+                    # job, so there is nothing of its own for a sweep to disturb.
+                    self.sweep_expired_leases()
+                    # Nothing to do. Sleep in short slices so a stop signal is not
+                    # left waiting out a full poll interval.
+                    self._sleep_interruptibly(self.poll_interval_s)
+        finally:
+            self.release()
+
+    def release(self) -> None:
+        """Give the name back on a clean exit.
+
+        Belt and braces: the server drops the lock when the connection goes,
+        which covers every unclean exit there is. This just means a restart does
+        not have to wait for the old session to be noticed.
+        """
+        release_worker_identity(self._identity)
+        self._identity = None
 
     def sweep_expired_leases(self) -> int:
         """Reclaim jobs another worker has held past the lease, at most so often.

@@ -19,12 +19,18 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from conftest import child_env
 from helpers_storage import make_rubric_row
 
 from config.settings import settings
 from screener.models import Actor, Position, now
 from screener.storage import jobs_store, positions_store, runs_store
+from screener.storage.connection import (
+    WorkerIdentityTakenError,
+    acquire_worker_identity,
+    release_worker_identity,
+)
 from screener.storage.uow import UnitOfWork
 
 ACTOR = Actor(id="poc-operator", display_name="PoC Operator", roles=frozenset({"admin"}))
@@ -493,6 +499,68 @@ def test_reclaim_leaves_other_workers_jobs_alone(uow: UnitOfWork) -> None:
     with uow as tx:
         assert jobs_store.reclaim_orphaned(tx, WORKER) == 0
         assert jobs_store.progress(tx, "run1").claimed == 1
+
+
+def test_a_second_worker_cannot_take_a_name_that_is_already_in_use(db: str) -> None:
+    """The guard that makes `reclaim_orphaned` safe (16.5).
+
+    Reclaim resets every job still `claimed` by this worker's name, reasoning
+    that a process which has claimed nothing yet can only be seeing its own
+    previous life. True only if the name belongs to one worker — and until this
+    existed, nothing checked. A shared name meant the newcomer's startup reclaimed
+    the *running* worker's in-flight job, and both screened the same resume.
+
+    Observed for real on the development host, where `.env` pinned
+    `WORKER_ID=worker-1` and a foreground `screener work` was started beside the
+    daemon.
+    """
+    first = acquire_worker_identity("collision-probe")
+    try:
+        with pytest.raises(WorkerIdentityTakenError, match="collision-probe"):
+            acquire_worker_identity("collision-probe")
+
+        # A different name is unaffected — this is not a global lock on working.
+        other = acquire_worker_identity("collision-probe-2")
+        release_worker_identity(other)
+    finally:
+        release_worker_identity(first)
+
+    # Released, so a restart gets its name back.
+    again = acquire_worker_identity("collision-probe")
+    release_worker_identity(again)
+
+
+def test_a_killed_worker_does_not_keep_its_name(db: str) -> None:
+    """No timeout and no heartbeat: the server drops the lock with the connection.
+
+    This is why the guard suits 16.5 rather than fighting it. A lease would need
+    a clock, and an air-gapped box has no dependable one — but a dead process has
+    no connection, and that is a fact the database observes directly.
+    """
+    script = (
+        f"import sys; sys.path.insert(0, {str(Path.cwd())!r})\n"
+        "from screener.storage.connection import acquire_worker_identity\n"
+        # Bound, not discarded: dropping the connection closes it and hands the
+        # name straight back. This test caught that the first time it was written.
+        "_held = acquire_worker_identity('kill-probe')\n"
+        "print('held', flush=True)\n"
+        "import time; time.sleep(60)\n"
+    )
+    child = subprocess.Popen(  # noqa: S603 — fixed argv, test-local script
+        [sys.executable, "-c", script], stdout=subprocess.PIPE, text=True, env=child_env(db)
+    )
+    try:
+        assert child.stdout is not None
+        assert child.stdout.readline().strip() == "held"
+        with pytest.raises(WorkerIdentityTakenError):
+            acquire_worker_identity("kill-probe")
+    finally:
+        os.kill(child.pid, signal.SIGKILL)
+        child.wait(timeout=10)
+
+    # The name is free the moment the process is gone, with no waiting.
+    recovered = acquire_worker_identity("kill-probe")
+    release_worker_identity(recovered)
 
 
 def test_the_default_worker_id_is_stable_and_not_a_shared_constant() -> None:

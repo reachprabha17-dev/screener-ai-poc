@@ -29,14 +29,15 @@ database holding candidate decisions is a data-integrity incident: the process
 refuses to start rather than writing rows that half-match the schema it expects.
 """
 
+import hashlib
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Connection, Engine, create_engine
+from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
@@ -65,6 +66,88 @@ class PendingMigrationsError(RuntimeError):
 
 class DatabaseUnavailableError(RuntimeError):
     """The database could not be reached. Distinct from a stale schema (12.1)."""
+
+
+class WorkerIdentityTakenError(RuntimeError):
+    """Another live worker already answers to this ``worker_id`` (16.5)."""
+
+
+def _identity_key(worker_id: str) -> int:
+    """A stable 64-bit key for `worker_id`, for Postgres' advisory lock space.
+
+    Hashed rather than enumerated so the key needs no registry and no migration:
+    the same name always produces the same key, on any host, forever.
+    """
+    digest = hashlib.blake2b(worker_id.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def acquire_worker_identity(worker_id: str) -> Connection:
+    """Claim exclusive use of `worker_id`, or refuse. Returns the holding connection.
+
+    **This turns 16.5's central assumption into something the database enforces.**
+    `reclaim_orphaned` resets every job still `claimed` by this worker's name, on
+    the reasoning that a process which has claimed nothing yet can only be seeing
+    its own previous life. That reasoning is airtight — provided the name belongs
+    to exactly one worker. Nothing checked that. It was a comment in
+    `config/settings.py` asking an operator not to get it wrong, and getting it
+    wrong is silent: the second worker's startup reclaims the first one's
+    *in-flight* job, both then screen the same resume, and two results are written
+    for one candidate.
+
+    That is not hypothetical. It happened on the development host, where `.env`
+    pinned `WORKER_ID=worker-1` and a foreground `screener work` was run beside
+    the daemon.
+
+    A **session-scoped advisory lock** is the right instrument because its
+    lifetime is exactly the thing being asked about. It is held by the connection,
+    so it survives commits — and it is released by the server the moment the
+    connection drops, whether that is a clean exit, a SIGKILL, or the machine
+    losing power. A worker that died is therefore not still holding its name, and
+    the restart that follows acquires it and reclaims normally. No timeout, no
+    heartbeat, and no clock — which matters here for the same reason it matters
+    everywhere else in 16.5.
+
+    The connection is dedicated and unpooled: a pooled one would be handed back
+    after the statement and take the lock with it.
+
+    **The caller must keep the returned connection alive for as long as it wants
+    the name.** Dropping it closes the session and releases the lock, so a caller
+    that ignores the return value gets no protection at all and no error saying
+    so. `Worker` keeps it on `self._identity` for the life of the process.
+    """
+    connection = connect()
+    try:
+        held = connection.execute(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": _identity_key(worker_id)}
+        ).scalar()
+        # Session locks outlive the transaction, so commit rather than sitting
+        # `idle in transaction` for the worker's entire life.
+        connection.commit()
+    except Exception:
+        connection.close()
+        raise
+
+    if not held:
+        connection.close()
+        raise WorkerIdentityTakenError(
+            f"another worker is already running as {worker_id!r}. Starting a second "
+            f"one under the same name would reclaim the first one's in-flight job "
+            f"and screen the same resume twice. Stop the running worker, or give "
+            f"this one its own name with WORKER_ID."
+        )
+    return connection
+
+
+def release_worker_identity(connection: Connection | None) -> None:
+    """Give the name back. Safe to call twice, and on a connection already gone."""
+    if connection is None:
+        return
+    # Suppressed rather than handled: this runs on the way out, and the lock is
+    # already gone in every case that could raise here — a connection that
+    # cannot be closed is one the server has stopped counting.
+    with suppress(Exception):
+        connection.close()  # ends the session, which releases the lock
 
 
 def redacted_url() -> str:
