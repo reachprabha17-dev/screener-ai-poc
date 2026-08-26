@@ -563,7 +563,9 @@ def test_a_killed_worker_does_not_keep_its_name(db: str) -> None:
     release_worker_identity(recovered)
 
 
-def test_the_default_worker_id_is_stable_and_not_a_shared_constant() -> None:
+def test_the_default_worker_id_is_stable_and_not_a_shared_constant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The precondition the test above depends on, and it pulls both ways.
 
     Reclaim is scoped to "this worker's own id", which needs the id to be two
@@ -582,11 +584,11 @@ def test_the_default_worker_id_is_stable_and_not_a_shared_constant() -> None:
     """
     from config.settings import Settings
 
-    # `_env_file=None` on purpose: this asserts the *code* default, and reading
-    # the developer's `.env` would test whatever that happens to say instead. It
-    # says `WORKER_ID=worker-1` on this machine, which is the very constant the
-    # assertion below rejects — so without this the test fails on the one thing
-    # it is not about.
+    # This asserts the *code* default, so both routes an operator could override
+    # it by have to be closed off: `_env_file=None` ignores `.env`, and the
+    # deleted variable ignores the name `conftest` gives the suite. Without them
+    # the test reports on whatever the environment happens to say instead.
+    monkeypatch.delenv("WORKER_ID", raising=False)
     worker_id = Settings(_env_file=None).worker_id
     assert worker_id != "worker-1", "a constant default is the bug"
     assert socket.gethostname() in worker_id

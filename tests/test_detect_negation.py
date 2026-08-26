@@ -135,3 +135,56 @@ def test_a_criterion_with_no_blocks_is_left_alone() -> None:
     result = detect_negation([criterion], "Any document at all.")
 
     assert result.criteria[0].negation_suspected is False
+
+
+# --- the window stops at a paragraph break -----------------------------------
+
+
+def test_a_marker_in_the_previous_bullet_does_not_reach_the_quote() -> None:
+    """Regression, from a real resume in a real run.
+
+    An extracted PDF is not prose. `Basic` — a weak marker — sat in an unrelated
+    skills bullet four tokens before the quote, separated from it by a blank line
+    and a section heading. A window that only counts tokens matched it anyway and
+    escalated a perfectly good piece of evidence about a railway apprenticeship.
+    """
+    document = (
+        "e Basic Computer Skills\n"
+        "\n"
+        "CERTIFICATION\n"
+        "\n"
+        "One year apprenticeship in Indian railway diesel locomotive workshop\n"
+    )
+    criterion = scored("One year apprenticeship in Indian railway diesel locomotive", document)
+
+    result = detect_negation([criterion], document)
+
+    assert result.criteria[0].negation_suspected is False
+    assert result.flags == []
+
+
+def test_a_denial_split_by_a_line_wrap_still_reaches_the_quote() -> None:
+    """The other direction, and the more expensive one to get wrong.
+
+    Extractors wrap mid-sentence, so a single newline inside one bullet must not
+    end the window — stopping there would let an inverted quote through as
+    support, which is the failure this whole module exists to catch. Only a blank
+    line ends it.
+    """
+    document = "Has no production\nexperience with Kubernetes."
+    criterion = scored("experience with Kubernetes", document)
+
+    result = detect_negation([criterion], document)
+
+    assert result.criteria[0].negation_suspected is True
+    assert result.flags == [Flag.NEGATION_SUSPECTED]
+
+
+def test_a_denial_in_the_same_bullet_is_still_flagged() -> None:
+    """The window narrowing must not weaken the ordinary case."""
+    document = "SKILLS\n\nHas no production Kubernetes experience to speak of.\n"
+    criterion = scored("production Kubernetes experience", document)
+
+    result = detect_negation([criterion], document)
+
+    assert result.criteria[0].negation_suspected is True

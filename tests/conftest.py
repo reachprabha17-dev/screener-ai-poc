@@ -50,6 +50,31 @@ def _schema_url(base: str, schema: str) -> str:
     return scoped.render_as_string(hide_password=False)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _test_worker_identity() -> Iterator[None]:
+    """Give the suite a worker name of its own.
+
+    A worker now claims its `worker_id` exclusively and refuses to start if
+    another live process holds it, which is what stops two workers reclaiming
+    each other's in-flight jobs. The default name is the hostname — so without
+    this, every test that starts a worker fails whenever the development daemon
+    happens to be running, and passes when it is not. Tests must not depend on
+    which services are up.
+
+    Set in the environment as well as on `settings`, because several tests drive
+    a real subprocess and it has to agree with the parent.
+    """
+    previous = os.environ.get("WORKER_ID")
+    name = f"screener-test-{os.getpid()}"
+    os.environ["WORKER_ID"] = name
+    settings.worker_id = name
+    yield
+    if previous is None:
+        os.environ.pop("WORKER_ID", None)
+    else:
+        os.environ["WORKER_ID"] = previous
+
+
 @pytest.fixture(scope="session")
 def db_url() -> Iterator[str]:
     """A migrated schema of this suite's own, torn down at the end of the run.

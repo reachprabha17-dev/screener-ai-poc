@@ -63,4 +63,4 @@ ReadWritePaths=/opt/screener/data
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
-WantedBy=multi-user.targetwha
+WantedBy=multi-user.target

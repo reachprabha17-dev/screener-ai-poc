@@ -19,6 +19,7 @@ is a `partial` dressed as a `strong`. Both routes end at the same place: a
 reviewer, not a penalty.
 """
 
+import re
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
@@ -73,6 +74,47 @@ def _is_marker(token: str, span: tuple[int, int], text: str) -> bool:
     return not (end < len(text) and text[end] == "-")
 
 
+# A blank line: the end of a bullet, a heading, or a section. Resumes reaching
+# this system are extracted from PDFs, so they are not prose — they are fragments
+# stacked with no sentence punctuation, and a token window counting backwards
+# sails straight through boundaries it cannot see.
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+
+
+def _window_start(index: int, span: int, offsets: list[tuple[int, int]], text: str) -> int:
+    """The earliest token the window may read, stopping at a paragraph break.
+
+    **Measured false positive this exists to stop.** A resume read:
+
+        e Basic Computer Skills
+
+        CERTIFICATION
+
+        One year apprenticeship in Indian railway diesel locomotive workshop
+
+    `Basic` is a weak marker and sat four tokens before the quote, so a plain
+    count-backwards window matched it — across a section heading, out of one
+    bullet and into another — and escalated a perfectly good piece of evidence.
+    The existing comment on `negation_window_tokens` already says six tokens was
+    chosen to avoid "reaching back into the previous bullet"; it just had no way
+    to tell where the previous bullet ended.
+
+    **A blank line, not any newline.** Extracted text wraps mid-sentence
+    constantly, and stopping at every line break would cut the window short of
+    negations that really do govern the quote — `"has no production\\nexperience
+    with Kubernetes"` is one item, split by the extractor. Missing a real
+    negation is the expensive direction: it lets an inverted quote through as
+    support. A spurious flag only costs a reviewer a glance, which is the trade
+    this whole module is built on.
+    """
+    floor = max(0, index - span)
+    for i in range(index - 1, floor - 1, -1):
+        gap = text[offsets[i][1] : offsets[i + 1][0]] if i + 1 < len(offsets) else ""
+        if _PARAGRAPH_BREAK.search(gap):
+            return i + 1
+    return floor
+
+
 def detect_negation(
     criteria: list[ScoredCriterion], sent_text: str, window: int | None = None
 ) -> NegationResult:
@@ -100,7 +142,7 @@ def detect_negation(
                 # The token index the block opens at: the first token starting
                 # at or after the block's offset.
                 index = bisect_right(starts, block.doc_start - 1)
-                preceding = range(max(0, index - span), index)
+                preceding = range(_window_start(index, span, offsets, sent_text), index)
                 if any(_is_marker(tokens[i], offsets[i], sent_text) for i in preceding):
                     suspected = True
                     break
