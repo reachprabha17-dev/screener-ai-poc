@@ -10,6 +10,7 @@ from screener.core.verify_evidence import (
     align,
     evidence_mentions_criterion,
     is_non_substantive,
+    quote_verifies,
     tokenize_with_offsets,
     verify_evidence,
 )
@@ -157,18 +158,25 @@ def test_a_genuinely_short_quote_still_verifies() -> None:
     assert Flag.EVIDENCE_UNVERIFIED not in verified.flags
 
 
-def test_short_fragment_is_rejected_despite_perfect_ratio() -> None:
+def test_char_floor_still_rejects_a_quote_whose_matched_part_is_all_short_words() -> None:
     """`ratio OR 25 chars` let a tiny fragment verify a fabricated quote.
 
-    The three conditions are AND-ed, so a fully-matching but very short quote
-    still escalates.
+    This is the case the character floor is actually for, isolated: a quote long
+    enough that the `_is_verified` cap does not apply, mostly fabricated, whose
+    *real* part is a contiguous run of function words. It clears the ratio bar
+    and the span bar, and only the character floor stops it.
+
+    Kept as a live guard on the cap added for skills-list quotes: capping the
+    floor at the quote's own length must not reach a quote this long.
     """
-    result = align("Python and Go", RESUME)
-    assert result.ratio == 1.0 and result.longest_span >= 3  # passes two conditions
-    assert result.matched_chars < 25  # fails the third
+    quote = "and Go across the Kubernetes Terraform"
+    result = align(quote, RESUME)
+    assert result.ratio >= 0.60 and result.longest_span >= 3  # passes two conditions
+    assert result.evidence_chars > 16  # long enough that the cap does not apply
+    assert result.matched_chars < 16  # fails the third, uncapped
 
     out = judge(
-        ("C1", "strong", "Python and Go"),
+        ("C1", "strong", quote),
         ("C2", "none", "not found"),
         ("C3", "none", "not found"),
         ("C4", "none", "not found"),
@@ -176,6 +184,146 @@ def test_short_fragment_is_rejected_despite_perfect_ratio() -> None:
     result = verify_evidence(out, RESUME, RUBRIC)
     assert Flag.EVIDENCE_UNVERIFIED in result.flags
     assert result.scoreable is False
+
+
+# --- the character floor, capped at the quote's own length -------------------
+
+# Mirrors the rubric and resumes of run-955a8e246735: an Executive Assistant
+# posting whose must-haves are answered by a skills-list line, not a sentence.
+EA_RESUME = (
+    "Sabrina Atouf. Executive Assistant supporting the CEO of a regional hub. "
+    "Coordinated board meetings, VIP visits and quarterly leadership forums. "
+    "SKILLS: Microsoft Office, SAP Concur, document management. "
+    "LANGUAGES: English (Fluent), French (Native)."
+)
+
+EA_RUBRIC = make_rubric(
+    ("C1", True, 3, "Fluent in English"),
+    ("C2", True, 3, "Advanced proficiency in Microsoft Office Suite (PowerPoint, Excel, Word)"),
+    ("C3", False, 1, "Experience coordinating VIP visits and board meetings"),
+    ("C4", False, 1, "Migration to microservices"),
+)
+
+
+def test_a_quote_shorter_than_the_char_floor_verifies_when_fully_matched() -> None:
+    """A quote holding fewer characters than the floor must not be held to it.
+
+    Regression from run-955a8e246735, where this left 152 of 314 candidates
+    (48%) unscoreable, 136 of them for this reason alone. Both failing criteria
+    were must-haves whose honest evidence on a real resume is a skills-list
+    entry: `Microsoft Office` is 15 characters and was rejected at `ratio=1.0`
+    by a 16-character bar it could never have reached.
+
+    The same cap `align` applies to its block filter and `_is_verified` applies
+    to `longest_span`, applied to the third bar. Without it a perfect match is
+    indistinguishable from no match at all.
+    """
+    office = align("Microsoft Office", EA_RESUME)
+    assert office.ratio == 1.0
+    assert office.matched_chars == office.evidence_chars == 15  # every character matched
+    assert office.matched_chars < 16  # yet under the uncapped floor
+
+    english = align("English (Fluent)", EA_RESUME)
+    assert english.ratio == 1.0
+    assert english.matched_chars == english.evidence_chars == 13
+
+    out = judge(
+        ("C1", "strong", "English (Fluent)"),
+        ("C2", "strong", "Microsoft Office"),
+        ("C3", "none", "not found"),
+        ("C4", "none", "not found"),
+    )
+    result = verify_evidence(out, EA_RESUME, EA_RUBRIC)
+
+    assert [c.verified for c in result.criteria[:2]] == [True, True]
+    assert result.scoreable is True
+    assert Flag.EVIDENCE_UNVERIFIED not in result.flags
+
+
+def test_the_cap_is_not_a_free_pass_for_short_quotes() -> None:
+    """Capping the floor must not verify a short quote that simply is not there.
+
+    The cap lowers the bar to the quote's own size; it does not remove the other
+    two conditions. A fabricated skills-list entry has nothing to match and
+    fails on ratio, exactly as before.
+    """
+    assert not quote_verifies("Kubernetes Terraform", EA_RESUME)
+    assert not quote_verifies("Arabic (Fluent)", EA_RESUME)
+
+    out = judge(
+        ("C1", "strong", "Arabic (Fluent)"),
+        ("C2", "strong", "Kubernetes Terraform"),
+        ("C3", "none", "not found"),
+        ("C4", "none", "not found"),
+    )
+    result = verify_evidence(out, EA_RESUME, EA_RUBRIC)
+
+    assert all(c.verified is False for c in result.criteria[:2])
+    assert Flag.EVIDENCE_UNVERIFIED in result.flags
+    assert result.scoreable is False
+    # Escalated, never downgraded — the 10.5(b) contract is unchanged.
+    assert [c.verdict for c in result.criteria[:2]] == ["strong", "strong"]
+
+
+def test_a_filler_only_quote_is_never_capped() -> None:
+    """The hole the character cap would open if it applied unconditionally.
+
+    A quote of pure function words is short for a different reason than a
+    skills-list entry: it is not a small true thing, it is nothing. Capping it
+    would set its bar to its own length, which it clears by definition — and
+    short function-word runs occur in most documents, so it would verify against
+    almost any resume. Measured across run-955a8e246735's 314 resumes with the
+    cap ungated: ``"and"`` verified against 100% of them, ``"of the"`` 44%,
+    ``"in the"`` 33%. All three are rejected outright before the fix and must
+    stay rejected after it.
+
+    So the cap is withheld unless a token survives `_TOPIC_STOPWORDS`, and
+    filler faces the full `evidence_match_min_chars` floor it cannot reach.
+    """
+    filler = "Executive Assistant supporting the CEO and the board of the regional hub."
+
+    for quote in ("and", "and the", "of the", "in the", "is and the"):
+        result = align(quote, filler)
+        assert result.evidence_content_tokens == 0, quote
+        # Present in the document, and still refused: the cap never applies.
+        assert not quote_verifies(quote, filler), quote
+
+    # The contrast that makes the rule: same length class, but it says something.
+    office = align("Microsoft Office", EA_RESUME)
+    assert office.evidence_content_tokens == 2
+    assert quote_verifies("Microsoft Office", EA_RESUME)
+
+
+def test_filler_only_evidence_escalates_end_to_end() -> None:
+    """A filler quote must still pull the candidate out of the ranking.
+
+    `evidence_mentions_criterion` would flag this quote too, but check (c) only
+    flags — it never unranks. If the cap let filler verify, a `strong` verdict
+    backed by ``"and the"`` would keep its full weight in the arithmetic with
+    nothing stopping it. Stage B is what has to catch this.
+    """
+    out = judge(
+        ("C1", "strong", "and the"),
+        ("C2", "strong", "of the"),
+        ("C3", "none", "not found"),
+        ("C4", "none", "not found"),
+    )
+    result = verify_evidence(out, EA_RESUME, EA_RUBRIC)
+
+    assert all(c.verified is False for c in result.criteria[:2])
+    assert Flag.EVIDENCE_UNVERIFIED in result.flags
+    assert result.scoreable is False
+
+
+def test_a_partially_matched_short_quote_still_fails_on_ratio() -> None:
+    """The cap keys off the quote's own length, not off how much of it matched.
+
+    A short quote half-invented still has to clear `evidence_match_ratio`, so
+    the cap cannot be reached by shrinking the matched portion.
+    """
+    result = align("Microsoft Kubernetes", EA_RESUME)
+    assert result.ratio < 0.60
+    assert not quote_verifies("Microsoft Kubernetes", EA_RESUME)
 
 
 def test_fabricated_quote_escalates_without_changing_the_verdict() -> None:

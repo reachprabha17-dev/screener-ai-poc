@@ -82,6 +82,16 @@ class Alignment:
     # passes `align` but is rejected here regardless, by the same threshold
     # `align` was just capped to not apply to it.
     evidence_tokens: int = 0
+    # The quote's own character count, over the same tokens `matched_chars`
+    # sums. Same role as `evidence_tokens` above, for the third bar: a quote
+    # holding fewer than `evidence_match_min_chars` characters cannot reach
+    # that floor even when every character of it matched.
+    evidence_chars: int = 0
+    # How many of those tokens carry topic (`_TOPIC_STOPWORDS` subtracted).
+    # `_is_verified` requires at least one before it will cap the character
+    # floor: relief from a bar is for quotes too short to reach it, not for
+    # quotes with nothing in them. Zero here means the quote is pure filler.
+    evidence_content_tokens: int = 0
 
 
 def tokenize_with_offsets(text: str) -> tuple[list[str], list[tuple[int, int]]]:
@@ -161,9 +171,11 @@ def align(evidence: str, document: str) -> Alignment:
     exactly. Capping does not reopen the confetti hole above — that attack
     needs *many* scattered short blocks to sum toward 1.0 across a long
     fabricated quote, and a quote too short to need capping is too short to
-    stage it. ``evidence_match_min_chars`` is the independent backstop either
-    way: a short match still has to clear a real character count, not just a
-    token count.
+    stage it. ``evidence_match_min_chars`` remains the independent backstop for
+    quotes long enough to reach it — a match still has to clear a real character
+    count, not just a token count — and `_is_verified` caps it at the quote's
+    own character count for exactly the reason stated here, so that a quote too
+    short to stage the attack is not rejected by the defence against it.
 
     Blocks are monotonically increasing in both sequences, so this stays an
     *alignment*: ordering is what distinguishes a quotation from a word cloud,
@@ -181,12 +193,18 @@ def align(evidence: str, document: str) -> Alignment:
     matched_tokens = sum(b.size for b in blocks)
     longest_span = max((b.size for b in blocks), default=0)
     matched_chars = sum(len(t) for b in blocks for t in ev[b.a : b.a + b.size])
+    # Same tokens `matched_chars` sums over, so the two are directly comparable
+    # and a fully-matched quote has `matched_chars == evidence_chars`.
+    evidence_chars = sum(len(t) for t in ev)
+    content_tokens = sum(1 for t in ev if t not in _TOPIC_STOPWORDS)
 
     return Alignment(
         ratio=matched_tokens / len(ev),
         longest_span=longest_span,
         matched_chars=matched_chars,
         evidence_tokens=len(ev),
+        evidence_chars=evidence_chars,
+        evidence_content_tokens=content_tokens,
         blocks=[
             MatchBlock(
                 ev_start=ev_offsets[b.a][0],
@@ -303,18 +321,56 @@ def _is_verified(alignment: Alignment) -> bool:
     """All three conditions, AND-ed.
 
     An earlier draft used ``ratio OR 25 chars``, which let a single short
-    fragment verify an otherwise fabricated quote.
+    fragment verify an otherwise fabricated quote. The AND is what closes that,
+    and it is why each bar can be capped at the quote's own size without
+    reopening it: a cap only ever says "this quote is too small for this bar to
+    mean anything", never "skip the other two".
 
-    The `longest_span` bar is capped at the quote's own length, mirroring the
-    cap `align` already applies to its block filter — a two-token quote cannot
-    produce a block of 3 no matter how real it is, so holding it to that bar
-    here regardless would undo the cap `align` just made.
+    **Every bar is capped at the quote's own size.** `align` caps its block
+    filter at the quote's token count; `required_span` mirrors that; and
+    `required_chars` mirrors it again for the character floor. A two-token quote
+    cannot produce a block of 3 no matter how real it is, and a 15-character
+    quote cannot produce 16 matched characters no matter how real it is —
+    holding either to an unreachable bar makes a perfect match indistinguishable
+    from no match at all.
+
+    Measured on run-955a8e246735 (314 Executive Assistant resumes): an uncapped
+    character floor left 152 candidates (48%) unscoreable, 136 of them for this
+    reason alone. The rubric's must-haves were "Fluent in English" and "Advanced
+    proficiency in Microsoft Office Suite", whose honest evidence on a resume is
+    a skills-list entry — ``Microsoft Office`` is 15 characters and was rejected
+    at ``ratio=1.0`` by a 16-character bar. Capping returns that to 17 (5%).
+
+    The confetti attack the floor exists to stop is unaffected, by the argument
+    `align` already makes for the token cap: it needs *many* scattered short
+    blocks summing toward 1.0 across a long fabricated quote, and a quote short
+    enough to be capped here is too short to stage it. A long quote still faces
+    the full floor, so a fabricated one whose matched fragments are all short
+    words is still rejected — that is the case this bar is actually for.
+
+    **The character cap requires the quote to carry topic.** A quote of pure
+    filler is short for a different reason than a skills-list entry is: it is
+    not a small true thing, it is nothing. Capping it would hand it a bar equal
+    to its own length, which it trivially clears — and short function-word runs
+    occur in most documents, so it would clear it against almost any resume.
+    Measured across this run's 314 resumes: uncapped, ``"and"`` verifies against
+    100% of them and ``"of the"`` against 44%. So the cap is withheld unless at
+    least one token survives `_TOPIC_STOPWORDS`, and filler faces the full floor
+    it cannot reach. Note the asymmetry that list carries *here* is the opposite
+    of the one at its definition: subtracted from a criterion an omission only
+    tightens the relevance check, but subtracted from evidence an omission grants
+    the cap. Keep it conservative, and prefer leaving a borderline word out.
     """
     required_span = min(settings.evidence_min_block_tokens, alignment.evidence_tokens)
+    required_chars = (
+        min(settings.evidence_match_min_chars, alignment.evidence_chars)
+        if alignment.evidence_content_tokens
+        else settings.evidence_match_min_chars
+    )
     return (
         alignment.ratio >= settings.evidence_match_ratio
         and alignment.longest_span >= required_span
-        and alignment.matched_chars >= settings.evidence_match_min_chars
+        and alignment.matched_chars >= required_chars
     )
 
 
