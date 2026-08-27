@@ -214,7 +214,7 @@ class ScreenerService:
         if not is_safe_reference(reference):
             raise ServiceError(
                 f"Invalid reference '{reference}': "
-                "letters, numbers, spaces, hyphens, and underscores only"
+                "letters, numbers, spaces, and & ' ( ) + # . _ - only"
             )
 
         position = Position(

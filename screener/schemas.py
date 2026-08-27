@@ -54,7 +54,7 @@ class CreatePositionRequest(BaseModel):
     @classmethod
     def validate_reference(cls, v: str) -> str:
         if not is_safe_reference(v):
-            raise ValueError("must contain only letters, numbers, spaces, hyphens, and underscores")
+            raise ValueError("must contain only letters, numbers, spaces, and & ' ( ) + # . _ -")
         return v
 
 

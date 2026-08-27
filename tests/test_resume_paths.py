@@ -27,6 +27,45 @@ def test_is_safe_reference_accepts_valid_names() -> None:
         assert is_safe_reference(name) is True, name
 
 
+def test_is_safe_reference_accepts_ordinary_share_punctuation() -> None:
+    """Real folders on a recruiter's share carry these; rejecting them stranded
+    the picker, which lists every directory whatever its name.
+    """
+    valid_names = [
+        "test cv -Executive Assistant & Office Manager",
+        "R&D",
+        "Ops (EU)",
+        "Smith's Team",
+        "C++ Dev",
+        "#1 Team",
+        "Sales, Marketing",
+        "_Archive 2026",
+        "ops_",
+    ]
+    for name in valid_names:
+        assert is_safe_reference(name) is True, name
+
+
+def test_is_safe_reference_rejects_punctuation_outside_the_allowlist() -> None:
+    """Guards the two character-class strings against an accidental range.
+
+    `[…+#-]` is only safe while the `-` stays last. A future edit that reorders
+    them into `#-+` would silently admit a span of ASCII, and every case above
+    would still pass.
+    """
+    invalid_names = ["Ops [EU]", "100% Ops", "a@b", "a=b", "a;b", "a|b", "a*b", "a$b", "a!b", "a~b"]
+    for name in invalid_names:
+        assert is_safe_reference(name) is False, name
+
+
+def test_is_safe_reference_rejects_space_or_dot_at_a_segment_boundary() -> None:
+    """Windows strips trailing spaces and dots, so `eng ` and `eng` are one
+    folder on the share and two distinct references here.
+    """
+    for name in ["eng ", " eng", "eng.", "2026/eng ", "2026/ eng", "2026/eng."]:
+        assert is_safe_reference(name) is False, name
+
+
 def test_is_safe_reference_accepts_nested_paths() -> None:
     """The share is organised in subfolders; the picker browses into them."""
     for name in ["2026/engineering", "2026/Q3/engineering", "a/b/c/d"]:

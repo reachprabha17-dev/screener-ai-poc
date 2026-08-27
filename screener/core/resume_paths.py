@@ -18,7 +18,19 @@ from pathlib import Path
 
 from config.settings import settings
 
-SEGMENT_PATTERN = r"[A-Za-z0-9](?:[A-Za-z0-9 ._-]*[A-Za-z0-9])?"
+# Space and dot are allowed inside a segment but not at either end; every other
+# permitted character is legal in both positions.
+#
+# Trailing is the load-bearing half: Windows silently strips trailing spaces and
+# dots from a filename, so `eng ` and `eng.` would name the folder `eng` on the
+# share's own Windows clients while rendering here as distinct references — two
+# requisitions that look different and screen the same directory. Leading is
+# excluded for a weaker reason: ` eng` is legal on Linux but indistinguishable
+# from `eng` in the picker. A leading dot is rejected outright by
+# `is_safe_segment` before this pattern is consulted.
+_BOUNDARY = r"A-Za-z0-9_&'(),+#-"
+_MIDDLE = r"A-Za-z0-9 ._&'(),+#-"
+SEGMENT_PATTERN = rf"[{_BOUNDARY}](?:[{_MIDDLE}]*[{_BOUNDARY}])?"
 MAX_DEPTH = 8
 
 
@@ -63,7 +75,7 @@ def folder_for(reference: str) -> Path:
     if not is_safe_reference(reference):
         raise ValueError(
             f"Invalid reference '{reference}': each folder name may contain only "
-            "letters, numbers, spaces, dots, hyphens and underscores, separated by '/'"
+            "letters, numbers, spaces, and & ' ( ) + # . _ -, separated by '/'"
         )
 
     base = Path(settings.resumes_dir).resolve()
