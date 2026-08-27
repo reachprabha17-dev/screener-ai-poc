@@ -116,6 +116,26 @@ class RedFlag(StrEnum):
     ILLEGIBLE_SECTION = "ILLEGIBLE_SECTION"
 
 
+class InjectionFinding(BaseModel):
+    """One injection heuristic that fired, and the text around where it fired.
+
+    `SUSPECTED_INJECTION` on its own tells a reviewer that *something* matched
+    and nothing about what, which is not a finding they can act on: the whole
+    judgement is whether the matched text is an attack or is the candidate
+    describing their job. `detect_injection` has produced both halves since it
+    was written — its docstring says a reviewer "needs the whole picture" — and
+    the pipeline discarded them at the point of setting the flag.
+
+    `signal` is the pattern name (`role_hijack`, `template_marker`, …), and
+    `excerpt` is the surrounding window, already whitespace-collapsed. The
+    excerpt is attacker-controlled text: render it as data, never as markup, and
+    never anywhere it could be read back as an instruction.
+    """
+
+    signal: str
+    excerpt: str
+
+
 class Actor(BaseModel):
     """Threaded through every mutating call.
 
@@ -549,6 +569,8 @@ class Candidate(BaseModel):
     scoreable: bool = True
     review_required: bool = False
     escalation_reasons: list[EscalationReason] = Field(default_factory=list)
+    # Why `SUSPECTED_INJECTION` fired. Empty whenever it did not.
+    injection_findings: list[InjectionFinding] = Field(default_factory=list)
     # `pending` is not a synonym for `skipped`: a candidate whose verification
     # has not run yet is displayed as provisional and counts as review-required
     # at sign-off, because partial verification must never look like completed
@@ -664,6 +686,9 @@ class AdverseActionRecord(BaseModel):
     criteria: list[ScoredCriterion] = Field(default_factory=list)
     flags: list[Flag] = Field(default_factory=list)
     escalation_reasons: list[EscalationReason] = Field(default_factory=list)
+    # The grounds for `SUSPECTED_INJECTION`, for the same reason every other
+    # field here exists: a flag with no stated basis is not answerable later.
+    injection_findings: list[InjectionFinding] = Field(default_factory=list)
     summary: str = ""
     # The reproducibility record, copied onto the candidate when it was scored.
     # Months later these are what make the outcome re-derivable; the model tag

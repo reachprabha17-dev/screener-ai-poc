@@ -30,6 +30,7 @@ function candidate(overrides: Partial<CandidateSummary> = {}): CandidateSummary 
     flags: [],
     scoreable: true,
     review_required: false,
+    injection_findings: [],
     escalation_reasons: [],
     verification_status: 'done',
     decision: 'undecided',

@@ -160,6 +160,18 @@ class VerifierView(BaseModel):
     found_highlights: list[HighlightSpan] = Field(default_factory=list)
 
 
+class InjectionFindingView(BaseModel):
+    """Which injection heuristic fired, and the text it fired on.
+
+    Sent so the reviewer screen can show grounds instead of a bare warning. The
+    excerpt is attacker-controlled resume text: the client must render it as
+    text, never as markup.
+    """
+
+    signal: str
+    excerpt: str
+
+
 class CriterionView(BaseModel):
     """What a recruiter or hiring manager sees. No raw diagnostics (15.2)."""
 
@@ -218,6 +230,9 @@ class CandidateResponse(BaseModel):
     scoreable: bool
     review_required: bool
     escalation_reasons: list[str]
+    # The grounds for SUSPECTED_INJECTION. Empty unless that flag is present —
+    # a warning a reviewer cannot check is one they learn to clear unread.
+    injection_findings: list[InjectionFindingView]
     # Surfaced so the UI can badge a candidate as provisional. A half-verified
     # result that renders identically to a finished one is how someone signs off
     # on work that has not happened yet (17.6).
@@ -379,6 +394,10 @@ def candidate_response(candidate: Candidate, actor: Actor) -> CandidateResponse:
         scoreable=candidate.scoreable,
         review_required=candidate.review_required,
         escalation_reasons=[r.value for r in candidate.escalation_reasons],
+        injection_findings=[
+            InjectionFindingView(signal=f.signal, excerpt=f.excerpt)
+            for f in candidate.injection_findings
+        ],
         verification_status=candidate.verification_status,
         decision=candidate.decision,
         decided_by=candidate.decided_by,
@@ -611,6 +630,7 @@ class AdverseActionResponse(BaseModel):
     criteria: list[CriterionAuditView] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     escalation_reasons: list[str] = Field(default_factory=list)
+    injection_findings: list[InjectionFindingView] = Field(default_factory=list)
     summary: str = ""
     rubric_version: int | None = None
     rubric_hash: str = ""

@@ -114,6 +114,24 @@ export function CandidateDetail({
       {candidate.flags.map((flag) => (
         <Alert key={flag} tone="warn" title={flag}>
           <p>{flagHelp(flag)}</p>
+          {flag === 'SUSPECTED_INJECTION' && candidate.injection_findings.length > 0 ? (
+            /* The grounds, not just the verdict. Deciding this flag means deciding
+               whether the matched text is an attack or is the candidate describing
+               their job, and that is unanswerable without seeing the text.
+               The excerpt is attacker-controlled resume content, so it goes to the
+               DOM as a JSX child and never as markup — see the raw-HTML guard in
+               tests/test_layering.py, which this component is covered by. */
+            <ul className="mt-2 space-y-1.5">
+              {candidate.injection_findings.map((finding, index) => (
+                <li key={`${finding.signal}-${index}`} className="text-xs">
+                  <span className="font-mono text-neutral-600 dark:text-neutral-300">
+                    {finding.signal}
+                  </span>
+                  <q className="ml-2 text-neutral-500 dark:text-neutral-400">{finding.excerpt}</q>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </Alert>
       ))}
 

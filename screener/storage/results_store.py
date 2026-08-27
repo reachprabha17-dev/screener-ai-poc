@@ -35,6 +35,7 @@ from screener.models import (
     Decision,
     EscalationReason,
     Flag,
+    InjectionFinding,
     RedFlag,
     ScoredCriterion,
     Span,
@@ -108,12 +109,13 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
         "INSERT INTO candidates ("
         "run_id, filename, file_sha256, resume_text, sent_text, sent_text_sha256, "
         "redaction_map_json, score, band, must_haves_met, scoreable, "
-        "review_required, cacheable, escalation_reasons_json, verification_status, "
+        "review_required, cacheable, escalation_reasons_json, injection_findings_json, "
+        "verification_status, "
         "summary, notable_strengths_json, red_flags_json, "
         "flags_json, position_id, rubric_hash, judge_digest, verifier_digest, "
         "prompt_hash, redaction_on, num_ctx, app_version, scored_at"
         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-        "?, ?, ?, ?, ?) RETURNING id",
+        "?, ?, ?, ?, ?, ?) RETURNING id",
         (
             run_id,
             candidate.filename,
@@ -129,6 +131,7 @@ def save(tx: Tx, run_id: str, candidate: Candidate, key: CacheKey) -> int:
             candidate.review_required,
             candidate.cacheable,
             json.dumps([r.value for r in candidate.escalation_reasons]),
+            _dump_injection(candidate.injection_findings),
             candidate.verification_status,
             candidate.summary,
             json.dumps(candidate.notable_strengths, ensure_ascii=False),
@@ -466,6 +469,21 @@ def _dump_spans(spans: list[Span]) -> str | None:
     return json.dumps([s.model_dump() for s in spans]) if spans else None
 
 
+def _dump_injection(findings: list[InjectionFinding]) -> str | None:
+    return json.dumps([f.model_dump() for f in findings], ensure_ascii=False) if findings else None
+
+
+def _load_injection(raw: str | None) -> list[InjectionFinding]:
+    """NULL and `[]` both read as no findings.
+
+    NULL is what a row written before migration 0002 holds — no findings were
+    recorded, which is a different claim from "the detector found nothing". The
+    distinction is not one the reviewer screen can act on, so both render as an
+    absent panel; it is preserved in the column rather than backfilled away.
+    """
+    return [InjectionFinding(**f) for f in json.loads(raw or "[]")]
+
+
 def _dump_blocks(blocks: list[MatchBlockModel]) -> str | None:
     return json.dumps([b.model_dump() for b in blocks]) if blocks else None
 
@@ -530,6 +548,7 @@ def _row_to_candidate(tx: Tx, row: Any) -> Candidate:  # noqa: ANN401 — a SQLA
         escalation_reasons=[
             EscalationReason(r) for r in json.loads(row["escalation_reasons_json"] or "[]")
         ],
+        injection_findings=_load_injection(row["injection_findings_json"]),
         verification_status=row["verification_status"],
         decision=row["decision"],
         decided_by=row["decided_by"],

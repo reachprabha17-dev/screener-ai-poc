@@ -149,6 +149,13 @@ export interface VerifierView {
 }
 
 /** `CriterionView`. */
+export interface InjectionFinding {
+  /** Pattern name: role_hijack, template_marker, score_manipulation, ... */
+  signal: string;
+  /** Surrounding resume text. Attacker-controlled — render as text, never as HTML. */
+  excerpt: string;
+}
+
 export interface CriterionView {
   id: string;
   text: string;
@@ -192,6 +199,7 @@ export interface CandidateSummary {
   scoreable: boolean;
   review_required: boolean;
   escalation_reasons: string[];
+  injection_findings: InjectionFinding[];
   verification_status: VerificationStatus;
   decision: Decision;
   decided_by: string | null;

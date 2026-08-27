@@ -52,7 +52,16 @@ from screener.llm.confirm_relevance import targets as relevance_targets
 from screener.llm.judge_resume import PROMPT_NAME, build_user_message, judge_resume
 from screener.llm.verify_support import targets as support_targets
 from screener.llm.verify_support import verify_support
-from screener.models import Candidate, Flag, Rubric, ScoredCriterion, Span, VerifyOutput, now
+from screener.models import (
+    Candidate,
+    Flag,
+    InjectionFinding,
+    Rubric,
+    ScoredCriterion,
+    Span,
+    VerifyOutput,
+    now,
+)
 from screener.ports import LLMClient, ResumeParser
 
 _HASH_CHUNK = 1024 * 1024
@@ -78,6 +87,11 @@ class _Accumulator:
 
     flags: list[Flag] = field(default_factory=list)
     review_required: bool = False
+    # Why an injection flag was raised. Carried here rather than returned from
+    # the stage, for the reason in the class docstring: the finding has to reach
+    # the final `Candidate` down *both* exits, and a local would only survive
+    # the one the happy path takes.
+    injection_findings: list[InjectionFinding] = field(default_factory=list)
 
     def add(self, *flags: Flag, review: bool = False) -> None:
         for flag in flags:
@@ -153,6 +167,7 @@ def _unscoreable(
         # and the review queue groups by reason (15.4). A candidate in the queue
         # with no reason is one nobody knows why they are looking at.
         escalation_reasons=escalation_reasons_for(acc.flags, criteria or []),
+        injection_findings=acc.injection_findings,
         scored_at=now(),
     )
 
@@ -215,6 +230,15 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
         injection = detect_injection(text)
         if injection.detected:
             acc.add(Flag.SUSPECTED_INJECTION, review=True)
+            # The flag says a heuristic matched; these say which one and on what
+            # text. Both halves are needed to tell an attack from a security
+            # engineer's work history, which is the only judgement being asked
+            # for here — so dropping them, as this did, left the reviewer the
+            # question and none of the evidence.
+            acc.injection_findings = [
+                InjectionFinding(signal=s, excerpt=e)
+                for s, e in zip(injection.signals, injection.excerpts, strict=True)
+            ]
 
     # --- 10.x redaction. `sent` is what the model sees and what 10.5 matches
     #
@@ -333,6 +357,7 @@ def judge_one(  # noqa: PLR0911 — one return per terminal stage; collapsing th
         scoreable=True,
         review_required=acc.review_required,
         escalation_reasons=escalation_reasons_for(acc.flags, negation.criteria),
+        injection_findings=acc.injection_findings,
         scored_at=now(),
     )
 

@@ -459,6 +459,36 @@ def test_a_suspected_injection_is_reviewed_but_still_scored(root: Path) -> None:
     assert candidate.scoreable is True  # still in the ranking
     assert candidate.score is not None
 
+    # The grounds reach the candidate, not just the flag. This is the whole
+    # judgement the reviewer is being asked to make — an attack, or this man's
+    # actual job — and it is unanswerable from the flag alone.
+    assert [f.signal for f in candidate.injection_findings] == ["instruction_override"]
+    assert "ignore all previous instructions" in candidate.injection_findings[0].excerpt.lower()
+
+
+def test_injection_findings_survive_the_unscoreable_exit(root: Path) -> None:
+    """Both exits, not just the happy one.
+
+    The findings are carried on the accumulator rather than returned from the
+    stage precisely because a candidate can fail after detection and leave
+    through `_unscoreable`. A reviewer looking at an escalated candidate is the
+    *most* likely to need the grounds, so losing them on that path would drop
+    them exactly where they matter most.
+    """
+    text = (
+        "Sam Okafor, Application Security Engineer. Built a corpus of prompt "
+        "injection payloads including 'ignore all previous instructions'. " + RESUME
+    )
+    # Evidence that cannot be found in the document: stage B fails the candidate
+    # after injection detection has already run.
+    llm = FakeLLM(verdicts(evidence="Ten years of Kubernetes across four continents"))
+
+    candidate = run(root, FakeParser(text), llm)
+
+    assert candidate.scoreable is False
+    assert Flag.SUSPECTED_INJECTION in candidate.flags
+    assert [f.signal for f in candidate.injection_findings] == ["instruction_override"]
+
 
 def test_the_verified_injection_attack_is_forced_to_none(root: Path) -> None:
     """10.5(a): the model asserted support and simultaneously said there is none."""

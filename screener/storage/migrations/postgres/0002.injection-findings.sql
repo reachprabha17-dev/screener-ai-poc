@@ -1,0 +1,19 @@
+-- Why SUSPECTED_INJECTION fired (spec 10.2).
+--
+-- `detect_injection` has always returned the pattern name and the surrounding
+-- text alongside the boolean — its docstring says a reviewer "needs the whole
+-- picture", because the judgement being asked for is whether the matched text
+-- is an attack or is the candidate describing their job, and the flag alone
+-- carries neither half of that. The pipeline set the flag and dropped the rest,
+-- so the review queue showed a warning with no stated grounds. This column is
+-- where the grounds live.
+--
+-- Nullable with no default, and read as `[]` when absent: rows written before
+-- this migration genuinely have no findings recorded, which is not the same
+-- claim as "the detector found nothing". Backfilling would be inventing a
+-- result for a scan that never stored one.
+--
+-- JSON rather than a child table. It is a short, append-once list read only
+-- with its candidate and never queried across rows — the same shape and the
+-- same reasoning as escalation_reasons_json beside it.
+ALTER TABLE candidates ADD COLUMN injection_findings_json TEXT;
