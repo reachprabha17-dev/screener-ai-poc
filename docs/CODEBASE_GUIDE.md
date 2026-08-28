@@ -22,6 +22,13 @@ is now React rather than Streamlit. Where they overlap — the process model, th
 tooling list, the folder structure, and what §15 says a reviewer must be shown —
 v7 is correct. Everything else in v6 stands untouched.
 
+`screener_spec_v8.md` amends v6 for one thing only: a job description may be
+uploaded as a PDF or DOCX rather than pasted. Read it for §4's layering rule
+(which narrowed, deliberately), §8.4's sandbox mechanism (which changed, and
+whose containment gaps are now measured rather than estimated), and the rule that
+a human sees the extracted text before it becomes a requisition. Everything
+downstream of `jd_text` is unchanged.
+
 ---
 
 ## Part 1 — What this app does
@@ -59,6 +66,7 @@ Read these three sections of the spec, in this order:
 | §13 (`screener_spec_v6.md:1286`) | The two main functions written as plain pseudocode |
 | §1 (`screener_spec_v6.md:16`) | The decisions that are locked and won't change |
 | §1 (`screener_spec_v7.md:16`) | The two of those decisions the React interface changed, and why |
+| §1 (`screener_spec_v8.md:20`) | The one it re-stated and the three it added, when job descriptions became documents |
 
 Then stop reading the spec. It's a reference book, not a tutorial. Go back to it
 by section number when the code raises a question.

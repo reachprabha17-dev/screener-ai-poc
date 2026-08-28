@@ -227,6 +227,7 @@ web/
     │   ├── IdentityMenu.tsx          "reviewing as", and roles
     │   ├── ThemeToggle.tsx           light → dark → system
     │   ├── FolderPicker.tsx          browse the server's resume share
+    │   ├── JdInput.tsx               upload a JD document, or paste one
     │   ├── RubricEditor.tsx          draft → edit → save → approve
     │   ├── RunList.tsx               runs as a table
     │   ├── RunSelect.tsx             pick a run, labelled meaningfully
@@ -246,12 +247,13 @@ web/
     │   ├── highlight.ts        slice a quote out with context around it
     │   ├── format.ts           dates, percentages, counts, CSV
     │   ├── escalations.ts      count reasons across a group
+    │   ├── jd.ts               a job description + where it came from
     │   ├── theme.ts            light/dark/system, persisted
     │   └── useDebounced.ts     settle a value before acting on it
     │
     ├── ui/                     ← thin Tailwind wrappers, no domain knowledge
-    │   ├── Alert  Badge  Button  Card  Disclosure  Field  Markdown
-    │   ├── Popover  Table
+    │   ├── Alert  Badge  Button  Card  Disclosure  Field  FileInput
+    │   ├── Markdown  Popover  Table
     │   └── cn.ts               class-name merging
     │
     └── test/
@@ -323,8 +325,8 @@ A reviewer types `http://host:8000/ui/runs/run-8f21c0/review`.
 ```python
 candidate = (dist / asset_path).resolve()
 if asset_path and candidate.is_file() and candidate.is_relative_to(dist):
-    return FileResponse(candidate)      # a real built asset
-return FileResponse(index, media_type="text/html")   # anything else
+    return FileResponse(candidate)  # a real built asset
+return FileResponse(index, media_type="text/html")  # anything else
 ```
 
 `runs/run-8f21c0/review` is not a file on disk, so the server returns
@@ -542,13 +544,18 @@ export class ApiError extends Error {
 
 Everything a user is told about a failure comes out of this class.
 
-#### `headers(identity, hasBody)`
+#### `headers(identity, body)`
 
 ```ts
 { 'X-Actor': identity.actor }
 + 'X-Actor-Roles': identity.roles.join(',')   // ONLY when roles.length > 0
-+ 'Content-Type': 'application/json'          // ONLY when there is a body
++ 'Content-Type': 'application/json'          // ONLY for a body that is NOT FormData
 ```
+
+> **`FormData` is the one body that must not be typed.** The browser has to set
+> `multipart/form-data` *with the boundary it generates*; a header we wrote would
+> replace it with one that has no boundary, and the server would be unable to
+> split the parts — a 422 for a request that was fine.
 
 **Omitting `X-Actor-Roles` is not the same as sending it empty.** The API reads
 an absent header as the stub's default role set (`{admin}`), and an empty one as
@@ -565,18 +572,23 @@ The single function every call goes through.
 | 2 | `fetch(path, {method, headers, body, signal, cache: 'no-store', credentials: 'same-origin'})` | `no-store` is the request-side half of the API's `Cache-Control: no-store` — nothing caches candidate names and verdicts |
 | 3 | On a thrown fetch: if the caller's signal aborted, rethrow (navigation, not a failure). If the timeout fired, `ApiError("The API did not respond within Ns. It may be busy loading the model.")`. Otherwise `ApiError("Cannot reach the screener API. Is the API service running?")` | Three different situations, three different next actions |
 | 4 | `if (!response.ok) throw new ApiError(await explain(response), response.status)` | Status → sentence |
-| 5 | `204` → `null`; empty body → `null`; otherwise `JSON.parse(text)` | The decision endpoints return 204 |
+| 5 | `204` → `null`; empty body → `null`; otherwise `JSON.parse(text)`, and a parse failure becomes an `ApiError` naming the path | The decision endpoints return 204. A **200 that is not JSON** means something answered that was not the API — in development, a path missing from `API_PATHS` in `vite.config.ts`; in a deployment, a proxy or a login page in front of it. Both look identical here, and neither is a `SyntaxError` anybody can act on |
 
 Timeouts:
 
 ```ts
 DEFAULT_TIMEOUT_MS = 30_000
 EXTRACT_TIMEOUT_MS = 180_000   // rubric extraction is a live LLM call
+UPLOAD_TIMEOUT_MS  = 60_000    // reading one document
 ```
 
 > Rubric extraction is ~5 s typical, but a cold model load takes considerably
 > longer, and timing out mid-generation looks like a failure when it was only
 > slow.
+>
+> A document upload is the opposite case: the server bounds it at
+> `jd_parse_timeout_s`, which is seconds, so failing fast is the kinder
+> behaviour — the paste box is right there.
 
 #### `explain(response)` — status codes become sentences
 
@@ -588,8 +600,9 @@ is normal from a proxy or a crashed process, so the parse is wrapped).
 | **403** | the server's `detail`, else *"You do not have the role this needs. Add it under your name, top right."* |
 | **404** | *"Not found — it may have been deleted, or the id is wrong."* |
 | **409** | the server's `detail`, else *"That rubric has not been approved yet. Approve it before starting a run."* |
+| **413** | the server's `detail`, else *"That file is too large. Try a smaller one, or paste the text instead."* |
 | **422** | *"The request was rejected as invalid: …"* |
-| **503** | *"The screener is not ready — check the model, disk space and migrations."* |
+| **503** | the server's `detail` (the parser is at capacity — retry), else *"The screener is not ready — check the model, disk space and migrations."* |
 | anything else | the server's `detail`, else *"The API returned N."* |
 
 A 409 in particular has one cause in this system and a clear next step, and
@@ -696,6 +709,7 @@ useScope() → {actor, roles}, memoised
 ```ts
 export const keys = {
   health:        (id)                  => ['health', id],
+  config:        ()                    => ['config'],          // NOT identity-scoped
   dashboard:     (id)                  => ['dashboard', id],
   positions:     (id, includeClosed)   => ['positions', id, {includeClosed}],
   folders:       (id, path, q, offset) => ['folders', id, path, q, offset],
@@ -720,6 +734,29 @@ the actor would hand the second person the first person's view.
 **They are in one place.** Invalidation is the part that rots when keys are
 written inline: a mutation invalidates `['runs']` while a component subscribed to
 `['run-list']`, and the screen silently shows yesterday's data.
+
+#### `useConfig()` — the one key that is not identity-scoped
+
+Every other key in this file contains the identity, because roles change what the
+API returns and a shared key would hand the second person the first person's
+view. `config` is deployment policy: the answer is the same for everybody, so
+scoping it would refetch on every "reviewing as" change for no difference.
+
+```ts
+staleTime: Infinity, gcTime: Infinity, refetchOnWindowFocus: false
+```
+
+It changes only when the API restarts. A stale answer cannot mislead anyone into
+a wrong decision either — the server enforces `jd_intake_mode` independently, so
+the worst case is a control that is offered and then refused with a sentence
+saying why.
+
+#### `useExtractJdDocument()` — a read that is a mutation
+
+Reading a document has **no cache identity**. The same file uploaded twice is two
+separate acts by a person, and the second one is how somebody retries after a
+failure — a cache would silently return the first reading, including the failure.
+Nothing is invalidated on success, because nothing on the server changed.
 
 #### The reads
 
@@ -1139,10 +1176,10 @@ linking to `/requisitions/{id}`. Empty state offers "Post the first one".
 
 Two cards side by side: **1. Resume folder**, then **2. The job**.
 
-> The folder is chosen first because it is the part people get wrong. The other
-> two fields are typed from something already written; the folder has to be found
-> on a server the reviewer cannot see, and a requisition pointed at the wrong one
-> screens the wrong applicants without ever looking broken.
+> The folder is chosen first because it is the part people get wrong. The title
+> is typed from something already written; the folder has to be found on a server
+> the reviewer cannot see, and a requisition pointed at the wrong one screens the
+> wrong applicants without ever looking broken.
 
 #### `FolderPicker` — browsing the server's filesystem
 
@@ -1184,15 +1221,71 @@ Three distinct empty states, because they mean different things:
 **The chosen folder name becomes the requisition's `reference`.** Everything
 downstream — the run's folder, the containment check — derives from it.
 
+#### `JdInput` — the job description, uploaded or pasted
+
+**Controlled**, like `FolderPicker`: the page holds a `JdValue` (`lib/jd.ts`) and
+this component replaces it. The value carries the text *and its provenance*, so
+the requisition can record which document its rubric was drafted from.
+
+**Reads:** `useConfig()` → `GET /config` → `jd_intake_mode`, the size and page
+caps, and the accepted extensions. This is the only server-supplied configuration
+in the app; see 6.3.
+
+| `jd_intake_mode` | What renders |
+|---|---|
+| `both` (default) | the file control, and the paste box under it |
+| `upload` | the file control only |
+| `paste` | the paste box only — no upload |
+
+> The server enforces the same rule independently, in `create_position` and in
+> the upload endpoint. This only decides what to *render*: a stale tab offering
+> the wrong control gets a sentence back explaining why, rather than a form that
+> silently does nothing. **A control that only hides a button is not a control.**
+
+**Uploading is two steps, and the second one is the point.**
+
+```
+1. FileInput → useExtractJdDocument().mutate(file)
+   → POST /jd-documents   (multipart; creates NOTHING on the server)
+   → { text, filename, file_sha256, page_count, ocr_used,
+       chars_stripped, warnings, injection_signals, parser_version }
+
+2. the text lands in an editable textarea — never read-only
+
+3. the reviewer corrects it and submits it like any pasted description
+```
+
+> A two-column PDF interleaves. OCR on a scan drops a "not". The rubric drafted
+> from that text is what screens people out, and the human approval gate in front
+> of the rubric **cannot** catch it — the reviewer has nothing to compare the
+> criteria against. Showing what the machine actually read is that same control,
+> one step earlier. This is locked decision #33 (`screener_spec_v8.md`).
+
+Three advisories can appear above the text, none of which block:
+
+| Shown when | Says |
+|---|---|
+| `ocr_used` | the document had no text layer; the words were recognised from an image and may be wrong |
+| `injection_signals` non-empty | something reads like an instruction to the model rather than a job requirement, naming the patterns |
+| `warnings` non-empty | whatever the parser itself reported |
+
+> The injection patterns were calibrated against **résumé** prose — "fire on what
+> a résumé cannot plausibly say" — and a job description says several of those
+> things routinely ("your task is to…"). So the warning points at a paragraph
+> rather than making a claim about it, and the reviewer can simply edit the text.
+> Blocking on it would be an adverse outcome produced by a heuristic that
+> `detect_injection.py` itself calls "one cheap layer, not the defense".
+
 #### The form
 
-`react-hook-form` owns `title` and `jd_text`. Validation:
+`react-hook-form` owns `title` only; the folder and the job description are
+controlled values held by the page. Validation:
 
 | Field | Rule | Where |
 |---|---|---|
 | `folder` | must be chosen | checked in `onSubmit`, **not** by disabling the button |
 | `title` | `.trim().length > 0` | react-hook-form `validate` |
-| `jd_text` | `.trim().length > 0` | react-hook-form `validate` |
+| `jd.text` | `.trim().length > 0` | checked in `onSubmit`, same reasoning as the folder |
 
 > The folder is checked on submit rather than by disabling the button, **so the
 > reason is stated**. A disabled control with no explanation is a dead end.
@@ -1201,19 +1294,37 @@ downstream — the run's folder, the containment check — derives from it.
 
 ```
 onSubmit
- → create.mutate({reference: folder, title: trimmed, jd_text: trimmed})
+ → create.mutate({reference: folder, title: trimmed, jd_text: jd.text.trim(),
+                  jd_source, jd_filename, jd_file_sha256, jd_ocr_used})
  → POST /positions
-      server: CreatePositionRequest  (lengths, extra="forbid")   → 422
-      server: is_safe_reference(reference)                       → 400
-      server: an open requisition already uses this reference    → 409
+      server: CreatePositionRequest  (lengths, sha256 pattern, extra="forbid") → 422
+      server: is_safe_reference(reference)                                     → 400
+      server: jd_intake_mode forbids this source                               → 400
+      server: an open requisition already uses this reference                  → 409
  → onSuccess: toast.success(`Created ${reference}`)
               navigate(`/requisitions/${position.id}`)
  → onError:   toast.error(error.message)     ← already a sentence
 ```
 
+> **Upload and paste converge here.** There is one path into `positions.jd_text`,
+> and the text on it has always been read and accepted by a person. The
+> provenance fields are a record of *origin* — `jd_file_sha256` identifies the
+> uploaded document and asserts nothing about `jd_text`, because the reviewer
+> edits it in between, deliberately.
+
 ---
 
 ### 9.4 `/requisitions/:positionId` — `RequisitionPage`
+
+Before anything else on this screen: **where the job description came from.** The
+header line carries `· from senior-backend.pdf` when there was a document, and an
+OCR warning sits above the rubric when `jd_ocr_used`.
+
+> A rubric drafted from OCR'd text was drafted from an approximation. The person
+> approving it is the last one who can catch a requirement the recognition
+> mangled, so the warning belongs *beside the criteria they are approving* and
+> not only on the form where the file was uploaded — which they may never have
+> seen, since a different person can raise the requisition.
 
 **Reads four things:**
 
@@ -2049,7 +2160,12 @@ this table is client-only in effect.
 |---|---|---|---|---|---|
 | 1 | Resume folder chosen | `if (!folder)` on submit | `NewRequisitionPage` | — | inline error alert |
 | 2 | Job title non-empty | `value.trim().length > 0` | react-hook-form | `CreatePositionRequest` min_length | inline error alert |
-| 3 | JD non-empty | `value.trim().length > 0` | react-hook-form | `CreatePositionRequest` min_length | inline error alert |
+| 3 | JD non-empty | `if (!jd.text.trim())` on submit | `NewRequisitionPage` | `CreatePositionRequest` min_length | inline error alert |
+| 3a | JD file type | `accept` on the input — **a convenience, not a check** | `FileInput` | `validate_file` sniffs magic bytes; the extension is not consulted for the type | **400** → alert with the server's sentence |
+| 3b | JD file size | — | — | ASGI middleware, **before** the body is buffered | **413** → alert |
+| 3c | JD page count | — | — | pre-parse hint **and** post-parse count (§8.2 sees nothing on a modern PDF) | **400** → alert |
+| 3d | Intake method allowed | renders only the permitted controls | `JdInput` + `useConfig` | `jd_intake_mode` in both `create_position` and the upload endpoint | **400** → alert / toast |
+| 3e | Parser capacity | — | — | non-blocking semaphore, `jd_max_concurrent_parses` | **503** + `Retry-After` → alert |
 | 4 | Reference is a safe folder name | — | — | `core/resume_paths.is_safe_reference` | **400** → toast |
 | 5 | Reference not already open | — | — | `positions_store.get_open_by_reference` | **409** → toast |
 | 6 | Rubric has 4–12 criteria | `MIN/MAX_CRITERIA` | `RubricEditor.onSave` | pydantic | inline `problem` alert |
@@ -2222,6 +2338,7 @@ naive version has a specific failure.
 | `Badge` | five tones, pill-shaped | |
 | `Card` / `CardBody` / `CardHeader` | the one container in the app | |
 | `Field` / `Choice` | a `<label>` **wrapping** its input | No `id` to collide when the same form renders twice on a screen — which the review page does for every candidate group |
+| `FileInput` | one file, by click or drop; the native control is `sr-only` and driven by a `<label>` | `index.css` styles every `input` that is not a checkbox or radio, which catches `type="file"` and wraps a browser-drawn button in a text-field border. Hiding it visually while leaving it in the DOM keeps the keyboard and screen-reader behaviour the browser already implements. **`accept` filters the picker and is not a check** — the server sniffs magic bytes and never consults the extension |
 | `Table` / `Th` / `Td` | plain semantic tables with an `sr-only` caption | **No data-grid library**: the ordering that matters is the server's. Sorting a ranked list by filename is how the top of Band A stops being the top of the screen |
 | `Disclosure` | a styled native `<details>` | Not a JS accordion — the browser already implements the state, the keyboard behaviour and the semantics, and content inside stays findable by the browser's own in-page search **while collapsed**, which matters on a compliance screen |
 | `Popover` | Radix | Focus trapping, Escape, outside-click, `aria-expanded`, collision-aware positioning — every one a known-difficult detail |
@@ -2365,13 +2482,14 @@ Run with `npm run test` (vitest + jsdom + Testing Library), and as part of
 
 | File | Covers |
 |---|---|
-| `api/client.test.ts` | headers, status→sentence mapping, timeouts, 204 handling |
+| `api/client.test.ts` | headers, status→sentence mapping, timeouts, 204 handling, **a 200 that is not JSON** |
 | `lib/highlight.test.ts` | slicing, truncation markers, out-of-range offsets |
 | `lib/labels.test.ts` | that every wire value maps to a label, and the fallbacks |
 | `pages/DashboardPage.test.tsx` | the tiles and the queue table |
 | `pages/ReviewPage.test.tsx` | the three groups, selection, sign-off gating |
 | `components/CriterionBlock.test.tsx` | the three evidence render paths |
 | `components/ClosePositionButton.test.tsx` | the confirmation flow |
+| `components/JdInput.test.tsx` | which controls each `jd_intake_mode` renders, the extracted text staying editable, provenance carried, `FormData` sent with no hand-written `Content-Type`, the OCR and injection advisories, and errors **not** blaming the document |
 | `components/ParsedResumeText.test.tsx` | collapsed rendering, whitespace preserved |
 | `components/ThemeToggle.test.tsx` | the cycle and the media-query subscription |
 
@@ -2386,6 +2504,35 @@ Run with `npm run test` (vitest + jsdom + Testing Library), and as part of
 jsdom implements no layout and Radix measures its trigger to position a panel.
 Without them the failure names `ResizeObserver` rather than anything to do with
 the component. **They are stubs, not polyfills** — nothing asserts on them.
+
+### What these tests cannot see
+
+There is no MSW and no test server: **every test here replaces `fetch` with a
+function returning a literal somebody wrote.** On the other side of the boundary,
+the Python suite reaches the API through `TestClient`, which never opens a
+socket. So both suites are complete on their own side and **neither one exercises
+the network path the browser actually uses** — `browser → Vite proxy → uvicorn`.
+
+That gap has shipped a bug. `/jd-documents` and `/config` were added to
+`client.ts` and not to `API_PATHS` in `vite.config.ts`; the dev server answered
+them with `index.html` and a **200**, the app got a page where it expected JSON,
+and nothing reached the API at all — so its access log stayed empty while the
+interface reported a broken endpoint. Every test on both sides passed.
+
+Two things came out of it, and they are the mitigation rather than a fix:
+
+- `tests/test_layering.py::test_every_path_the_client_calls_is_reachable_in_development`
+  parses the paths out of `client.ts` and `API_PATHS` out of `vite.config.ts` and
+  fails if the first is not a subset of the second.
+- `client.ts` turns a non-JSON 200 into a named `ApiError` pointing at
+  `vite.config.ts`, instead of letting a bare `SyntaxError` escape to a
+  component carrying `Unexpected token '<'` as its whole explanation.
+
+**Neither covers a running server serving stale code**, which is not a property
+of the source and cannot be. `RELOAD=1 scripts/dev.sh start api`, or
+`scripts/dev.sh restart api` after a backend change. And a claim that something
+works end to end has to be checked through the port the browser uses, not the
+one that is convenient.
 
 **And four rules are enforced from Python**, in `tests/test_layering.py` — see
 §5. Those run in the normal pytest suite, so they fail CI even on a machine that

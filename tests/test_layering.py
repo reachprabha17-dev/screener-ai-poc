@@ -1,10 +1,13 @@
 """Architecture, enforced (spec 4, build gate 20 step 20).
 
-Every rule below is written in 4 as prose. Prose decays: someone adds an import
-under time pressure, it works, the tests pass, and six months later the UI holds
-a database connection and the service layer runs inference inside a request.
-This module is the difference between an architecture that is *described* and one
-that is *enforced*.
+Every rule below is written in 4 as prose — as amended by `screener_spec_v8.md`
+§3, which narrowed the `screener.intake` ban to the composition root and left the
+`screener.pipeline` ban absolute. Prose decays: someone adds an import under time
+pressure, it works, the tests pass, and six months later the UI holds a database
+connection and the service layer runs inference inside a request. This module is
+the difference between an architecture that is *described* and one that is
+*enforced* — which only holds while the two say the same thing, so a rule changed
+here is a rule to change in the spec in the same commit.
 
 Read from the **import graph**, never from source text. A substring search cannot
 tell a violation from a docstring explaining why the violation would be bad — a

@@ -295,6 +295,15 @@ cmd_check() {
   # The same four gates the build order runs at every step (20), plus the three
   # the reviewer interface brings with it. Ordered cheapest-first so a formatting
   # slip does not cost a full test run.
+  #
+  # The documentation gates run inside pytest (`tests/test_docs.py`) rather than
+  # as a step of their own, deliberately: a check that has to be remembered
+  # separately is one that gets skipped exactly when it matters. They fail if a
+  # file appears under `web/src` that the interface guide does not name, if a
+  # setting is missing from `.env.example`, or if a module lands in
+  # `screener/intake/` — the package that reads untrusted files — that no
+  # document describes. `tests/test_layering.py` holds the matching rule for the
+  # dev-server proxy, which fails silently in the browser rather than in CI.
   require_tools
   require_database
   "$VENV/ruff" format --check .
