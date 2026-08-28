@@ -58,7 +58,13 @@ select = ["E", "F", "I", "B", "S", "UP", "ANN", "PTH"]
 # dependency injection is that pattern on purpose — `Depends(...)` returns a
 # marker the framework resolves per request, and it is the documented idiom.
 # Listing them keeps B008 active everywhere it means something.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path"]
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Header",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.File",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "ANN"]        # asserts and untyped fixtures are fine in tests

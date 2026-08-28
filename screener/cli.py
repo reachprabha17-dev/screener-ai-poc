@@ -54,9 +54,10 @@ def _service() -> Any:  # noqa: ANN401 — importing lazily keeps `--help` fast 
     the situation this tool is for.
     """
     from screener.clients.ollama_client import OllamaClient
+    from screener.intake.document_text import DocumentTextExtractor
     from screener.service import ScreenerService
 
-    return ScreenerService(llm=OllamaClient())
+    return ScreenerService(llm=OllamaClient(), extractor=DocumentTextExtractor())
 
 
 def _fail(message: str) -> None:
@@ -135,16 +136,59 @@ def health(json: Annotated[bool, typer.Option("--json")] = False) -> None:
 def create_position(
     reference: Annotated[str, typer.Option("--reference", help="Folder under data/resumes/")],
     title: Annotated[str, typer.Option("--title")],
-    jd_file: Annotated[Path, typer.Option("--jd-file", help="Job description text file")],
+    jd_file: Annotated[
+        Path, typer.Option("--jd-file", help="Job description: .pdf, .docx, or a text file")
+    ],
     actor: ActorOption = settings.dev_actor_id,
 ) -> None:
+    """Raise a requisition from a job description on disk.
+
+    A PDF or DOCX goes through the same sandboxed parser the interface uses, so
+    the break-glass path and the UI agree on what a job-description file is.
+    Anything else is read as text, which is what this option always did and is
+    still the right behaviour for the `.txt` and `.md` files it was written for.
+    """
     if not jd_file.is_file():
         _fail(f"No such file: {jd_file}")
-    position = _service().create_position(
+
+    service = _service()
+    if jd_file.suffix.casefold() in settings.allowed_extensions:
+        extraction = service.extract_jd_document(
+            jd_file.read_bytes(), filename=jd_file.name, actor=_actor(actor)
+        )
+        # Printed rather than silently accepted: nobody is watching a browser
+        # here, and a rubric drafted from an OCR approximation is the thing this
+        # operator most needs to know before approving one.
+        if extraction.ocr_used:
+            typer.secho(
+                f"  read by OCR ({extraction.page_count} pages) — check the text",
+                fg=typer.colors.YELLOW,
+            )
+        jd_text, source, filename, sha, ocr = (
+            extraction.text,
+            "upload",
+            extraction.filename,
+            extraction.file_sha256,
+            extraction.ocr_used,
+        )
+    else:
+        jd_text, source, filename, sha, ocr = (
+            jd_file.read_text(encoding="utf-8"),
+            "paste",
+            None,
+            None,
+            None,
+        )
+
+    position = service.create_position(
         reference=reference,
         title=title,
-        jd_text=jd_file.read_text(encoding="utf-8"),
+        jd_text=jd_text,
         actor=_actor(actor),
+        jd_source=source,
+        jd_filename=filename,
+        jd_file_sha256=sha,
+        jd_ocr_used=ocr,
     )
     typer.secho(f"{position.id}  {position.reference}", fg=typer.colors.GREEN)
 

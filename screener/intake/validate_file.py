@@ -118,12 +118,12 @@ def _check_location(path: Path, root: Path) -> FileCheck | None:
     return None
 
 
-def _check_size(path: Path) -> FileCheck | None:
+def _check_size(path: Path, limit: int) -> FileCheck | None:
     size = path.stat().st_size
     if size == 0:
         return _reject("empty_file", size=0)
-    if size > settings.max_file_bytes:
-        return _reject("oversize", size=size, limit=settings.max_file_bytes)
+    if size > limit:
+        return _reject("oversize", size=size, limit=limit)
     return None
 
 
@@ -221,27 +221,51 @@ def _pdf_page_hint(path: Path) -> int | None:
     return hint or None
 
 
-def _check_pdf_pages(path: Path) -> FileCheck | None:
+def _check_pdf_pages(path: Path, limit: int) -> FileCheck | None:
     pages = _pdf_page_hint(path)
-    if pages is not None and pages > settings.max_pages:
-        return _reject("too_many_pages", pages=pages, limit=settings.max_pages)
+    if pages is not None and pages > limit:
+        return _reject("too_many_pages", pages=pages, limit=limit)
     return None
 
 
-def validate_file(path: Path, *, root: Path) -> FileCheck:
+def validate_file(
+    path: Path,
+    *,
+    root: Path,
+    max_bytes: int | None = None,
+    max_pages: int | None = None,
+) -> FileCheck:
     """Run every 8.2 check in order, stopping at the first failure.
 
     Order matters: containment before any read, size before any parse of
     structure, type before the type-specific checks. Each stage narrows what the
     next one has to be robust against.
+
+    ``max_bytes`` and ``max_pages`` default to ``settings.max_file_bytes`` and
+    ``settings.max_pages``. They exist so a caller may make these checks
+    *tighter* than the resume path — an uploaded job description allows 2 MB and
+    10 pages, because it is a two-page document and the cap is what bounds a held
+    request thread — and for no other purpose.
+
+    There is deliberately **no parameter for the accepted types**. Both callers
+    want the same two container formats, and a per-call type list is the one
+    parameter here that could weaken this function rather than narrow it.
+
+    Both are ``None`` sentinels rather than default expressions reading
+    ``settings``: a default is evaluated once, at import, and this codebase
+    mutates the settings object at runtime — `.env` overrides land on the same
+    singleton, and `tests/test_parse_worker.py` monkeypatches `max_pages`
+    directly. A def-time default would silently ignore all of it.
     """
+    limit_bytes = settings.max_file_bytes if max_bytes is None else max_bytes
+    limit_pages = settings.max_pages if max_pages is None else max_pages
     # Sequential, not a tuple of results: containment has to short-circuit
     # before anything else so much as stats the path.
     location = _check_location(path, root)
     if location is not None:
         return location
 
-    size = _check_size(path)
+    size = _check_size(path, limit_bytes)
     if size is not None:
         return size
 
@@ -270,7 +294,9 @@ def validate_file(path: Path, *, root: Path) -> FileCheck:
             actual=file_type,
         )
 
-    type_check = _check_docx_structure(path) if file_type == "docx" else _check_pdf_pages(path)
+    type_check = (
+        _check_docx_structure(path) if file_type == "docx" else _check_pdf_pages(path, limit_pages)
+    )
     if type_check is not None:
         return type_check
 

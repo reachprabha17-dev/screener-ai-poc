@@ -132,6 +132,34 @@ class Settings(BaseSettings):
     parse_mem_limit_mb: int = 2048
     allowed_extensions: tuple[str, ...] = (".pdf", ".docx")
 
+    # --- Job-description intake (8, 9.1) ---
+    #
+    # Which ways a requisition may be raised. `upload` parses a PDF/DOCX through
+    # the same sandboxed parser resumes go through; `paste` is the original
+    # textarea. `both` offers the choice.
+    #
+    # **Enforced server-side, not only in the interface.** `GET /config` tells
+    # the browser which controls to render, but a control that only hides a
+    # button is not a control — `POST /jd-documents` and `create_position` each
+    # refuse the method this forbids.
+    jd_intake_mode: Literal["both", "upload", "paste"] = "both"
+    # Deliberately far tighter than the resume path's 5 MB / 50 pages / 60 s. A
+    # job description is a one-to-three page document, and unlike a resume this
+    # parse happens inside a request, holding one of the API's threadpool
+    # threads for its whole duration — so these caps are what bound that hold,
+    # and they are the only thing that does. Raising them trades API
+    # availability for the ability to accept a document nobody writes.
+    jd_max_file_bytes: int = 2 * 1024 * 1024
+    jd_max_pages: int = 10
+    jd_parse_timeout_s: int = 15
+    # How many job descriptions may be parsed at once, across the process.
+    # Each parse permits a child `parse_mem_limit_mb`, so this is a memory
+    # ceiling as much as a concurrency one: 2 x 2048 MB is defensible beside
+    # Ollama's VRAM on the same host. Acquired non-blocking — waiting for the
+    # semaphore would park the threadpool thread this exists to protect, which
+    # converts a memory problem into an identical availability problem.
+    jd_max_concurrent_parses: int = 2
+
     # --- Safety / fairness ---
     redact_pii: bool = True
     injection_detection: bool = True

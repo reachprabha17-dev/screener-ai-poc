@@ -109,6 +109,28 @@ describe('error translation', () => {
   });
 });
 
+describe('a reply that is not from the API', () => {
+  it('names the cause when a 200 is not JSON', async () => {
+    // The dev server answers a path missing from API_PATHS in vite.config.ts
+    // with index.html and a 200. Before this, `JSON.parse` threw a bare
+    // SyntaxError that went straight past ApiError to a component, and the
+    // reviewer was shown `Unexpected token '<'` as the whole explanation while
+    // the API's access log stayed empty. It cost an afternoon once.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response('<!doctype html><html><div id="root"></div></html>', { status: 200 }),
+        ),
+      ),
+    );
+
+    await expect(createApi(identity).config()).rejects.toThrow(ApiError);
+    await expect(createApi(identity).config()).rejects.toThrow(/not JSON for \/config/);
+    await expect(createApi(identity).config()).rejects.toThrow(/vite\.config\.ts/);
+  });
+});
+
 describe('responses', () => {
   it('reads a 204 as nothing rather than failing to parse it', async () => {
     vi.stubGlobal('fetch', respondWith(null, { status: 204 }));

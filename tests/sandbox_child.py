@@ -14,6 +14,7 @@ catch.
 
 import json
 import os
+import resource
 import signal
 import sys
 import time
@@ -67,6 +68,25 @@ def _dump_cwd() -> None:
     print(json.dumps({"cwd": str(Path.cwd())}))
 
 
+def _dump_limits() -> None:
+    """Report the rlimits actually in force.
+
+    The only mode that observes the sandbox's *mechanism* rather than one of its
+    consequences. Every other test here asserts an effect — a bomb dies, a loop
+    is killed — and each of those would still pass against a sandbox that
+    applied no limits at all, because a 64 MB-per-block allocation loop is
+    eventually killed by something regardless. This is what distinguishes
+    "contained" from "got away with it", and it is what makes a change to how
+    the limits are applied checkable instead of arguable.
+    """
+    names = ("AS", "CORE", "CPU", "DATA", "FSIZE", "NOFILE", "NPROC")
+    print(
+        json.dumps(
+            {"limits": {n: resource.getrlimit(getattr(resource, f"RLIMIT_{n}")) for n in names}}
+        )
+    )
+
+
 def _fork_bomb() -> None:
     forked = 0
     try:
@@ -91,6 +111,7 @@ MODES = {
     "nonzero": _nonzero,
     "dump_env": _dump_env,
     "dump_cwd": _dump_cwd,
+    "dump_limits": _dump_limits,
     "fork_bomb": _fork_bomb,
 }
 

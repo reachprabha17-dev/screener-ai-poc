@@ -30,6 +30,7 @@ import { useSession } from '../session/context';
 import { createApi, type Api } from './client';
 import type {
   AdverseActionRecord,
+  AppConfig,
   AuditPage,
   BulkDecisionResult,
   CandidateSummary,
@@ -38,6 +39,7 @@ import type {
   FolderPage,
   Health,
   Identity,
+  JdDocument,
   Position,
   RankedCandidates,
   RecordableDecision,
@@ -67,6 +69,7 @@ function useScope(): Identity {
  */
 export const keys = {
   health: (id: Identity) => ['health', id] as const,
+  config: () => ['config'] as const,
   dashboard: (id: Identity) => ['dashboard', id] as const,
   positions: (id: Identity, includeClosed: boolean) =>
     ['positions', id, { includeClosed }] as const,
@@ -98,6 +101,29 @@ export function useHealth(): UseQueryResult<Health> {
     // enough to notice a restarted API without adding traffic to every click.
     refetchInterval: 30_000,
     retry: false,
+  });
+}
+
+/**
+ * What this deployment allows — which job-description controls to render.
+ *
+ * **Not keyed by identity**, unlike everything else here. It is deployment
+ * policy rather than a role-scoped read: the answer is the same for everybody,
+ * so scoping it would refetch on every "reviewing as" change for no difference.
+ *
+ * Cached hard because it changes only when the API restarts. A stale answer here
+ * cannot mislead anyone into a wrong decision — the server enforces the same rule
+ * independently, so the worst case is a control that is offered and then refused
+ * with a sentence saying why.
+ */
+export function useConfig(): UseQueryResult<AppConfig> {
+  const api = useApi();
+  return useQuery({
+    queryKey: keys.config(),
+    queryFn: ({ signal }) => api.config(signal),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -258,10 +284,34 @@ export function useAdverseActionRecord(
  * versions a rubric on save. A cache written from what the client *hoped*
  * happened would show a reviewer an outcome the system did not record.
  */
+/**
+ * Read a job-description document. **Not a query — a mutation.**
+ *
+ * It has no cache identity: the same file uploaded twice is two separate acts by
+ * a person, and the second one is how somebody retries after a failure. Caching
+ * it would silently return the first reading, including the failure.
+ *
+ * Nothing is invalidated on success because nothing on the server changed.
+ */
+export function useExtractJdDocument(): UseMutationResult<JdDocument, Error, File> {
+  const api = useApi();
+  return useMutation({
+    mutationFn: (file) => api.extractJdDocument(file),
+  });
+}
+
 export function useCreatePosition(): UseMutationResult<
   Position,
   Error,
-  { reference: string; title: string; jd_text: string }
+  {
+    reference: string;
+    title: string;
+    jd_text: string;
+    jd_source?: 'paste' | 'upload';
+    jd_filename?: string | null;
+    jd_file_sha256?: string | null;
+    jd_ocr_used?: boolean | null;
+  }
 > {
   const api = useApi();
   const scope = useScope();

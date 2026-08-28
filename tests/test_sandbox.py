@@ -11,11 +11,19 @@ parse — the trap 12.5 exists to close.
 """
 
 import os
+import resource
+import threading
 from pathlib import Path
 
 import pytest
 
-from screener.intake.sandbox import ParseOutcome, run_sandboxed
+from config.settings import settings
+from screener.intake.sandbox import (
+    ADDRESS_SPACE_HEADROOM,
+    MAX_OPEN_FILES,
+    ParseOutcome,
+    run_sandboxed,
+)
 from screener.models import TRANSIENT_FLAGS, Flag
 
 CHILD = "sandbox_child"
@@ -197,3 +205,77 @@ def test_child_cwd_is_not_the_repository() -> None:
 
     assert result.payload is not None
     assert Path(str(result.payload["cwd"])) != Path.cwd()
+
+
+# --- the limits themselves, not only their consequences ----------------------
+
+
+def test_the_declared_rlimits_are_actually_applied_to_the_parser() -> None:
+    """The mechanism, asserted directly rather than inferred from an effect.
+
+    Every other test in this file observes a *consequence* — a bomb dies, a loop
+    is killed — and every one of them would still pass against a sandbox that
+    applied no limits at all: a 64 MB-per-block allocation loop gets killed by
+    the host eventually either way. Without this, "the limits are applied"
+    was an argument rather than a fact, which is not good enough for the one
+    module standing between a hostile document and the host.
+
+    It matters most across a change to *how* they are applied. They are set by
+    `rlimit_shim` now and inherited through its `execv`, rather than by a
+    `preexec_fn` between fork and exec; this is what shows the migration
+    preserved every value.
+    """
+    result = run("dump_limits", timeout_s=7)
+
+    assert result.ok
+    assert result.payload is not None
+    limits = result.payload["limits"]
+
+    data = settings.parse_mem_limit_mb * 1024 * 1024
+    assert limits["DATA"] == [data, data]
+    assert limits["AS"] == [data * ADDRESS_SPACE_HEADROOM, data * ADDRESS_SPACE_HEADROOM]
+    # Soft below hard, so a spin takes SIGXCPU rather than a bare SIGKILL.
+    assert limits["CPU"] == [7, 8]
+    assert limits["FSIZE"] == [
+        settings.max_decompressed_bytes,
+        settings.max_decompressed_bytes,
+    ]
+    assert limits["NOFILE"] == [MAX_OPEN_FILES, MAX_OPEN_FILES]
+    assert limits["CORE"] == [0, 0]  # no core dumps of resume text
+    # Relative to live usage rather than absolute (see `_nproc_limit`), so the
+    # assertion is that it is bounded at all, not what it equals.
+    soft, _hard = limits["NPROC"]
+    assert soft > 0 and soft != resource.RLIM_INFINITY
+
+
+def test_the_sandbox_is_safe_to_call_from_a_threaded_parent() -> None:
+    """The regression the shim exists to prevent (8.4).
+
+    The API parses an uploaded job description from FastAPI's threadpool, so the
+    parent is multi-threaded by the time `run_sandboxed` is called. The
+    `preexec_fn` this replaced ran Python between `fork` and `exec`, where the
+    child holds a snapshot of locks other threads may have been inside — a
+    deadlock that shows up as a parse that never returns, under load, rather
+    than as an error anyone can reproduce.
+
+    Threads are kept busy for the duration rather than merely started, so they
+    are genuinely live across the fork rather than already finished.
+    """
+    stop = threading.Event()
+    workers = [threading.Thread(target=stop.wait, daemon=True) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+
+    try:
+        assert threading.active_count() > 8
+        results = [run("ok") for _ in range(3)]
+    finally:
+        stop.set()
+        for worker in workers:
+            worker.join(timeout=5)
+
+    assert all(r.outcome is ParseOutcome.OK for r in results)
+    assert all(
+        r.payload == {"text": "Asha Nair. Senior Backend Engineer.", "page_count": 1}
+        for r in results
+    )

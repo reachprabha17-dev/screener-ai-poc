@@ -2400,14 +2400,21 @@ opens a browser.
 
 ## Part 16 — Adding an endpoint
 
-Four steps, in order:
+Five steps, in order:
 
 1. **`src/api/types.ts`** — add the response shape, mirroring the pydantic model,
    and name that model in a comment.
 2. **`src/api/client.ts`** — add the call inside `createApi`. Relative path only.
-3. **`src/api/queries.ts`** — add a query key to `keys` and a hook. For a write,
+3. **`vite.config.ts`** — add the path to `API_PATHS`. **This is the step that
+   gets forgotten**, and it fails silently rather than loudly: the dev server
+   answers an unlisted path with `index.html` and a 200, so the app gets a page
+   where it expected JSON, the API's access log stays empty, and it reads as a
+   broken endpoint. It was missed when `/jd-documents` was added, and the
+   symptom — an upload that failed with nothing on the server side to show for
+   it — cost an afternoon.
+4. **`src/api/queries.ts`** — add a query key to `keys` and a hook. For a write,
    **name the keys it invalidates** in `onSuccess`.
-4. **Use the hook in a page**, wrapping the read in `<QueryState>` so loading and
+5. **Use the hook in a page**, wrapping the read in `<QueryState>` so loading and
    failure look the same as everywhere else.
 
 If the endpoint is role-gated, also add the client-side hint (as `AuditLayout`

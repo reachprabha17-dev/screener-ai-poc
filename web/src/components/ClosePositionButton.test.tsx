@@ -13,6 +13,9 @@ const OPEN: Position = {
   closed_at: null,
   created_by: 'someone',
   created_at: '2026-05-01T09:00:00Z',
+  jd_source: 'paste',
+  jd_filename: null,
+  jd_ocr_used: null,
 };
 
 function mockClose(response: { status: number; body: unknown }) {

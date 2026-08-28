@@ -6,12 +6,13 @@ call inside blocks the event loop — the most common FastAPI mistake, producing
 something slower than the sync version while looking more sophisticated (15.3).
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from screener.api.deps import (
     get_actor,
     get_service,
     to_folder,
+    to_jd_extraction,
     to_position,
     to_rubric,
 )
@@ -19,6 +20,7 @@ from screener.models import Actor
 from screener.schemas import (
     CreatePositionRequest,
     FolderPageResponse,
+    JdDocumentResponse,
     PositionResponse,
     RubricResponse,
     SaveRubricRequest,
@@ -35,9 +37,45 @@ def create_position(
     service: ScreenerService = Depends(get_service),
 ) -> PositionResponse:
     position = service.create_position(
-        reference=request.reference, title=request.title, jd_text=request.jd_text, actor=actor
+        reference=request.reference,
+        title=request.title,
+        jd_text=request.jd_text,
+        actor=actor,
+        jd_source=request.jd_source,
+        jd_filename=request.jd_filename,
+        jd_file_sha256=request.jd_file_sha256,
+        jd_ocr_used=request.jd_ocr_used,
     )
     return to_position(position)
+
+
+@router.post("/jd-documents", response_model=JdDocumentResponse)
+def extract_jd_document(
+    file: UploadFile = File(...),
+    actor: Actor = Depends(get_actor),
+    service: ScreenerService = Depends(get_service),
+) -> JdDocumentResponse:
+    """A job-description PDF/DOCX → the text inside it. **Creates nothing.**
+
+    200, not 201: no resource comes into existence here. The reviewer reads the
+    text, corrects whatever the parser got wrong, and submits it to
+    `POST /positions` like any other description — so upload and paste converge
+    on one path, and the text stored against a requisition is always text a
+    person accepted.
+
+    Showing them the extraction is the point rather than a nicety. A two-column
+    layout that interleaves, or a scan whose OCR dropped a "not", produces a
+    perfectly plausible rubric, and the approval gate in front of that rubric
+    cannot catch it — the reviewer has nothing to compare it against. This is
+    that same control, one step earlier.
+
+    Synchronous, ~2 s. The parse happens in a separate locked-down process; the
+    size and page caps that bound it are `jd_max_*` (7), and the request body is
+    capped before it is buffered by `JdUploadSizeLimit` in `app.py`.
+    """
+    return to_jd_extraction(
+        service.extract_jd_document(file.file.read(), filename=file.filename or "", actor=actor)
+    )
 
 
 @router.post("/positions/{position_id}/close", response_model=PositionResponse)

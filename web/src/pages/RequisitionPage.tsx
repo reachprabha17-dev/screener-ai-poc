@@ -58,10 +58,31 @@ export function RequisitionPage() {
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
             <code>{position?.reference ?? positionId}</code>
             {position ? ` · posted by ${position.created_by}` : null}
+            {/*
+              Where the rubric below came from. A reviewer approving criteria, or
+              answering for a rejection months later, has to be able to see which
+              document produced them.
+            */}
+            {position?.jd_filename ? ` · from ${position.jd_filename}` : null}
           </p>
         </div>
         {position ? <ClosePositionButton position={position} /> : null}
       </div>
+
+      {/*
+        A rubric drafted from OCR'd text is drafted from an approximation. The
+        person approving it is the last one who can catch a requirement the
+        recognition mangled, so the warning belongs beside the rubric and not
+        only on the form where the file was uploaded.
+      */}
+      {position?.jd_ocr_used ? (
+        <Alert tone="warn" title="This job description was read by OCR">
+          <p>
+            The text these criteria were drafted from was recognised from a scanned document and may
+            be imperfect. Read them against the original posting before approving.
+          </p>
+        </Alert>
+      ) : null}
 
       {position?.status === 'closed' ? (
         <Alert tone="info">

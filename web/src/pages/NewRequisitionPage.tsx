@@ -4,6 +4,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useCreatePosition } from '../api/queries';
 import { FolderPicker } from '../components/FolderPicker';
+import { JdInput } from '../components/JdInput';
+import { emptyJd, type JdValue } from '../lib/jd';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { Card, CardBody, CardHeader } from '../ui/Card';
@@ -11,27 +13,33 @@ import { Field } from '../ui/Field';
 
 interface Fields {
   title: string;
-  jd_text: string;
 }
 
 /**
  * Raise a requisition: a folder on the share, a title, and the job description.
  *
- * The folder is chosen first because it is the part people get wrong. The other
- * two fields are typed from something already written; the folder has to be found
- * on a server the reviewer cannot see, and a requisition pointed at the wrong one
- * screens the wrong applicants without ever looking broken.
+ * The folder is chosen first because it is the part people get wrong. The title
+ * is typed from something already written; the folder has to be found on a server
+ * the reviewer cannot see, and a requisition pointed at the wrong one screens the
+ * wrong applicants without ever looking broken.
+ *
+ * The description is `JdInput`, which owns the upload/paste choice and the
+ * correction step. This page holds its value and submits it — the provenance
+ * travels with the text so the requisition records which document its rubric was
+ * drafted from.
  */
 export function NewRequisitionPage() {
   const [folder, setFolder] = useState('');
   const [folderProblem, setFolderProblem] = useState('');
+  const [jd, setJd] = useState<JdValue>(emptyJd);
+  const [jdProblem, setJdProblem] = useState('');
   const create = useCreatePosition();
   const navigate = useNavigate();
   const {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<Fields>({ defaultValues: { title: '', jd_text: '' } });
+  } = useForm<Fields>({ defaultValues: { title: '' } });
 
   const onSubmit = handleSubmit((values) => {
     // Checked on submit rather than by disabling the button, so the reason is
@@ -41,8 +49,21 @@ export function NewRequisitionPage() {
       return;
     }
     setFolderProblem('');
+    if (!jd.text.trim()) {
+      setJdProblem('Upload or paste the job description.');
+      return;
+    }
+    setJdProblem('');
     create.mutate(
-      { reference: folder, title: values.title.trim(), jd_text: values.jd_text.trim() },
+      {
+        reference: folder,
+        title: values.title.trim(),
+        jd_text: jd.text.trim(),
+        jd_source: jd.source,
+        jd_filename: jd.filename,
+        jd_file_sha256: jd.fileSha256,
+        jd_ocr_used: jd.ocrUsed,
+      },
       {
         onSuccess: (position) => {
           toast.success(`Created ${position.reference}`);
@@ -88,27 +109,21 @@ export function NewRequisitionPage() {
               />
             </Field>
 
-            <Field
-              label="Job description"
-              hint="The model drafts a rubric from this, which you then edit and approve. Nothing is screened against a rubric a person has not approved."
-            >
-              <textarea
-                rows={14}
-                placeholder="Paste the job description. The rubric is drafted from this text."
-                {...register('jd_text', {
-                  validate: (value) => value.trim().length > 0 || 'A job description is required.',
-                })}
-              />
-            </Field>
+            <JdInput value={jd} onChange={setJd} />
 
             {folderProblem ? (
               <Alert tone="error">
                 <p>{folderProblem}</p>
               </Alert>
             ) : null}
-            {(errors.title ?? errors.jd_text) ? (
+            {errors.title ? (
               <Alert tone="error">
-                <p>{errors.title?.message ?? errors.jd_text?.message}</p>
+                <p>{errors.title.message}</p>
+              </Alert>
+            ) : null}
+            {jdProblem ? (
+              <Alert tone="error">
+                <p>{jdProblem}</p>
               </Alert>
             ) : null}
 

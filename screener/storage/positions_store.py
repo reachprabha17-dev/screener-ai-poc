@@ -37,13 +37,18 @@ def user_exists(tx: Tx, actor_id: str) -> bool:
 
 def create(tx: Tx, position: Position) -> None:
     tx.execute(
-        "INSERT INTO positions (id, reference, title, jd_text, created_by, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO positions (id, reference, title, jd_text, jd_source, jd_filename, "
+        "jd_file_sha256, jd_ocr_used, created_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             position.id,
             position.reference,
             position.title,
             position.jd_text,
+            position.jd_source,
+            position.jd_filename,
+            position.jd_file_sha256,
+            position.jd_ocr_used,
             position.created_by,
             position.created_at.isoformat(),
         ),
@@ -119,6 +124,10 @@ def _to_position(row: Any) -> Position:  # noqa: ANN401 — a SQLAlchemy RowMapp
         reference=row["reference"],
         title=row["title"],
         jd_text=row["jd_text"],
+        jd_source=row["jd_source"],
+        jd_filename=row["jd_filename"],
+        jd_file_sha256=row["jd_file_sha256"],
+        jd_ocr_used=row["jd_ocr_used"],
         status=row["status"],
         closed_at=row["closed_at"],
         created_by=row["created_by"],

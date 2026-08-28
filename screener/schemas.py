@@ -44,11 +44,25 @@ EvidenceStatus = Literal["verified", "partial", "unverified", "not_applicable"]
 
 
 class CreatePositionRequest(BaseModel):
+    """A requisition. `jd_text` is the description whatever produced it.
+
+    The provenance fields are what the reviewer's browser echoes back from
+    `POST /jd-documents`; they default to a pasted description, which is what a
+    client that knows nothing about upload is sending. They are a record of
+    origin, not a claim about `jd_text` — the reviewer edits the extracted text
+    before submitting it, deliberately, so the hash names the uploaded document
+    and nothing more.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     reference: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=200)
     jd_text: str = Field(min_length=1)
+    jd_source: Literal["paste", "upload"] = "paste"
+    jd_filename: str | None = Field(default=None, max_length=255)
+    jd_file_sha256: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+    jd_ocr_used: bool | None = None
 
     @field_validator("reference")
     @classmethod
@@ -56,6 +70,51 @@ class CreatePositionRequest(BaseModel):
         if not is_safe_reference(v):
             raise ValueError("must contain only letters, numbers, spaces, and & ' ( ) + # . _ -")
         return v
+
+
+class JdDocumentResponse(BaseModel):
+    """What `POST /jd-documents` returns: the text, and how to judge it.
+
+    Everything beside `text` exists so the reviewer can tell whether the reading
+    is trustworthy before a rubric is drafted from it. `ocr_used` in particular
+    is not decoration — a scanned document has been *approximated*, and the
+    person approving the rubric is the only one positioned to notice that the
+    approximation dropped something.
+
+    `injection_signals` and `warnings` are advisory. Nothing here blocks.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    filename: str
+    file_sha256: str
+    page_count: int
+    ocr_used: bool
+    chars_stripped: int
+    warnings: list[str]
+    injection_signals: list[str]
+    parser_version: str
+
+
+class ConfigResponse(BaseModel):
+    """Deployment policy the interface has to agree with (7).
+
+    Deliberately **not** part of `/health`. That endpoint is polled every thirty
+    seconds and answers "can this process do work"; this one answers "what is
+    this deployment configured to allow", which changes only on restart and is
+    a different question with a different cache lifetime.
+
+    Nothing derived from a secret, a path, or a host may be added here — it is
+    served to every browser that can reach the port.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    jd_intake_mode: Literal["both", "upload", "paste"]
+    jd_max_file_bytes: int
+    jd_max_pages: int
+    allowed_extensions: list[str]
 
 
 class FolderResponse(BaseModel):
@@ -447,6 +506,12 @@ class PositionResponse(BaseModel):
     closed_at: datetime | None
     created_by: str
     created_at: datetime
+    # Where the job description came from. Shown beside the rubric drafted from
+    # it, because a rubric drafted from OCR'd text is drafted from an
+    # approximation and the person approving it should be told so.
+    jd_source: str
+    jd_filename: str | None
+    jd_ocr_used: bool | None
 
 
 class RubricResponse(BaseModel):

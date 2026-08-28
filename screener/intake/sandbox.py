@@ -28,16 +28,15 @@ would hang forever. The parent's own timeout is what actually bounds the call,
 and the rlimit is the backstop for the spin-loop case.
 """
 
+import contextlib
 import json
 import os
-import resource
 import shutil
 import signal
 import subprocess  # noqa: S404 — sandboxing a hostile parser is the point of this module
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -47,6 +46,9 @@ from config.settings import settings
 from screener.models import Flag, ParsedResume, ParseResult
 
 PARSE_WORKER_MODULE = "screener.intake.parse_worker"
+# Exec'd in place of the parser, applies the rlimits, then execs the parser.
+# See its module docstring for why the limits are not applied here.
+RLIMIT_SHIM_MODULE = "screener.intake.rlimit_shim"
 
 # How many *new* processes and threads the parser may create, above whatever the
 # service account is already running.
@@ -179,56 +181,48 @@ def _nproc_limit() -> int | None:
     return current + MAX_NEW_PROCESSES
 
 
-def _limiter(cpu_seconds: int, nproc: int | None) -> Callable[[], None]:
-    """Build the ``preexec_fn`` that locks the child down between fork and exec.
+def _limit_spec(cpu_seconds: int, nproc: int | None) -> list[tuple[str, int, int]]:
+    """The rlimits, as data. Computed in the parent, applied by ``rlimit_shim``.
 
-    Before exec, so the limits cover interpreter startup and the parser's own
-    imports rather than only the code that remembers to opt in.
+    Applied before the parser's own ``execve``, so the limits still cover
+    interpreter startup and the parser's imports rather than only the code that
+    remembers to opt in — rlimits are not reset by ``execve``.
 
-    ``nproc`` is computed by the caller, in the parent. Everything that runs here
-    is between ``fork`` and ``exec``, where only async-signal-safe work is
-    legitimate — scanning ``/proc`` from this window would be a latent deadlock
-    waiting for the first threaded caller.
+    This used to be a ``preexec_fn``, which ran it between ``fork`` and ``exec``.
+    That window admits only async-signal-safe work, and a Python callback in it
+    deadlocks a multi-threaded parent sooner or later. Returning data instead
+    means the only thing between fork and exec is C code inside ``subprocess``,
+    and the sandbox became safe to call from anywhere — including the API's
+    threadpool, which is what the job-description upload does.
 
-    ``preexec_fn`` is not async-signal-safe in a multi-threaded parent either.
-    The worker (16.1) is single-threaded by design — one resume at a time, no
-    thread pool — and the API never parses. Do not call this from a threadpool
-    handler.
+    ``nproc`` is still computed by the caller, in the parent: it reads ``/proc``,
+    and that is work the shim should not be doing inside a process that is about
+    to be handed a hostile document.
     """
-
-    def apply() -> None:
-        # `RLIMIT_DATA` is the real memory bound, not `RLIMIT_AS`. Modern native
-        # runtimes reserve enormous virtual address space they never touch:
-        # measured here, a parse peaks at ~2.9 GB of VA while holding ~270 MB
-        # resident. An `RLIMIT_AS` set to the intended memory ceiling therefore
-        # kills the parser before it reads a byte. Since Linux 4.7 `RLIMIT_DATA`
-        # covers private anonymous mappings, so it tracks what is actually
-        # allocated — which is what a decompression bomb consumes.
-        #
-        # `RLIMIT_AS` is kept only as a runaway-address-space backstop, set well
-        # above the runtime's reservations.
-        data = settings.parse_mem_limit_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_DATA, (data, data))
-        address_space = data * ADDRESS_SPACE_HEADROOM
-        resource.setrlimit(resource.RLIMIT_AS, (address_space, address_space))
+    # `RLIMIT_DATA` is the real memory bound, not `RLIMIT_AS`. Modern native
+    # runtimes reserve enormous virtual address space they never touch:
+    # measured here, a parse peaks at ~2.9 GB of VA while holding ~270 MB
+    # resident. An `RLIMIT_AS` set to the intended memory ceiling therefore
+    # kills the parser before it reads a byte. Since Linux 4.7 `RLIMIT_DATA`
+    # covers private anonymous mappings, so it tracks what is actually
+    # allocated — which is what a decompression bomb consumes.
+    #
+    # `RLIMIT_AS` is kept only as a runaway-address-space backstop, set well
+    # above the runtime's reservations.
+    data = settings.parse_mem_limit_mb * 1024 * 1024
+    spec = [
+        ("DATA", data, data),
+        ("AS", data * ADDRESS_SPACE_HEADROOM, data * ADDRESS_SPACE_HEADROOM),
         # Soft below hard, so a CPU loop takes SIGXCPU — which is diagnosable —
         # rather than a bare SIGKILL indistinguishable from an OOM kill.
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
-        if nproc is not None:
-            resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
-        resource.setrlimit(
-            resource.RLIMIT_FSIZE,
-            (settings.max_decompressed_bytes, settings.max_decompressed_bytes),
-        )
-        resource.setrlimit(resource.RLIMIT_NOFILE, (MAX_OPEN_FILES, MAX_OPEN_FILES))
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))  # no core dumps of resume text
-
-        # New session: a wall-clock kill reaches the parser's own children
-        # (tesseract) instead of orphaning them holding the CPU we just tried to
-        # reclaim.
-        os.setsid()
-
-    return apply
+        ("CPU", cpu_seconds, cpu_seconds + 1),
+        ("FSIZE", settings.max_decompressed_bytes, settings.max_decompressed_bytes),
+        ("NOFILE", MAX_OPEN_FILES, MAX_OPEN_FILES),
+        ("CORE", 0, 0),  # no core dumps of resume text
+    ]
+    if nproc is not None:
+        spec.append(("NPROC", nproc, nproc))
+    return spec
 
 
 def _child_env(extra: dict[str, str] | None) -> dict[str, str]:
@@ -261,6 +255,20 @@ def _classify(returncode: int) -> ParseOutcome:
     return ParseOutcome.CRASHED
 
 
+def _kill_process_group(child: "subprocess.Popen[str]") -> None:
+    """SIGKILL the child's whole process group, tolerating a race with its exit.
+
+    Safe only because the child was started with ``start_new_session``: its pgid
+    is its own pid, so this cannot reach the caller's group. ``ProcessLookupError``
+    is the ordinary case where the child died between the timeout firing and this
+    call — not an error, and not worth a log line.
+    """
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError, OSError):
+        child.kill()
+
+
 def run_sandboxed(
     path: Path,
     *,
@@ -288,49 +296,77 @@ def run_sandboxed(
     started = time.monotonic()
 
     try:
-        completed = subprocess.run(  # noqa: S603 — fixed argv, no shell, scrubbed env
-            [sys.executable, "-m", worker_module, str(path)],
-            capture_output=True,
+        # `Popen` rather than `run`, for the pid alone. `run`'s timeout path
+        # kills one process; the group kill below needs to name the group, and
+        # `TimeoutExpired` does not carry the pid to name it with.
+        child = subprocess.Popen(  # noqa: S603 — fixed argv, no shell, scrubbed env
+            [
+                sys.executable,
+                "-m",
+                RLIMIT_SHIM_MODULE,
+                json.dumps(_limit_spec(timeout, nproc)),
+                worker_module,
+                str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             # cwd is a fresh per-job directory: anything the parser writes
-            # relative to itself lands somewhere we delete.
+            # relative to itself lands somewhere we delete. Survives the shim's
+            # `execve`, so it is the parser's cwd too.
             cwd=tmpdir,
             env=_child_env(extra_env),
-            preexec_fn=_limiter(timeout, nproc),  # noqa: PLW1509 — see _limiter's docstring
-            timeout=timeout + _WALL_CLOCK_GRACE_S,
-            check=False,
+            # setsid, performed by `_posixsubprocess` in C between fork and exec.
+            # Async-signal-safe, unlike the `preexec_fn` this replaced, and it
+            # covers the shim as well as the parser it execs.
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as expired:
-        # subprocess.run already killed the child; the session created in
-        # _apply_limits is what makes sure its descendants went too.
-        return SandboxResult(
-            outcome=ParseOutcome.TIMEOUT,
-            stderr=_as_text(expired.stderr),
-            duration_s=round(time.monotonic() - started, 3),
-        )
+        try:
+            stdout, stderr = child.communicate(timeout=timeout + _WALL_CLOCK_GRACE_S)
+        except subprocess.TimeoutExpired:
+            # Kill the *group*, not the process. The parser's own children
+            # (tesseract, or anything a hostile file persuaded it to fork)
+            # outlive a single-pid kill, holding the CPU we just tried to
+            # reclaim and the stdout pipe we are still reading — which is a
+            # parent that hangs after its own timeout fired.
+            #
+            # `start_new_session` above is what makes this safe as well as
+            # necessary: the child leads its own session, so its pgid is its own
+            # pid and the signal cannot reach the caller's process group. That
+            # was not true before, which is why this was previously asserted in
+            # a comment rather than done.
+            _kill_process_group(child)
+            # Drains rather than blocks: every writer is dead by now.
+            _, stderr = child.communicate()
+            return SandboxResult(
+                outcome=ParseOutcome.TIMEOUT,
+                stderr=_as_text(stderr)[-4000:],
+                duration_s=round(time.monotonic() - started, 3),
+            )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     duration = round(time.monotonic() - started, 3)
+    returncode = child.returncode
 
-    if completed.returncode != 0:
+    if returncode != 0:
         return SandboxResult(
-            outcome=_classify(completed.returncode),
-            stderr=completed.stderr[-4000:],
-            exit_code=completed.returncode if completed.returncode > 0 else None,
-            killed_by=-completed.returncode if completed.returncode < 0 else None,
+            outcome=_classify(returncode),
+            stderr=stderr[-4000:],
+            exit_code=returncode if returncode > 0 else None,
+            killed_by=-returncode if returncode < 0 else None,
             duration_s=duration,
         )
 
     try:
-        payload = json.loads(completed.stdout)
+        payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
         # Exit 0 with unreadable output means the contract between parent and
         # child broke. Treated as a crash, not as an empty parse: an empty parse
         # is a cacheable statement about the document, and this is not one.
         return SandboxResult(
             outcome=ParseOutcome.INVALID_OUTPUT,
-            stderr=f"{exc}\n{completed.stderr[-4000:]}",
+            stderr=f"{exc}\n{stderr[-4000:]}",
             exit_code=0,
             duration_s=duration,
         )
@@ -346,7 +382,7 @@ def run_sandboxed(
     return SandboxResult(
         outcome=ParseOutcome.OK,
         payload=payload,
-        stderr=completed.stderr[-4000:],
+        stderr=stderr[-4000:],
         exit_code=0,
         duration_s=duration,
     )
@@ -379,8 +415,8 @@ class SandboxedParser:
     gets treated as an attack.
     """
 
-    def parse(self, path: Path) -> ParseResult:
-        result = run_sandboxed(path)
+    def parse(self, path: Path, *, timeout_s: int | None = None) -> ParseResult:
+        result = run_sandboxed(path, timeout_s=timeout_s)
 
         if result.outcome is ParseOutcome.TIMEOUT:
             return ParseResult(

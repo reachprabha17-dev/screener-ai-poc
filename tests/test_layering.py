@@ -105,8 +105,84 @@ def test_the_service_layer_never_imports_the_pipeline() -> None:
     )
 
 
+def test_the_service_layer_reaches_the_parser_only_through_a_port() -> None:
+    """How `service.extract_jd_document` reads a document without importing one.
+
+    The test above forbids `screener.intake` in `service.py` and that has not
+    been relaxed — the service layer runs inside the API process, and keeping
+    document parsing out of it is worth more than a direct call. So the seam is
+    `ports.DocumentExtractor`, wired at the composition root, exactly as
+    `ports.LLMClient` has always been.
+
+    Asserted rather than left to the ban, because the ban is satisfied just as
+    well by a service that cannot read a document at all, and that is a different
+    system from this one.
+    """
+    source = (ROOT / "screener/service.py").read_text(encoding="utf-8")
+
+    assert isinstance(ports.DocumentExtractor, type)
+    assert "extractor: DocumentExtractor | None" in source
+    assert "screener.ports" in imports_of(ROOT / "screener/service.py")
+
+
+# The one module allowed to name concrete infrastructure. It is where
+# `OllamaClient` is constructed, and it is the only place a class from
+# `screener.intake` may be named.
+COMPOSITION_ROOT = Path("screener/api/deps.py")
+
+
 def test_no_api_module_can_screen() -> None:
-    assert_forbidden(package_imports("screener/api"), ("screener.pipeline", "screener.intake"))
+    """`screener.pipeline` is absolute; `screener.intake` is not, and was.
+
+    These were one rule and they protect two different things.
+
+    **The pipeline ban is about work.** Screening inside a request lifecycle
+    loses orphan reclaim and resumption and dies with the process — and it would
+    work perfectly on three files before falling over on a thousand. Nothing in
+    `api/` may import it, ever, including the composition root.
+
+    **The intake ban was about hostile bytes** in the process holding the
+    database credentials. That is a real concern and it is not this ban that
+    addresses it: `sandbox.py` does, by running every parse in a separate
+    rlimited process with a scrubbed environment. Banning the import as well was
+    doing the sandbox's job a second time, and the collateral was a legitimate
+    use — the API extracting text from one uploaded job description, one
+    document, while a human waits, which is the same shape as `extract_rubric`
+    and not the shape of a batch.
+
+    So the ban narrows to what it was protecting. `deps.py` may construct the
+    extractor, exactly as it constructs `OllamaClient`; every other module under
+    `api/` still may not import intake at all, and no module under `api/` may
+    import the pipeline. `service.py` keeps **both** bans (below) and reaches the
+    parser through `ports.DocumentExtractor`.
+
+    If this test is failing because a route module wants to parse something, the
+    fix is a service method behind the port, not another name in
+    `COMPOSITION_ROOT`.
+    """
+    api = package_imports("screener/api")
+
+    assert_forbidden(api, ("screener.pipeline",))
+
+    intake = {
+        path: sorted(m for m in modules if m.startswith("screener.intake"))
+        for path, modules in api.items()
+        if path != COMPOSITION_ROOT
+    }
+    assert {path: mods for path, mods in intake.items() if mods} == {}
+
+
+def test_the_composition_root_names_infrastructure_and_nothing_else_does() -> None:
+    """The exception above is real, so it is asserted rather than assumed.
+
+    A narrowed rule that nobody checks the narrow end of is a deleted rule. This
+    fails if `deps.py` stops being the place the extractor is wired — which is
+    the state in which the exception has stopped paying for itself.
+    """
+    imports = imports_of(ROOT / COMPOSITION_ROOT)
+
+    assert "screener.intake.document_text" in imports
+    assert "screener.clients.ollama_client" in imports
 
 
 def test_the_api_reaches_storage_only_through_the_service() -> None:
@@ -217,6 +293,47 @@ def test_every_network_call_goes_through_the_one_client() -> None:
     ]
 
     assert not offenders, f"network I/O outside {API_CLIENT}: {offenders}"
+
+
+def test_every_path_the_client_calls_is_reachable_in_development() -> None:
+    """`client.ts` and `vite.config.ts` must name the same API paths.
+
+    The dev server proxies an **allowlist**, and an unlisted path does not fail
+    loudly — Vite falls through to its single-page-app handler and answers the
+    API call with `index.html` and a 200. The browser then receives a web page
+    where it expected JSON, nothing reaches the API at all, and its access log
+    stays empty while the interface reports a broken endpoint. That is a long
+    way from the missing line that caused it.
+
+    This is the gap that let `/jd-documents` and `/config` ship broken: the
+    Python suite reaches the app through `TestClient`, which never opens a
+    socket, and the vitest suite stubs `fetch`, so no test on either side of the
+    boundary could see a proxy. **The two suites agreed with each other and
+    both were wrong about the thing in between them.**
+
+    A superset is fine — `/ready` is proxied and never called from the app —
+    but every path the client *can* reach must be listed.
+    """
+    client = (ROOT / API_CLIENT).read_text(encoding="utf-8")
+    config = (ROOT / "web/vite.config.ts").read_text(encoding="utf-8")
+
+    # The first segment is what the proxy matches on, so that is what is
+    # compared: `/positions/{id}/rubric` is reachable because `/positions` is.
+    called = {
+        match.group(1)
+        for match in re.finditer(r"""request<[^>]*>\(\s*[`'"](/[A-Za-z0-9._-]+)""", client)
+    }
+    assert called, "no request paths found — has the call shape in client.ts changed?"
+
+    proxied = set(re.findall(r"""^\s*['"](/[A-Za-z0-9._-]+)['"],""", config, re.MULTILINE))
+    assert proxied, "no API_PATHS found — has the shape of vite.config.ts changed?"
+
+    missing = sorted(called - proxied)
+    assert not missing, (
+        f"{missing} reachable from {API_CLIENT} but absent from API_PATHS in "
+        "web/vite.config.ts — the dev server will answer these with index.html "
+        "and a 200 instead of proxying them to the API"
+    )
 
 
 def test_the_reviewer_ui_renders_no_raw_html() -> None:

@@ -22,6 +22,7 @@
 
 import type {
   AdverseActionRecord,
+  AppConfig,
   AuditPage,
   BulkDecisionResult,
   Criterion,
@@ -29,6 +30,8 @@ import type {
   FolderPage,
   Health,
   Identity,
+  JdDocument,
+  JdSource,
   Position,
   RankedCandidates,
   RecordableDecision,
@@ -58,8 +61,17 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  */
 const EXTRACT_TIMEOUT_MS = 180_000;
 
+/**
+ * Reading a document is bounded server-side by `jd_parse_timeout_s`, which is
+ * seconds rather than minutes. This only has to outlast that plus the upload
+ * itself — a much shorter wait than a cold model load, and one where failing
+ * fast is the kinder behaviour because the paste box is right there.
+ */
+const UPLOAD_TIMEOUT_MS = 60_000;
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  /** `FormData` is sent as-is; anything else is JSON-encoded. */
   body?: unknown;
   timeoutMs?: number;
   /** The query's cancellation signal, so an abandoned page stops fetching. */
@@ -74,10 +86,16 @@ interface RequestOptions {
  * "this actor has no roles at all" — which would lock the operator out of every
  * role-scoped read.
  */
-function headers(identity: Identity, hasBody: boolean): HeadersInit {
+function headers(identity: Identity, body: unknown): HeadersInit {
   const result: Record<string, string> = { 'X-Actor': identity.actor };
   if (identity.roles.length > 0) result['X-Actor-Roles'] = identity.roles.join(',');
-  if (hasBody) result['Content-Type'] = 'application/json';
+  // `FormData` is the one body we must NOT type ourselves: the browser has to
+  // set `multipart/form-data` *with its generated boundary*, and a header we
+  // wrote would replace it with one that has no boundary at all. The server
+  // then cannot split the parts and answers 422 for a request that was fine.
+  if (body !== undefined && !(body instanceof FormData)) {
+    result['Content-Type'] = 'application/json';
+  }
   return result;
 }
 
@@ -110,15 +128,27 @@ async function explain(response: Response): Promise<string> {
       return typeof detail === 'string' && detail
         ? detail
         : 'That rubric has not been approved yet. Approve it before starting a run.';
+    case 413:
+      return typeof detail === 'string' && detail
+        ? detail
+        : 'That file is too large. Try a smaller one, or paste the text instead.';
     case 422:
       return `The request was rejected as invalid: ${typeof detail === 'string' ? detail : 'check the fields above.'}`;
     case 503:
-      return 'The screener is not ready — check the model, disk space and migrations.';
+      return typeof detail === 'string' && detail
+        ? detail
+        : 'The screener is not ready — check the model, disk space and migrations.';
     default:
       return typeof detail === 'string' && detail
         ? detail
         : `The API returned ${String(response.status)}.`;
   }
+}
+
+function encode(body: unknown): BodyInit | null {
+  if (body === undefined) return null;
+  if (body instanceof FormData) return body;
+  return JSON.stringify(body);
 }
 
 async function request<T>(
@@ -133,8 +163,8 @@ async function request<T>(
   try {
     response = await fetch(path, {
       method,
-      headers: headers(identity, body !== undefined),
-      body: body === undefined ? null : JSON.stringify(body),
+      headers: headers(identity, body),
+      body: encode(body),
       signal: abort,
       // Responses carry candidate names and verdicts. Nothing caches them; the
       // API sends `Cache-Control: no-store` and this is the request-side half.
@@ -156,7 +186,21 @@ async function request<T>(
 
   const text = await response.text();
   if (!text) return null as T;
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // A 200 that is not JSON means something answered that was not the API.
+    // In development that is the Vite dev server serving `index.html` for a
+    // path missing from `API_PATHS` in `vite.config.ts`; in a deployment it is
+    // a proxy or a login page in front of the API. Both look identical to this
+    // function, and neither is a `SyntaxError` anybody can act on — which is
+    // what escaped from here before, straight past `ApiError` and out to a
+    // component, carrying `Unexpected token '<'` as its whole explanation.
+    throw new ApiError(
+      `The API returned something that is not JSON for ${path}. In development, check that the path is listed in API_PATHS in web/vite.config.ts.`,
+      response.status,
+    );
+  }
 }
 
 function query(params: Record<string, string | number>): string {
@@ -196,8 +240,34 @@ export function createApi(identity: Identity) {
       signal?: AbortSignal,
     ) => request<FolderPage>(`/positions/folders?${query(args)}`, identity, { signal }),
 
-    createPosition: (input: { reference: string; title: string; jd_text: string }) =>
-      request<Position>('/positions', identity, { method: 'POST', body: input }),
+    createPosition: (input: {
+      reference: string;
+      title: string;
+      jd_text: string;
+      jd_source?: JdSource;
+      jd_filename?: string | null;
+      jd_file_sha256?: string | null;
+      jd_ocr_used?: boolean | null;
+    }) => request<Position>('/positions', identity, { method: 'POST', body: input }),
+
+    /**
+     * A job-description document → the text inside it. Creates nothing.
+     *
+     * The reviewer reads what comes back, fixes whatever the parser got wrong,
+     * and only then calls `createPosition`. That ordering is the point: a
+     * two-column PDF that interleaves produces a perfectly plausible rubric, and
+     * the approval step in front of that rubric cannot catch it because there is
+     * nothing to compare it against.
+     */
+    extractJdDocument: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return request<JdDocument>('/jd-documents', identity, {
+        method: 'POST',
+        body: form,
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+      });
+    },
 
     /** Take a filled requisition off the working list. Deletes nothing. */
     closePosition: (positionId: string) =>
@@ -327,6 +397,9 @@ export function createApi(identity: Identity) {
 
     /** The overview counts, in one request rather than assembled client-side. */
     dashboard: (signal?: AbortSignal) => request<Dashboard>('/dashboard', identity, { signal }),
+
+    /** What this deployment allows. Changes only when the API restarts. */
+    config: (signal?: AbortSignal) => request<AppConfig>('/config', identity, { signal }),
   };
 }
 

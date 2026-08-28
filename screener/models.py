@@ -213,6 +213,43 @@ class FolderInfo(BaseModel):
     has_subfolders: bool = False
 
 
+JdSource = Literal["paste", "upload"]
+
+
+class JdExtraction(BaseModel):
+    """A job description read out of an uploaded document (spec 8, 9.1).
+
+    Not persisted. It is the answer to one request — the text plus everything a
+    reviewer needs to judge whether that text is a fair reading of the file they
+    uploaded — and it becomes a `Position` only if they submit it.
+
+    **`text` is post-sanitize.** The reviewer is shown the exact string that will
+    reach the model, because showing them the raw extract and sanitizing
+    afterwards would rebuild the reader/extractor divergence that 8.6 exists to
+    close, inside the control meant to close it.
+
+    `warnings` and `injection_signals` are advisory and never block. The
+    correction step is the control here: the reviewer reads and edits the text
+    before it is submitted, which is stronger than any heuristic. These only say
+    where to look.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    filename: str
+    # Of the uploaded *file*, not of `text` — the reviewer may edit the text
+    # before submitting, deliberately. This identifies the document, and makes
+    # no claim that the stored description is a faithful function of it.
+    file_sha256: str
+    page_count: int
+    ocr_used: bool
+    chars_stripped: int = 0  # 8.6
+    warnings: list[str] = Field(default_factory=list)
+    injection_signals: list[str] = Field(default_factory=list)
+    parser_version: str
+
+
 class Position(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -220,6 +257,15 @@ class Position(BaseModel):
     reference: str  # folder name under settings.resumes_dir
     title: str
     jd_text: str  # provenance for the rubric derived from it
+    # How `jd_text` got here. A rubric drafted from OCR'd text is drafted from
+    # an approximation, and a reviewer looking at an adverse outcome months
+    # later has to be able to see that. `jd_filename`, `jd_file_sha256` and
+    # `jd_ocr_used` are None for a pasted description — not applicable, rather
+    # than unknown.
+    jd_source: JdSource = "paste"
+    jd_filename: str | None = None
+    jd_file_sha256: str | None = None
+    jd_ocr_used: bool | None = None
     # The requisition lifecycle, in the schema since 0001 and unread until now.
     # Closing takes a filled post off the working list; it deletes nothing, and
     # the runs it produced stay readable — the record of an adverse decision

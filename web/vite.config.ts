@@ -20,9 +20,19 @@ const BASE = '/ui/';
  * no CORS middleware, and there is no configurable "API URL" for an operator to
  * point at another host. The UI can only ever talk to the process that served
  * it, which is the browser-side half of decision #11.
+ *
+ * **Every path the client can call must be listed.** A missing one does not
+ * error: the dev server falls through to its SPA handler and answers the API
+ * call with `index.html` and a 200, so the app receives a page where it expected
+ * JSON. Nothing reaches the API, its access log stays empty, and the failure
+ * looks like a broken endpoint rather than a missing line here.
+ *
+ * This list is why `client.ts` treats a non-JSON 200 as an error worth naming
+ * (see `request`) — that check exists to make this mistake say what it is.
  */
 const API_PATHS = [
   '/positions',
+  '/jd-documents',
   '/runs',
   '/rubrics',
   '/candidates',
@@ -30,6 +40,7 @@ const API_PATHS = [
   '/health',
   '/ready',
   '/dashboard',
+  '/config',
 ];
 
 const API_TARGET = process.env.SCREENER_API_URL ?? 'http://127.0.0.1:8010';

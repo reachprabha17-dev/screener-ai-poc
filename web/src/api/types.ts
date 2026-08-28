@@ -41,6 +41,55 @@ export interface Position {
   closed_at: string | null;
   created_by: string;
   created_at: string;
+  /**
+   * Where the job description came from. `jd_filename` and `jd_ocr_used` are
+   * null for a pasted one — not applicable, rather than unknown.
+   */
+  jd_source: JdSource;
+  jd_filename: string | null;
+  jd_ocr_used: boolean | null;
+}
+
+export type JdSource = 'paste' | 'upload';
+
+/**
+ * `JdDocumentResponse` — what `POST /jd-documents` gives back.
+ *
+ * Nothing has been created at this point. The reviewer reads `text`, corrects
+ * whatever the parser got wrong, and only then creates the requisition.
+ *
+ * `ocr_used` is the field that matters most and is easiest to mistake for
+ * trivia: a scanned document has been *approximated*, and the person approving
+ * the rubric drafted from it is the only one placed to notice the approximation
+ * dropped something.
+ *
+ * `file_sha256` is of the uploaded file, not of `text` — the reviewer may edit
+ * the text, by design.
+ */
+export interface JdDocument {
+  text: string;
+  filename: string;
+  file_sha256: string;
+  page_count: number;
+  ocr_used: boolean;
+  chars_stripped: number;
+  warnings: string[];
+  injection_signals: string[];
+  parser_version: string;
+}
+
+/**
+ * `ConfigResponse` — what this deployment allows.
+ *
+ * Read once and cached hard: it changes only when the API restarts. The first
+ * server-supplied configuration in this app, which is why nothing else looks
+ * like it yet.
+ */
+export interface AppConfig {
+  jd_intake_mode: 'both' | 'upload' | 'paste';
+  jd_max_file_bytes: number;
+  jd_max_pages: number;
+  allowed_extensions: string[];
 }
 
 /** `FolderResponse`. Paths are relative to the resume share, never absolute. */

@@ -22,6 +22,7 @@ from fastapi import Header, HTTPException, status
 
 from config.settings import settings
 from screener.clients.ollama_client import OllamaClient
+from screener.intake.document_text import DocumentTextExtractor
 from screener.models import (
     Actor,
     AdverseActionRecord,
@@ -30,6 +31,7 @@ from screener.models import (
     DashboardSummary,
     FolderInfo,
     HealthReport,
+    JdExtraction,
     Position,
     RankedResult,
     Rubric,
@@ -45,6 +47,7 @@ from screener.schemas import (
     DecisionRecordResponse,
     FolderResponse,
     HealthResponse,
+    JdDocumentResponse,
     PositionResponse,
     RankedResponse,
     ReviewQueueResponse,
@@ -97,7 +100,7 @@ def _shared_service() -> ScreenerService:
     connections are *not* shared — `get_connection()` creates one per thread,
     which is why FastAPI's threadpool works at all (12.3).
     """
-    return ScreenerService(llm=OllamaClient())
+    return ScreenerService(llm=OllamaClient(), extractor=DocumentTextExtractor())
 
 
 def get_service() -> ScreenerService:
@@ -116,7 +119,20 @@ def to_position(position: Position) -> PositionResponse:
         closed_at=position.closed_at,
         created_by=position.created_by,
         created_at=position.created_at,
+        jd_source=position.jd_source,
+        jd_filename=position.jd_filename,
+        jd_ocr_used=position.jd_ocr_used,
     )
+
+
+def to_jd_extraction(extraction: JdExtraction) -> JdDocumentResponse:
+    """The extracted job description, on its way back to the reviewer.
+
+    Every field crosses. This is the one response in the app whose purpose is to
+    let a person check the machine's reading before acting on it, so withholding
+    any part of what the parser reported would defeat it.
+    """
+    return JdDocumentResponse(**extraction.model_dump())
 
 
 def to_folder(folder: FolderInfo) -> FolderResponse:

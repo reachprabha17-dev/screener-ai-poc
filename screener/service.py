@@ -28,6 +28,8 @@ rubric when reading a candidate back, which is real orchestration across two
 stores rather than a forwarding call.
 """
 
+import hashlib
+import threading
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -39,11 +41,12 @@ from typing import cast
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from config.settings import settings
+from screener.core.detect_injection import detect_injection
 from screener.core.rank import rank
 from screener.core.resume_paths import folder_for, is_safe_reference
 from screener.llm.extract_rubric import extract_rubric as run_extraction
 from screener.llm.judge_resume import judge_prompt_hash
-from screener.logging import failure_paths_for
+from screener.logging import failure_paths_for, get_logger
 from screener.models import (
     Actor,
     AdverseActionRecord,
@@ -55,8 +58,12 @@ from screener.models import (
     DecisionRecord,
     EscalationReason,
     FailedFile,
+    Flag,
     FolderInfo,
     HealthReport,
+    JdExtraction,
+    JdSource,
+    ParseResult,
     Position,
     RankedResult,
     ReviewQueue,
@@ -66,7 +73,7 @@ from screener.models import (
     RunStory,
     now,
 )
-from screener.ports import CacheKey, Job, LLMClient
+from screener.ports import CacheKey, DocumentExtractor, Job, LLMClient
 from screener.storage import (
     audit_store,
     jobs_store,
@@ -95,6 +102,15 @@ class ConflictError(ServiceError):
     """Someone else changed the thing you were editing. Maps to HTTP 409."""
 
 
+class BusyError(ServiceError):
+    """The work is fine; there is no capacity for it right now. Maps to HTTP 503.
+
+    Distinct from every other `ServiceError` because it is the only one where
+    retrying the identical request is the correct response. A 400 tells someone
+    their document is wrong when it was not.
+    """
+
+
 class RubricNotApprovedError(ServiceError):
     """A run may not be created against an unapproved rubric.
 
@@ -103,6 +119,52 @@ class RubricNotApprovedError(ServiceError):
     lacks something the job never asked for — across the whole run, leaving no
     trace in any individual result.
     """
+
+
+# How many job descriptions this process will parse at once. Each parse permits
+# a child `parse_mem_limit_mb`, so this bounds memory as much as concurrency —
+# and it bounds threadpool occupancy, which is what actually takes the API down:
+# every handler in this app is sync (15.3), so a parse that holds a thread for
+# `jd_parse_timeout_s` is holding one of the ~40 threads `/health` also needs.
+#
+# Built at import from the setting. A test that wants to exercise the busy path
+# replaces this object rather than the setting, which is why it is named.
+_JD_PARSE_SLOTS = threading.BoundedSemaphore(settings.jd_max_concurrent_parses)
+
+
+# What the parser says when it read the file and found nothing in it. Worth
+# separating from every other extraction failure because the cause is usually a
+# scan with no text layer, and "corrupt or password-protected" sends somebody
+# looking for a problem their document does not have.
+_NO_TEXT = "no text extracted"
+
+
+def _jd_failure_message(result: ParseResult) -> str:
+    """Why a job description could not be read, phrased for the person who tried.
+
+    Each branch names a **different next action**. That is the test for whether a
+    distinction belongs here at all: 8.5's crash-versus-clean-error split is a
+    security question and does not change what the reviewer should do, so it is
+    logged rather than shown. Whether the file was too big, too slow, or simply
+    had no text in it does change it.
+
+    The remaining case deliberately says "may": at that point we know the parser
+    did not produce text and not why, and a specific guess reads as a diagnosis.
+    The log has the parser's own words; see `extract_jd_document`.
+    """
+    if Flag.PARSER_TIMEOUT in result.flags:
+        return "That document took too long to read. Try a smaller file, or paste the text instead."
+    if Flag.INPUT_REJECTED in result.flags:
+        return f"That file was rejected: {result.error or 'it failed a safety check'}."
+    if _NO_TEXT in result.error:
+        return (
+            "That document has no text in it — it is most likely a scan or a set of "
+            "images. Paste the text instead."
+        )
+    return (
+        "That document could not be read. It may be corrupt, password-protected, or "
+        "in a format the reader does not understand — paste the text instead."
+    )
 
 
 def require_current_schema() -> None:
@@ -184,6 +246,12 @@ class BulkDecisionResult:
 class ScreenerService:
     llm: LLMClient
     uow_factory: Callable[[], UnitOfWork] = unit_of_work
+    # Optional because most callers never read a document: the worker parses
+    # through `pipeline.Deps`, the CLI and every test construct this service
+    # without one, and a required field would make all of them declare a
+    # dependency they do not use. `extract_jd_document` is the only method that
+    # needs it, and it says so rather than failing with an AttributeError.
+    extractor: DocumentExtractor | None = None
 
     # --- actor plumbing ------------------------------------------------------
 
@@ -206,15 +274,154 @@ class ScreenerService:
         """
         positions_store.seed_user(tx, actor.id, actor.display_name or actor.id)
 
+    # --- job descriptions ----------------------------------------------------
+
+    def extract_jd_document(self, data: bytes, *, filename: str, actor: Actor) -> JdExtraction:
+        """An uploaded PDF/DOCX → the job description text inside it (8, 9.1).
+
+        **Creates nothing.** No row, no file, no id. It is a pure transform whose
+        result the reviewer reads, corrects and then submits to `create_position`
+        — or abandons, leaving nothing to clean up. That is what lets this
+        endpoint exist without an ownership model.
+
+        **Synchronous, ~2 s, one document while a human waits.** The same shape
+        as `extract_rubric` above and for the same reason: it is one request, not
+        a batch. The parse itself happens in a separate locked-down process (8.4)
+        — this layer never opens the file, which is why it can reach the parser
+        through a port without importing `screener.intake` (4).
+
+        **Every failure is a sentence, not a flag.** `PARSER_TIMEOUT` and friends
+        exist to make a *candidate* unscoreable and put them in front of a human;
+        there is no candidate here, and nobody is disadvantaged by a job
+        description that would not parse. The reviewer is told what happened and
+        offered the paste box instead.
+        """
+        if settings.jd_intake_mode == "paste":
+            raise ServiceError(
+                "This deployment accepts job descriptions as pasted text only "
+                "(jd_intake_mode=paste)."
+            )
+        if self.extractor is None:
+            raise ServiceError("Document upload is not available on this deployment.")
+
+        # Non-blocking on purpose. Waiting here would hold the API thread this
+        # limit exists to protect, turning a memory ceiling into an availability
+        # problem of exactly the same size.
+        if not _JD_PARSE_SLOTS.acquire(blocking=False):
+            raise BusyError(
+                "The screener is already reading as many documents as it can at "
+                "once. Try again in a few seconds."
+            )
+        try:
+            result = self.extractor.extract(
+                data,
+                filename=filename,
+                timeout_s=settings.jd_parse_timeout_s,
+                max_bytes=settings.jd_max_file_bytes,
+                max_pages=settings.jd_max_pages,
+            )
+        finally:
+            _JD_PARSE_SLOTS.release()
+
+        parsed = result.parsed
+        if parsed is None:
+            # **Every** failure is logged, not only the security events. The
+            # reviewer gets a sentence with no parser internals in it, which is
+            # right — and it means this line is the only place the actual reason
+            # survives. Without it, "that document could not be read" is all
+            # anybody has to work from, including whoever is asked why.
+            #
+            # `security_event` is 8.5's distinction: a parser that died without
+            # reporting is a security finding even when the likely cause is a
+            # corrupt file, so it is a warning rather than an info.
+            log = get_logger()
+            (log.warning if result.security_event else log.info)(
+                "jd_extraction_failed",
+                actor=actor.id,
+                filename=filename,
+                flags=[f.value for f in result.flags],
+                security_event=result.security_event,
+                error=result.error[:500],
+                duration_s=result.duration_s,
+            )
+            raise ServiceError(_jd_failure_message(result))
+
+        # The real page cap. `validate_file` screens what it can see without
+        # parsing, and its own docstring says that is nothing at all on a modern
+        # PDF whose page tree sits in a compressed object stream — so the count
+        # is only knowable here, after the parse it was meant to precede.
+        if parsed.page_count > settings.jd_max_pages:
+            raise ServiceError(
+                f"That document is {parsed.page_count} pages; job descriptions are "
+                f"limited to {settings.jd_max_pages}."
+            )
+        if not parsed.text.strip():
+            raise ServiceError(
+                "No text could be read from that file. If it is a scan, paste the text instead."
+            )
+
+        # Advisory, never blocking — see `JdExtraction`. The regexes in 10.2 were
+        # calibrated against resume prose and a job description says several of
+        # those things routinely ("your task is to…"), so a match here points a
+        # reviewer at a paragraph rather than making a claim about it.
+        injection = detect_injection(parsed.text)
+
+        return JdExtraction(
+            text=parsed.text,
+            filename=filename,
+            file_sha256=hashlib.sha256(data).hexdigest(),
+            page_count=parsed.page_count,
+            ocr_used=parsed.ocr_used,
+            chars_stripped=parsed.chars_stripped,
+            warnings=list(parsed.warnings),
+            injection_signals=list(injection.signals),
+            parser_version=parsed.parser_version,
+        )
+
     # --- positions -----------------------------------------------------------
 
     def create_position(
-        self, *, reference: str, title: str, jd_text: str, actor: Actor
+        self,
+        *,
+        reference: str,
+        title: str,
+        jd_text: str,
+        actor: Actor,
+        jd_source: JdSource = "paste",
+        jd_filename: str | None = None,
+        jd_file_sha256: str | None = None,
+        jd_ocr_used: bool | None = None,
     ) -> Position:
+        """Raise a requisition. `jd_text` is the description, however it got here.
+
+        Upload and paste converge on this one method: `extract_jd_document` hands
+        its text back to the reviewer, who corrects it and submits it here like
+        any other. So the *text* is always something a person read and accepted,
+        and the provenance arguments record what it was read from.
+
+        They are unverified by design — the reviewer edits the extracted text
+        before submitting, so `jd_file_sha256` names the document that was
+        uploaded and does not assert that `jd_text` is a faithful function of it.
+        Claiming otherwise would put a guarantee in the audit record that the
+        workflow does not support.
+        """
         if not is_safe_reference(reference):
             raise ServiceError(
                 f"Invalid reference '{reference}': "
                 "letters, numbers, spaces, and & ' ( ) + # . _ - only"
+            )
+        # The other half of `jd_intake_mode`. `GET /config` tells the interface
+        # which control to render; this is what makes it a rule rather than a
+        # suggestion, for anything that does not go through the interface.
+        if settings.jd_intake_mode == "upload" and jd_source != "upload":
+            raise ServiceError(
+                "This deployment requires the job description to be uploaded as a "
+                "document (jd_intake_mode=upload)."
+            )
+        if settings.jd_intake_mode == "paste" and jd_source != "paste":
+            raise ServiceError(
+                "This deployment accepts job descriptions as pasted text only "
+                "(jd_intake_mode=paste)."
             )
 
         position = Position(
@@ -222,6 +429,10 @@ class ScreenerService:
             reference=reference,
             title=title,
             jd_text=jd_text,
+            jd_source=jd_source,
+            jd_filename=jd_filename,
+            jd_file_sha256=jd_file_sha256,
+            jd_ocr_used=jd_ocr_used,
             created_by=actor.id,
             created_at=now(),
         )
@@ -236,7 +447,21 @@ class ScreenerService:
             with _conflict_if_taken(f"a requisition with reference '{reference}' is already open"):
                 positions_store.create(tx, position)
             audit_store.append_for(
-                tx, actor, "create_position", "position", position.id, {"reference": reference}
+                tx,
+                actor,
+                "create_position",
+                "position",
+                position.id,
+                # `jd_source` is in the audit detail because the rubric is drafted
+                # from this text and the rubric is what screens people out. Which
+                # document it came from, and whether it was read by OCR, is part
+                # of answering for an adverse decision later.
+                {
+                    "reference": reference,
+                    "jd_source": jd_source,
+                    "jd_filename": jd_filename,
+                    "jd_ocr_used": jd_ocr_used,
+                },
             )
         return position
 

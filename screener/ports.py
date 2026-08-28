@@ -118,13 +118,58 @@ class LLMClient(Protocol):
 
 @runtime_checkable
 class ResumeParser(Protocol):
-    """Turns a resume file into text. Implementations run sandboxed (8.4).
+    """Turns a **document** into text. Implementations run sandboxed (8.4).
+
+    Named for the resume because that is what it was written for, and still the
+    only thing the pipeline hands it. A job description uploaded as a PDF or
+    DOCX is the same problem — an untrusted container format that has to become
+    text before anything can read it — so it goes through this port rather than
+    through a second parser that would have to be kept honest separately.
 
     Returns a ``ParseResult`` rather than raising: a file that cannot be read is
     an expected outcome of a run, and the candidate still has to reach a human.
+
+    ``timeout_s`` overrides ``settings.parse_timeout_s`` for one call. It exists
+    because the two callers bound very different things: the worker gives a
+    resume the full budget because nobody is waiting, while the API parses a job
+    description inside a request, holding a threadpool thread, and needs a far
+    shorter one. It has to be a parameter rather than a setting read inside the
+    implementation, because both values are live in the same process.
     """
 
-    def parse(self, path: Path) -> ParseResult: ...
+    def parse(self, path: Path, *, timeout_s: int | None = None) -> ParseResult: ...
+
+
+@runtime_checkable
+class DocumentExtractor(Protocol):
+    """An uploaded document's bytes → its sanitized text (8, 9.1).
+
+    ``ResumeParser`` above is one step; this is the whole of 8.2 → 8.4 → 8.6
+    composed, which is what a caller wants when it needs text and nothing else.
+    The resume pipeline does not use it: 13 has to interleave those steps with
+    redaction and offset mapping, and a composed call would hide the ordering
+    that is the specification there.
+
+    **This port is the reason `service.py` can offer job-description upload
+    without importing `screener.intake`.** The service layer runs inside the API
+    process, and keeping document parsing out of that process is a rule worth
+    more than a direct call (4). The concrete class is wired at the composition
+    root, next to the LLM client.
+
+    Takes bytes, not a path, so that nothing above it has to invent a safe
+    filename for hostile content. Returns a ``ParseResult`` rather than raising,
+    for the same reason ``ResumeParser`` does.
+    """
+
+    def extract(
+        self,
+        data: bytes,
+        *,
+        filename: str,
+        timeout_s: int | None = None,
+        max_bytes: int | None = None,
+        max_pages: int | None = None,
+    ) -> ParseResult: ...
 
 
 @runtime_checkable
