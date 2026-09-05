@@ -11,6 +11,7 @@ import { QueryState } from '../components/QueryState';
 import { countEscalations } from '../lib/escalations';
 import { downloadCsv, toCsv } from '../lib/format';
 import { VERIFICATION_BADGE } from '../lib/labels';
+import { useRunPosition } from '../lib/useRunPosition';
 import { Alert } from '../ui/Alert';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -34,15 +35,29 @@ import { Table, Td, Th } from '../ui/Table';
 export function ReviewPage() {
   const { runId = '' } = useParams();
   const candidates = useCandidates(runId);
+  // For the export only — the run header above this page already names the
+  // requisition on screen, but a CSV called `run-1-qualified.csv` does not say
+  // which job it was. Started here rather than inside `Review` so it resolves
+  // alongside the candidate list: below the gate it would only begin once the
+  // table rendered, and the export button is live from that moment.
+  const { position } = useRunPosition(runId);
 
   return (
     <QueryState query={candidates} loading="Loading results…">
-      {(result) => <Review runId={runId} result={result} />}
+      {(result) => <Review runId={runId} result={result} positionTitle={position?.title ?? ''} />}
     </QueryState>
   );
 }
 
-function Review({ runId, result }: { runId: string; result: RankedCandidates }) {
+function Review({
+  runId,
+  result,
+  positionTitle,
+}: {
+  runId: string;
+  result: RankedCandidates;
+  positionTitle: string;
+}) {
   const [params, setParams] = useSearchParams();
   const selectedHash = params.get('c') ?? '';
 
@@ -127,9 +142,12 @@ function Review({ runId, result }: { runId: string; result: RankedCandidates }) 
               {group.candidates.length > 0 ? (
                 <Button
                   size="sm"
-                  title="Includes the numeric score for audit. On screen, reviewers see bands."
+                  title="Includes the numeric score for audit, and the candidate's name, email and phone. On screen, reviewers see bands."
                   onClick={() => {
-                    downloadCsv(`${runId}-${group.key}.csv`, exportCsv(group.candidates));
+                    downloadCsv(
+                      `${runId}-${group.key}.csv`,
+                      exportCsv(group.candidates, positionTitle),
+                    );
                   }}
                 >
                   <Download className="size-3.5" aria-hidden />
@@ -299,11 +317,28 @@ function SignOff({ runId, result }: { runId: string; result: RankedCandidates })
   );
 }
 
-/** The export carries the numeric score and the decision — 15.6: the outcome and
- * who owns it, not only the ranking. */
-function exportCsv(candidates: CandidateSummary[]): string {
+/**
+ * The export carries the numeric score and the decision — 15.6: the outcome and
+ * who owns it, not only the ranking.
+ *
+ * It also carries who the candidate is. Everything below the contact columns
+ * identifies a *file*, which left a recruiter acting on this sheet reopening
+ * every resume to find a phone number. The name is derived from the filename and
+ * the address and number from the resume text, server-side; all three can be
+ * empty, and a blank cell is the honest rendering of "not found" rather than a
+ * guess.
+ *
+ * `positionTitle` repeats on every row because it is the sheet's own label. It
+ * is constant within one export and falls back to empty rather than blocking the
+ * download on a lookup the reviewer did not ask for.
+ */
+function exportCsv(candidates: CandidateSummary[], positionTitle: string): string {
   return toCsv(
     candidates.map((c) => ({
+      position_title: positionTitle,
+      candidate_name: c.candidate_name,
+      email: c.email,
+      phone: c.phone,
       filename: c.filename,
       file_sha256: c.file_sha256,
       band: c.band,

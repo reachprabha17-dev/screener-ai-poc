@@ -242,14 +242,15 @@ web/
     │   ├── BulkDecisionForm.tsx      one decision across a group
     │   └── ClosePositionButton.tsx   confirmed close
     │
-    ├── lib/                    ← pure helpers, no network
+    ├── lib/                    ← helpers and small hooks; none of them call fetch
     │   ├── labels.ts           THE WORDS ON SCREEN. Each one is a decision
     │   ├── highlight.ts        slice a quote out with context around it
     │   ├── format.ts           dates, percentages, counts, CSV
     │   ├── escalations.ts      count reasons across a group
     │   ├── jd.ts               a job description + where it came from
     │   ├── theme.ts            light/dark/system, persisted
-    │   └── useDebounced.ts     settle a value before acting on it
+    │   ├── useDebounced.ts     settle a value before acting on it
+    │   └── useRunPosition.ts   which requisition a run belongs to
     │
     ├── ui/                     ← thin Tailwind wrappers, no domain knowledge
     │   ├── Alert  Badge  Button  Card  Disclosure  Field  FileInput
@@ -1496,13 +1497,21 @@ neutral, `failed` error, `aborted` warn.
 
 #### `RunLayout` (the shell)
 
-**Reads:** `useRuns()`, `usePositions(true)`, `useRunStatus(runId)`.
+**Reads:** `useRunPosition(runId)`, `useRunStatus(runId)`.
 **Renders:** breadcrumb (Job Postings / reference / runs / runId), the title with
 a live `RunStatePill`, a line with the folder, file count and who started it, and
 two tabs — **Progress** and **Review** — then `<Outlet/>`.
 
 `state = status.data?.status ?? run?.status` — the polled status wins, the list's
 copy is the fallback while it loads.
+
+`useRunPosition` is the two `find`s that turn a `runId` into its requisition —
+`useRuns()` for the run, then `usePositions(true)` for the post. It lives in
+`lib/` because `ReviewPage` needs the same answer for its export, and the obvious
+way to write it a second time drops the `true`: closed requisitions vanish, and a
+run outlives the post it screened for, so the title would disappear the day HR
+closes the vacancy. Both queries are cached under the same keys, so the second
+caller inside a route costs nothing.
 
 ### A run's two axes: status and phase
 
@@ -1614,7 +1623,8 @@ the on-screen reference, not a measurement.
 
 The screen the product exists for.
 
-**Reads:** `useCandidates(runId)` → `GET /runs/{id}/candidates` → `RankedCandidates`.
+**Reads:** `useCandidates(runId)` → `GET /runs/{id}/candidates` → `RankedCandidates`,
+plus `useRunPosition(runId)` for the export's `position_title` column.
 **URL state:** `?c=<file_sha256>` selects a candidate, via `useSearchParams`.
 
 ```ts
@@ -1731,14 +1741,32 @@ the title attribute.
 
 #### CSV export (per group)
 
-`downloadCsv(`${runId}-${group.key}.csv`, exportCsv(group.candidates))`.
+`downloadCsv(`${runId}-${group.key}.csv`, exportCsv(group.candidates, positionTitle))`.
 
-Columns: filename, file_sha256, band, **score**, must_haves_met, scoreable,
-review_required, decision, decided_by, decided_at, verification_status,
-escalation_reasons (`|`-joined), flags (`|`-joined), scored_at.
+Columns: position_title, **candidate_name, email, phone**, filename,
+file_sha256, band, **score**, must_haves_met, scoreable, review_required,
+decision, decided_by, decided_at, verification_status, escalation_reasons
+(`|`-joined), flags (`|`-joined), scored_at.
 
 The numeric score **is** in the export — the button's title says so: *"Includes
-the numeric score for audit. On screen, reviewers see bands."*
+the numeric score for audit, and the candidate's name, email and phone. On
+screen, reviewers see bands."*
+
+**The first four columns say who, not which file.** Everything from `filename`
+rightwards identifies a document; a recruiter acting on the sheet had to reopen
+each resume to find a number to call. `candidate_name`, `email` and `phone` are
+derived server-side by `core/extract_contact.py` — the name from the filename,
+the other two from `resume_text` — and are never stored, so erasing a candidate
+erases them too. Any of the three can be blank, which is what "not found" looks
+like in a CSV.
+
+`position_title` is constant down the whole file, and that is the point: the
+sheet is named `run-1-qualified.csv`, so nothing else in it says which job was
+screened. It comes from `useRunPosition`, called in `ReviewPage` rather than in
+`Review` so it resolves alongside the candidate list — started below the query
+gate it would only begin once the table rendered, and the export button is live
+from that moment. An unresolved requisition exports a blank column rather than
+disabling the button.
 
 `format.toCsv` uses `papaparse`, because quoting is the part of CSV that is easy
 to get wrong and a resume filename with a comma in it is not exotic.

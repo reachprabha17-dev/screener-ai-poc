@@ -26,25 +26,23 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from screener.core.extract_contact import (
+    EMAIL_PATTERN,
+    PHONE_CANDIDATE_PATTERN,
+    is_phone_number,
+)
 from screener.models import Span
 
 # Placeholders, not secrets — the substitution markers left in the redacted text.
+NAME = "[NAME]"
 EMAIL_TOKEN = "[EMAIL]"  # noqa: S105
 PHONE_TOKEN = "[PHONE]"  # noqa: S105
 REDACTED_TOKEN = "[REDACTED]"  # noqa: S105
 
-_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
-
-# Two stages, because one regex cannot express "phone-shaped **and** long
-# enough". The pattern finds digit runs with phone separators; `_redact_phone`
-# then counts digits and leaves anything outside 9–15 alone.
-#
-# The digit count is what protects the evidence. A single looser pattern eats
-# "2015 - 2019" (8 digits) and takes the duration evidence a `strong` verdict
-# rests on with it — the same class of failure as a year-shaped DOB regex.
-_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\(?\d[\d\s().-]{7,17}\d(?!\w)")
-_PHONE_MIN_DIGITS = 9
-_PHONE_MAX_DIGITS = 15
+# The email and phone patterns live in `core.extract_contact`, which reads them
+# to fill the export's contact columns. One definition, deliberately: two copies
+# would drift, and the drift that matters is a number redacted from the model's
+# view that is nevertheless not the one handed to HR.
 
 # Label-anchored fields. Each consumes to end of line: these appear as
 # `Label: value` header rows, and the value is the part that must not survive.
@@ -216,7 +214,7 @@ def redact_pii(text: str) -> tuple[str, RedactionReport, list[Span]]:
         if hits:
             counts[name] = counts.get(name, 0) + hits
 
-    _apply("email", _EMAIL, EMAIL_TOKEN)
+    _apply("email", EMAIL_PATTERN, EMAIL_TOKEN)
 
     # Phones are counted by the callback rather than by match count: a candidate
     # run that turns out to be too short to be a number is left alone, and
@@ -225,13 +223,12 @@ def redact_pii(text: str) -> tuple[str, RedactionReport, list[Span]]:
 
     def _phone(match: re.Match[str]) -> str | None:
         nonlocal phone_hits
-        digits = sum(character.isdigit() for character in match.group())
-        if _PHONE_MIN_DIGITS <= digits <= _PHONE_MAX_DIGITS:
+        if is_phone_number(match.group()):
             phone_hits += 1
             return PHONE_TOKEN
         return None
 
-    redacted, spans = _substitute(redacted, _PHONE_CANDIDATE, _phone)
+    redacted, spans = _substitute(redacted, PHONE_CANDIDATE_PATTERN, _phone)
     span_map = _compose(span_map, spans)
     if phone_hits:
         counts["phone"] = phone_hits

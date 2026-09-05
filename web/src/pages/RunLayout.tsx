@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, useParams } from 'react-router-dom';
-import { usePositions, useRunStatus, useRuns } from '../api/queries';
+import { useRunStatus } from '../api/queries';
 import { RunStatePill } from '../components/RunStatePill';
+import { useRunPosition } from '../lib/useRunPosition';
 import { cn } from '../ui/cn';
 
 /**
@@ -13,13 +14,9 @@ import { cn } from '../ui/cn';
  */
 export function RunLayout() {
   const { runId = '' } = useParams();
-  const runs = useRuns();
-  // Includes closed requisitions: a run outlives the post it screened for.
-  const positions = usePositions(true);
+  const { run, position } = useRunPosition(runId);
   const status = useRunStatus(runId);
 
-  const run = runs.data?.find((r) => r.id === runId);
-  const position = positions.data?.find((p) => p.id === run?.position_id);
   const state = status.data?.status ?? run?.status;
 
   const tab = ({ isActive }: { isActive: boolean }) =>

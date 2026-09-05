@@ -404,22 +404,38 @@ back to original-text positions happens later, when the data is read, in
 Once you've read these two functions you can place every other file in the
 project.
 
-### Layer 3: the decisions (`core/`, about 1,700 lines, all pure functions)
+### Layer 3: the decisions (`core/`, about 2,100 lines, all pure functions)
 
 Read them in the order the pipeline calls them:
 
-    detect_injection.py   (171)   flag suspicious text for review, never auto-reject
-    redact_pii.py         (245)   blank out personal details; produces a position map
+    detect_injection.py   (242)   flag suspicious text for review, never auto-reject
+    redact_pii.py         (242)   blank out personal details; produces a position map
     offsets.py             (73)   convert positions between the two text versions
-    budget.py             (136)   make sure nothing gets silently cut off
+    budget.py             (150)   make sure nothing gets silently cut off
     validate_verdicts.py  (102)   the AI answered for exactly the right criteria
     screen_freetext.py    (139)   strip commentary that isn't about the job
-    verify_evidence.py    (388)   does the AI's quote actually appear in the CV?
-    detect_negation.py    (117)   the quote is there, but does it say the opposite?
+    verify_evidence.py    (480)   does the AI's quote actually appear in the CV?
+    detect_negation.py    (159)   the quote is there, but does it say the opposite?
     reconcile_judge.py    (134)   fold in phase 2, without changing any verdict
     compute_score.py       (68)   arithmetic only; the AI never produces a score
     rank.py                (60)   split into three groups, never one long list
-    resume_paths.py        (74)   check a folder path is real and inside bounds
+    resume_paths.py        (86)   check a folder path is real and inside bounds
+
+One module here is not on that path at all:
+
+    extract_contact.py    (134)   name, email and phone, for the reviewer's export
+
+It runs at *read* time, not screening time — `schemas.py` calls it while turning a
+`Candidate` into something a person may see. It sits in `core/` because it owns
+the email and phone patterns that `redact_pii` imports: the two are the same
+recognition problem read twice, one removing what it finds before the model sees
+it and the other reporting it to the human afterwards. Two copies would drift,
+and the drift that matters is a number redacted from the model's view that is
+nevertheless not the one handed to HR.
+
+Nothing it produces is stored. That is what keeps erasure working — `purge_candidate`
+blanks `resume_text`, and the contact details go with it, rather than becoming
+three more columns that erasure has to remember to list.
 
 **Read this part slowly.** Every consequence for a real person is decided here.
 There is no database access and no network access in any of it, so you can paste

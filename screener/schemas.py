@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, field_validator
 
+from screener.core.extract_contact import extract_contact
 from screener.core.offsets import translate_block
 from screener.core.resume_paths import is_safe_reference
 from screener.core.verify_evidence import align
@@ -277,6 +278,13 @@ class CandidateResponse(BaseModel):
     id: int | None
     filename: str  # usually the person's name — this is a reviewer-facing screen
     file_sha256: str
+    # Derived from `filename` and `resume_text` at read time, never stored
+    # (`core.extract_contact` says why). Present so the reviewer's export can
+    # name a person to call rather than a file to reopen; empty string, never
+    # null, because every one of them lands in a CSV cell.
+    candidate_name: str
+    email: str
+    phone: str
     score: float | None  # None, never 0.0, when not scoreable
     band: Band | None
     must_haves_met: bool
@@ -437,10 +445,14 @@ def candidate_response(candidate: Candidate, actor: Actor) -> CandidateResponse:
     # Built field by field rather than from a dict of kwargs. A `**kwargs` splat
     # widens every value to a union and mypy stops checking the one construction
     # in the codebase where a wrong field is a disclosure rather than a bug.
+    contact = extract_contact(candidate.resume_text, candidate.filename)
     base = CandidateResponse(
         id=candidate.id,
         filename=candidate.filename,
         file_sha256=candidate.file_sha256,
+        candidate_name=contact.name,
+        email=contact.email,
+        phone=contact.phone,
         score=candidate.score,
         band=candidate.band,
         must_haves_met=candidate.must_haves_met,

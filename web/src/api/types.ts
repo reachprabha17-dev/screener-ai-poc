@@ -236,6 +236,14 @@ export interface CandidateSummary {
   id: number | null;
   filename: string;
   file_sha256: string;
+  /**
+   * Derived server-side at read time from the filename and the resume text,
+   * never stored — so erasing a candidate erases these with it. Empty string
+   * when not found, never null: they exist to fill CSV cells.
+   */
+  candidate_name: string;
+  email: string;
+  phone: string;
   score: number | null;
   band: Band | null;
   must_haves_met: boolean;
